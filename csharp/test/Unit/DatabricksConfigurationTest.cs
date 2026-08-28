@@ -296,6 +296,110 @@ namespace AdbcDrivers.Databricks.Tests
             }
         }
 
+        /// <summary>
+        /// Tests that ADBC_DATABRICKS_CONFIG_FILE loads configuration correctly.
+        /// </summary>
+        [Fact]
+        public void TryFromEnvironmentVariable_AdbcConfigEnvVar_LoadsConfiguration()
+        {
+            // Arrange
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "adbc.databricks.com",
+                [SparkParameters.Token] = "adbc-token"
+            };
+            var configFile = CreateTempJsonFile(properties);
+
+            try
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable, configFile);
+
+                // Act
+                var config = DatabricksConfiguration.TryFromEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable);
+
+                // Assert
+                Assert.NotNull(config);
+                Assert.Equal("adbc.databricks.com", config.Properties[SparkParameters.HostName]);
+                Assert.Equal("adbc-token", config.Properties[SparkParameters.Token]);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable, null);
+            }
+        }
+
+        /// <summary>
+        /// Tests that ADBC_DATABRICKS_CONFIG_FILE takes precedence over DATABRICKS_CONFIG_FILE
+        /// when both are set, mirroring the ?? precedence logic in DatabricksDatabase.
+        /// </summary>
+        [Fact]
+        public void TryFromEnvironmentVariable_AdbcEnvVarTakesPrecedenceOverDefault()
+        {
+            // Arrange
+            var adbcProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "adbc.databricks.com"
+            };
+            var defaultProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "default.databricks.com"
+            };
+
+            var adbcConfigFile = CreateTempJsonFile(adbcProperties);
+            var defaultConfigFile = CreateTempJsonFile(defaultProperties);
+
+            try
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable, adbcConfigFile);
+                Environment.SetEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable, defaultConfigFile);
+
+                // Act: simulate the precedence logic used in DatabricksDatabase
+                var config = DatabricksConfiguration.TryFromEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable)
+                    ?? DatabricksConfiguration.TryFromEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable);
+
+                // Assert: ADBC_DATABRICKS_CONFIG_FILE wins
+                Assert.NotNull(config);
+                Assert.Equal("adbc.databricks.com", config.Properties[SparkParameters.HostName]);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable, null);
+                Environment.SetEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable, null);
+            }
+        }
+
+        /// <summary>
+        /// Tests that DATABRICKS_CONFIG_FILE is used as fallback when ADBC_DATABRICKS_CONFIG_FILE is not set.
+        /// </summary>
+        [Fact]
+        public void TryFromEnvironmentVariable_FallsBackToDefaultWhenAdbcEnvVarNotSet()
+        {
+            // Arrange
+            var defaultProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "default.databricks.com"
+            };
+            var defaultConfigFile = CreateTempJsonFile(defaultProperties);
+
+            try
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable, null);
+                Environment.SetEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable, defaultConfigFile);
+
+                // Act: simulate the precedence logic used in DatabricksDatabase
+                var config = DatabricksConfiguration.TryFromEnvironmentVariable(DatabricksDatabase.AdbcConfigEnvironmentVariable)
+                    ?? DatabricksConfiguration.TryFromEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable);
+
+                // Assert: falls back to DATABRICKS_CONFIG_FILE
+                Assert.NotNull(config);
+                Assert.Equal("default.databricks.com", config.Properties[SparkParameters.HostName]);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(DatabricksDatabase.DefaultConfigEnvironmentVariable, null);
+            }
+        }
+
         #region Helper Methods
 
         /// <summary>

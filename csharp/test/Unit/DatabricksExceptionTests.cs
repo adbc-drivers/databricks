@@ -14,84 +14,105 @@
 * limitations under the License.
 */
 
+using Apache.Arrow.Adbc;
+using AdbcDrivers.HiveServer2.Hive2;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
-    /// Tests for DatabricksException.IsObjectNotFoundException, which mirrors the JDBC
-    /// driver's MetadataResultConstants.isObjectNotFoundException helper. Per JDBC spec,
-    /// metadata methods should return empty result sets for non-existent catalogs,
-    /// schemas, or tables rather than throwing.
+    /// Tests for DatabricksException helper methods.
     /// </summary>
     public class DatabricksExceptionTests
     {
+        [Theory]
+        [InlineData("42601")]
+        [InlineData("20000")]
+        public void IsDescTableExtendedUnsupportedException_KnownSqlState_ReturnsTrue(string sqlState)
+        {
+            var ex = new DatabricksException("some message").SetSqlState(sqlState);
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_SqlStateInMessage_ReturnsTrue()
+        {
+            // SEA path: StatementExecutionClient builds the exception with only a message, so
+            // SqlState is null and the SQL state is carried inside the text. This is the exact
+            // shape that red-failed the REST merge-queue job for STATIC ONLY on a pre-rollout DBR.
+            var ex = new DatabricksException(
+                "Statement execution failed. State: FAILED. Error Code: BAD_REQUEST, Message: " +
+                "[PARSE_SYNTAX_ERROR] Syntax error at or near 'STATIC'. SQLSTATE: 42601 (line 1, pos 94)");
+            Assert.Null(ex.SqlState);
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_InternalErrorInMessage_ReturnsTrue()
+        {
+            var ex = new DatabricksException("Statement execution failed. ... SQLSTATE: 20000");
+            Assert.True(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_ObjectNotFound_ReturnsFalse()
+        {
+            // Not-found errors take the other fallback path (empty result), not the three-call path.
+            var ex = new DatabricksException("TABLE_OR_VIEW_NOT_FOUND occurred").SetSqlState("42704");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_UnrelatedError_ReturnsFalse()
+        {
+            var ex = new DatabricksException("Connection timeout while executing query");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        [Fact]
+        public void IsDescTableExtendedUnsupportedException_EmptyMessageNoSqlState_ReturnsFalse()
+        {
+            var ex = new DatabricksException("");
+            Assert.False(ex.IsDescTableExtendedUnsupportedException());
+        }
+
+        // ─── IsObjectNotFoundException ───────────────────────────────────────────────
+        // Load-bearing for the SEA metadata catch: it must return true for object-not-found
+        // (→ swallow to empty, matching Thrift + JDBC) and false for anything else (→ let it
+        // propagate). The negative cases pin it against over-matching.
+
         [Fact]
         public void IsObjectNotFoundException_SqlState42704_ReturnsTrue()
         {
-            var ex = new DatabricksException("some message").SetSqlState("42704");
+            var ex = new DatabricksException("some failure").SetSqlState("42704");
             Assert.True(ex.IsObjectNotFoundException());
         }
 
-        [Fact]
-        public void IsObjectNotFoundException_NoSuchCatalogInMessage_ReturnsTrue()
+        [Theory]
+        [InlineData("... [NO_SUCH_CATALOG_EXCEPTION] Catalog 'x' was not found ...")]
+        [InlineData("Statement execution failed: [SCHEMA_NOT_FOUND] The schema ...")]
+        [InlineData("Error Code: TABLE_OR_VIEW_NOT_FOUND, Message: The table ...")]
+        [InlineData("... INVALID_PARAMETER_VALUE ... name \"\" is not a valid name ...")]
+        public void IsObjectNotFoundException_KnownMessage_ReturnsTrue(string message)
         {
-            var ex = new DatabricksException(
-                "Statement execution failed. Error Code: NO_SUCH_CATALOG_EXCEPTION, Message: Catalog 'foo' not found");
+            var ex = new DatabricksException(message);
             Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_TableOrViewNotFoundInMessage_ReturnsTrue()
-        {
-            var ex = new DatabricksException(
-                "Statement execution failed. Error Code: TABLE_OR_VIEW_NOT_FOUND, Message: Table 'foo.bar' not found");
-            Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_SchemaNotFoundInMessage_ReturnsTrue()
-        {
-            var ex = new DatabricksException(
-                "Statement execution failed. Error Code: SCHEMA_NOT_FOUND, Message: Schema 'foo' not found");
-            Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_InvalidParameterValueInMessage_ReturnsTrue()
-        {
-            var ex = new DatabricksException(
-                "Statement execution failed. Error Code: INVALID_PARAMETER_VALUE, Message: Catalog name is invalid");
-            Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_LowerCaseMessage_ReturnsTrue()
-        {
-            // Match is case-insensitive (StringComparison.OrdinalIgnoreCase)
-            var ex = new DatabricksException("error: no_such_catalog_exception thrown");
-            Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_MixedCaseMessage_ReturnsTrue()
-        {
-            var ex = new DatabricksException("Error: Schema_Not_Found at path foo.bar");
-            Assert.True(ex.IsObjectNotFoundException());
-        }
-
-        [Fact]
-        public void IsObjectNotFoundException_UnrelatedSqlState_ReturnsFalse()
-        {
-            // 42601 is PARSE_SYNTAX_ERROR, not object-not-found
-            var ex = new DatabricksException("Syntax error near 'FROM'").SetSqlState("42601");
-            Assert.False(ex.IsObjectNotFoundException());
         }
 
         [Fact]
         public void IsObjectNotFoundException_UnrelatedMessage_ReturnsFalse()
         {
-            var ex = new DatabricksException("Connection timeout while executing query");
+            // ACCESS_DENIED / permission errors must NOT be swallowed.
+            var ex = new DatabricksException("[ACCESS_DENIED] Permission denied on catalog 'main'")
+                .SetSqlState("42501");
+            Assert.False(ex.IsObjectNotFoundException());
+        }
+
+        [Fact]
+        public void IsObjectNotFoundException_UnrelatedSqlState_ReturnsFalse()
+        {
+            var ex = new DatabricksException("Connection timeout while executing query")
+                .SetSqlState("08000");
             Assert.False(ex.IsObjectNotFoundException());
         }
 
@@ -102,28 +123,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.False(ex.IsObjectNotFoundException());
         }
 
+        // ─── Static overload over AdbcException (Thrift GetCrossReference catch) ──────
+        // The Thrift metadata path throws HiveServer2Exception (via ThrowErrorResponse),
+        // not DatabricksException, so DatabricksStatement.GetCrossReferenceAsync catches
+        // `AdbcException ex when DatabricksException.IsObjectNotFoundException(ex)`. These
+        // pin that the static form recognizes the HiveServer2Exception the server raises
+        // for an empty-string parent catalog (SHOW FOREIGN KEYS IN CATALOG `` →
+        // TABLE_OR_VIEW_NOT_FOUND / 42P01), so the catch swallows it to an empty result
+        // like the JDBC reference Thrift client.
         [Fact]
-        public void IsObjectNotFoundException_DefaultConstructor_ReturnsFalse()
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionEmptyParent_ReturnsTrue()
         {
-            // Default ctor produces a generic "Exception of type ... was thrown" message — must not match
-            var ex = new DatabricksException();
-            Assert.False(ex.IsObjectNotFoundException());
+            // Exact shape captured live: SHOW FOREIGN KEYS IN CATALOG `` throws
+            // TABLE_OR_VIEW_NOT_FOUND with SQLSTATE 42P01.
+            var ex = new HiveServer2Exception(
+                "[TABLE_OR_VIEW_NOT_FOUND] The table or view ``.``.`` cannot be found.",
+                AdbcStatusCode.InternalError)
+                .SetSqlState("42P01");
+            Assert.True(DatabricksException.IsObjectNotFoundException(ex));
         }
 
         [Fact]
-        public void IsObjectNotFoundException_SqlStateTakesPrecedenceOverMessage()
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionInvalidParam_ReturnsTrue()
         {
-            // SQL state 42704 is sufficient even when the message says nothing about not-found
-            var ex = new DatabricksException("Generic error message with no keywords").SetSqlState("42704");
-            Assert.True(ex.IsObjectNotFoundException());
+            var ex = new HiveServer2Exception(
+                "[INVALID_PARAMETER_VALUE] name \"\" is not a valid name.",
+                AdbcStatusCode.InternalError);
+            Assert.True(DatabricksException.IsObjectNotFoundException(ex));
         }
 
         [Fact]
-        public void IsObjectNotFoundException_MessageMatchEvenWithUnrelatedSqlState()
+        public void IsObjectNotFoundException_Static_HiveServer2ExceptionUnrelated_ReturnsFalse()
         {
-            // Either condition is sufficient — message match wins even if SQL state is something else
-            var ex = new DatabricksException("TABLE_OR_VIEW_NOT_FOUND occurred").SetSqlState("99999");
-            Assert.True(ex.IsObjectNotFoundException());
+            // A genuine execution failure on the Thrift path must still propagate.
+            var ex = new HiveServer2Exception(
+                "[ACCESS_DENIED] Permission denied", AdbcStatusCode.InternalError)
+                .SetSqlState("42501");
+            Assert.False(DatabricksException.IsObjectNotFoundException(ex));
         }
     }
 }

@@ -74,24 +74,68 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Returns true if this exception indicates a catalog, schema, or table was not found.
-        /// Per JDBC spec, metadata methods should return empty result sets for non-existent objects
-        /// rather than throwing. Checks both SQL state (42704) and error message content for
-        /// not-found indicators, matching JDBC's isObjectNotFoundException.
+        /// Returns true if this exception indicates the server rejected
+        /// <c>DESC TABLE EXTENDED ... AS JSON [STATIC ONLY]</c>: SQL state 42601 (parse/syntax
+        /// error — e.g. STATIC ONLY on a runtime without PR #198486) or 20000 (internal error
+        /// some DBRs return when a column type cannot be converted). The driver should fall back
+        /// to the multi-call metadata path. Checks SqlState first, then the message, since the
+        /// SEA execute path surfaces the SQL state only inside the error message (SqlState is null).
         /// </summary>
-        internal bool IsObjectNotFoundException()
+        internal bool IsDescTableExtendedUnsupportedException()
+            => IsDescTableExtendedUnsupported(this);
+
+        /// <summary>
+        /// Returns true if this exception indicates a catalog, schema, or table was not found
+        /// (or the server rejected the object name as invalid). Per the JDBC spec — and matching
+        /// both the Thrift path and the JDBC reference driver (WildcardUtil / isObjectNotFoundException)
+        /// — metadata methods return an EMPTY result set for non-existent objects rather than
+        /// throwing. Checks SQL state (42704) and error-message content for not-found / invalid-name
+        /// indicators. INVALID_PARAMETER_VALUE is included because the server rejects an empty-string
+        /// catalog with that error (name "" is not a valid name); the caller treats it the same as
+        /// "no such object" and returns empty, matching Thrift's 0-row behavior for that filter.
+        /// </summary>
+        internal bool IsObjectNotFoundException() => IsObjectNotFoundException(this);
+
+        /// <summary>
+        /// Static form of <see cref="IsObjectNotFoundException()"/> that accepts any
+        /// <see cref="AdbcException"/> so a catch clause works for both
+        /// <see cref="DatabricksException"/> (legacy SEA path) and
+        /// <see cref="AdbcDrivers.HiveServer2.Hive2.HiveServer2Exception"/> (the Thrift
+        /// metadata path, which throws HiveServer2Exception via ThrowErrorResponse).
+        /// Mirrors the JDBC reference driver's isObjectNotFoundException, which the Thrift
+        /// cross-reference path (DatabricksThriftServiceClient.listCrossReferences) uses to
+        /// turn an object-not-found / invalid-name server error into an empty result.
+        /// </summary>
+        internal static bool IsObjectNotFoundException(AdbcException ex)
         {
             const string ObjectNotFoundSqlState = "42704";
 
-            if (SqlState == ObjectNotFoundSqlState)
+            if (ex.SqlState == ObjectNotFoundSqlState)
                 return true;
 
-            var message = Message;
+            var message = ex.Message;
             if (string.IsNullOrEmpty(message)) return false;
             return message.IndexOf("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("SCHEMA_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
                 || message.IndexOf("INVALID_PARAMETER_VALUE", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Static helper that accepts any <see cref="AdbcException"/> so the catch clause in
+        /// <c>GetColumnsExtendedViaDescTableAsync</c> works for both <see cref="DatabricksException"/>
+        /// (Thrift / legacy SEA path) and <see cref="AdbcDrivers.HiveServer2.Hive2.HiveServer2Exception"/>
+        /// (SEA path after the HiveServer2Exception parity change).
+        /// </summary>
+        internal static bool IsDescTableExtendedUnsupported(AdbcException ex)
+        {
+            if (ex.SqlState == "42601" || ex.SqlState == "20000")
+                return true;
+
+            var message = ex.Message;
+            if (string.IsNullOrEmpty(message)) return false;
+            return message.IndexOf("SQLSTATE: 42601", StringComparison.OrdinalIgnoreCase) >= 0
+                || message.IndexOf("SQLSTATE: 20000", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 }

@@ -45,7 +45,7 @@ namespace AdbcDrivers.Databricks.Tests
         public void DecompressLz4_ValidData_Success()
         {
             var compressed = Compress("test data");
-            var result = Lz4Utilities.DecompressLz4(compressed, _bufferPool);
+            var result = Lz4Utilities.DecompressLz4(compressed, _memoryManager, _bufferPool);
             Assert.Equal("test data", Encoding.UTF8.GetString(result.ToArray()));
         }
 
@@ -53,7 +53,7 @@ namespace AdbcDrivers.Databricks.Tests
         public void DecompressLz4_InvalidData_ThrowsAdbcException()
         {
             var invalid = new byte[] { 0x00, 0x01, 0x02 };
-            var ex = Assert.Throws<AdbcException>(() => Lz4Utilities.DecompressLz4(invalid, _bufferPool));
+            var ex = Assert.Throws<AdbcException>(() => Lz4Utilities.DecompressLz4(invalid, _memoryManager, _bufferPool));
             Assert.Contains("Failed to decompress LZ4 data", ex.Message);
         }
 

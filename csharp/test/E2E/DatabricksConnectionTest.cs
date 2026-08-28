@@ -384,6 +384,14 @@ namespace AdbcDrivers.Databricks.Tests
                     null // QueryTimeout = 300
                 };
 
+                // At QueryTimeout=1 the timeout can surface at different layers depending on the
+                // protocol: Thrift throws a transport-level TTransportException, whereas SEA (REST)
+                // translates the cancelled HTTP request into a TimeoutException (see
+                // StatementExecutionConnection.GetObjects, mirroring HiveServer2Connection.GetObjects).
+                // Accept TimeoutException as the alternate so the matrix is protocol-agnostic for the
+                // 1-second timeout instead of flaking whenever a metadata call happens to exceed it.
+                alternateExceptions ??= new List<Type?>() { null, typeof(TimeoutException), null, null, null };
+
                 AddAction(name, action, expectedExceptions, alternateExceptions);
             }
 
@@ -581,6 +589,185 @@ namespace AdbcDrivers.Databricks.Tests
                     $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
             }
         }
+
+        /// <summary>
+        /// Regression test (ES-2115589): with adbc.databricks.scope_current_catalog opted in, the
+        /// statement's target catalog (ApacheParameters.CatalogName) must scope the executed DML
+        /// statement's session, so a query using a bare 2-level
+        /// `schema`.`table` name resolves against that catalog. Without it the driver issues no
+        /// USE CATALOG and the 2-level name resolves against the session's open-time catalog,
+        /// failing with TABLE_OR_VIEW_NOT_FOUND. Runs on the Thrift path.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogScopesTwoLevelNameQuery()
+            => RunStatementCatalogScopesTwoLevelNameQuery(protocol: null);
+
+        /// <summary>
+        /// SEA (REST) variant of <see cref="StatementCatalogScopesTwoLevelNameQuery"/>. The SEA
+        /// path always runs with a session, so the per-request Catalog is forced null and the
+        /// session's open-time catalog governs resolution — meaning a drilled-in catalog needs
+        /// the same USE CATALOG scoping as Thrift. Forces protocol=rest regardless of the
+        /// global test-config protocol. See ES-2115589.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogScopesTwoLevelNameQuery_Sea()
+            => RunStatementCatalogScopesTwoLevelNameQuery(protocol: "rest");
+
+        private async Task RunStatementCatalogScopesTwoLevelNameQuery(string? protocol)
+        {
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            // Connect WITHOUT a default catalog so the session default is not the target
+            // catalog; the only catalog scoping comes from the statement-level option below.
+            // ScopeCurrentCatalog=true opts in to the driver issuing USE CATALOG (default off).
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            testConfig.ScopeCurrentCatalog = "true";
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+            var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.CatalogName, catalog);
+            // 2-level name (schema.table), relying on the statement catalog to resolve it.
+            statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+            var result = await statement.ExecuteQueryAsync();
+            Assert.NotNull(result);
+            Assert.NotNull(result.Stream);
+            var batch = await result.Stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch.Length);
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogScopesTwoLevelNameQuery (protocol={protocol ?? "default"}): catalog={catalog}, " +
+                $"ran `SELECT COUNT(*) FROM {schema}.{table}` and resolved.");
+        }
+
+        /// <summary>
+        /// Opt-in gate (ES-2115589): with ScopeCurrentCatalog OFF (the default), the driver must
+        /// NOT issue USE CATALOG even when a statement target catalog is set — so a 2-level
+        /// `schema`.`table` name against a NON-default catalog fails to resolve. This proves the
+        /// feature is fully opt-in (existing users see no behavior change). Thrift; SEA is _Sea.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogNotScopedWhenFlagOff()
+            => RunStatementCatalogNotScopedWhenFlagOff(protocol: null);
+
+        [SkippableFact]
+        public Task StatementCatalogNotScopedWhenFlagOff_Sea()
+            => RunStatementCatalogNotScopedWhenFlagOff(protocol: "rest");
+
+        private async Task RunStatementCatalogNotScopedWhenFlagOff(string? protocol)
+        {
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            // ScopeCurrentCatalog left OFF (default) — the statement target catalog must be ignored.
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+            var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.CatalogName, catalog);
+            statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+            // With the flag off, no USE CATALOG is issued; the 2-level name resolves against the
+            // session's default catalog (not the target), so the query must fail to find it.
+            var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            {
+                var result = await statement.ExecuteQueryAsync();
+                if (result.Stream != null)
+                {
+                    await result.Stream.ReadNextRecordBatchAsync();
+                }
+            });
+
+            // Assert the SPECIFIC unresolved-name failure, not any exception: a transient
+            // connection drop, auth failure, or timeout must NOT pass this test as a false
+            // positive. The server raises TABLE_OR_VIEW_NOT_FOUND (SQLSTATE 42P01) because the
+            // 2-level name was resolved against the wrong (default) catalog.
+            string message = ex.ToString();
+            Assert.True(
+                message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
+                    || message.IndexOf("42P01", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected TABLE_OR_VIEW_NOT_FOUND / 42P01 (2-level name unresolved), but got: {message}");
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogNotScopedWhenFlagOff (protocol={protocol ?? "default"}): " +
+                $"flag off, `{schema}`.`{table}` did not resolve (opt-in gate confirmed).");
+        }
+
+        /// <summary>
+        /// ES-2115589 (issue-on-change): with ScopeCurrentCatalog ON and the session already on
+        /// the target catalog (connection default == statement target catalog), the driver must NOT issue a
+        /// redundant USE CATALOG — the tracked current catalog matches, so it's skipped (ODBC
+        /// parity). Connects WITH the target catalog as the default, then runs the 2-level query
+        /// twice on one connection: both must resolve, and (verified out-of-band via query
+        /// history) no USE CATALOG is emitted. Runs on Thrift; the SEA variant is _Sea below.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogUseIsIdempotentWhenAlreadyCurrent()
+            => RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(protocol: null);
+
+        [SkippableFact]
+        public Task StatementCatalogUseIsIdempotentWhenAlreadyCurrent_Sea()
+            => RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(protocol: "rest");
+
+        private async Task RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(string? protocol)
+        {
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            // Connect WITH the target catalog as the session default and opt in via
+            // ScopeCurrentCatalog; the statement target catalog then re-selects the same catalog. Because the
+            // tracked current catalog already matches, no USE CATALOG should be issued.
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = catalog;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            testConfig.ScopeCurrentCatalog = "true";
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+
+            // Run twice on the same connection; both must resolve (no USE CATALOG needed).
+            for (int i = 0; i < 2; i++)
+            {
+                var statement = connection.CreateStatement();
+                statement.SetOption(ApacheParameters.CatalogName, catalog);
+                statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+                var result = await statement.ExecuteQueryAsync();
+                Assert.NotNull(result);
+                Assert.NotNull(result.Stream);
+                var batch = await result.Stream!.ReadNextRecordBatchAsync();
+                Assert.NotNull(batch);
+                Assert.Equal(1, batch!.Length);
+            }
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogUseIsIdempotentWhenAlreadyCurrent (protocol={protocol ?? "default"}): " +
+                $"default catalog={catalog}, ran the 2-level query twice; repeated USE CATALOG is idempotent.");
+        }
+
 
         /// <summary>
         /// Tests that trace propagation configuration is correctly parsed and stored.

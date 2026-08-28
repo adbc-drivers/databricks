@@ -24,6 +24,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
+using AdbcDrivers.HiveServer2.Spark;
+using Microsoft.Extensions.Caching.Memory;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -37,6 +39,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
     {
         private const string TestHost = "test-host.databricks.com";
         private const string DriverVersion = "1.0.0";
+
+        /// <summary>
+        /// Test-only FeatureFlagCache that overrides context creation with a supplied factory,
+        /// exercising the per-host locking logic without any network I/O. Keeps the fetch seam in
+        /// the test project rather than in production code.
+        /// </summary>
+        private sealed class TestableFeatureFlagCache : FeatureFlagCache
+        {
+            private readonly Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> _factory;
+
+            public TestableFeatureFlagCache(
+                IMemoryCache cache,
+                Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory)
+                : base(cache)
+            {
+                _factory = factory;
+            }
+
+            internal override Task<FeatureFlagContext> CreateContextAsync(
+                string host,
+                IReadOnlyDictionary<string, string> properties,
+                string driverVersion,
+                string? endpointFormat,
+                CancellationToken cancellationToken)
+                => _factory(host, driverVersion, endpointFormat, cancellationToken);
+        }
 
         #region FeatureFlagContext Tests - Basic Functionality
 
@@ -268,6 +296,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("true", context.GetFlagValue("flag2"));
 
             // Cleanup
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_DropsInvalidTypedFlagValues()
+        {
+            // A strictly-typed flag with a value that would throw on the connect path (the "null"
+            // placeholder for a boolean) is dropped at ingestion, while a valid typed flag and an
+            // untyped flag are kept — so a bad server value never reaches the connection.
+            var response = new FeatureFlagsResponse
+            {
+                Flags = new List<FeatureFlagEntry>
+                {
+                    new FeatureFlagEntry { Name = DatabricksParameters.EnableFastMetadataQuery, Value = "null" }, // invalid bool -> dropped
+                    new FeatureFlagEntry { Name = DatabricksParameters.UseCloudFetch, Value = "true" },           // valid bool -> kept
+                    new FeatureFlagEntry { Name = "databricks.partnerplatform.clientConfigsFeatureFlags.x", Value = "whatever" }, // untyped -> kept
+                },
+                TtlSeconds = 300
+            };
+            var context = await FeatureFlagContext.CreateAsync("drop-invalid.databricks.com", CreateMockHttpClient(response), DriverVersion);
+
+            var flags = context.GetAllFlags();
+            Assert.False(flags.ContainsKey(DatabricksParameters.EnableFastMetadataQuery));
+            Assert.Equal("true", flags[DatabricksParameters.UseCloudFetch]);
+            Assert.Equal("whatever", flags["databricks.partnerplatform.clientConfigsFeatureFlags.x"]);
+
             context.Dispose();
         }
 
@@ -570,20 +624,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         #region MergePropertiesWithFeatureFlagsAsync Default Behavior Tests
 
         [Fact]
-        public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_ReturnsLocalProperties()
+        public async Task MergePropertiesWithFeatureFlagsAsync_PropertyNotSet_DefaultsToEnabled()
         {
-            // Arrange - No FeatureFlagCacheEnabled property set (default: false)
+            // Arrange - No FeatureFlagCacheEnabled property set. The default is ENABLED,
+            // so the merge proceeds past the enabled-check, finds the host via
+            // SparkParameters.HostName, attempts a fetch (which fails for this test host),
+            // and returns local properties unchanged due to the resilient error-handling path.
+            // A 1s timeout keeps the test fast even when DNS/connection fails.
             var localProperties = new Dictionary<string, string>
             {
-                ["host"] = TestHost,
+                [SparkParameters.HostName] = TestHost,
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
                 ["some_property"] = "some_value"
             };
-            var cache = FeatureFlagCache.GetInstance();
+            var cache = new FeatureFlagCache();
 
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - Should return local properties unchanged (feature flags skipped)
+            // Assert - fetch fails for test host => resilient path returns local properties unchanged
             Assert.Same(localProperties, result);
         }
 
@@ -608,19 +667,244 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public async Task MergePropertiesWithFeatureFlagsAsync_PropertySetToInvalidValue_ReturnsLocalProperties()
         {
-            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value
+            // Arrange - FeatureFlagCacheEnabled set to a non-boolean value. An unparsable
+            // value keeps the default (enabled), so the merge proceeds, finds the host,
+            // attempts a fetch (which fails for this test host), and falls back to local
+            // properties via the resilient error-handling path.
+            // A 1s timeout keeps the test fast even when DNS/connection fails.
             var localProperties = new Dictionary<string, string>
             {
-                ["host"] = TestHost,
+                [SparkParameters.HostName] = TestHost,
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
                 [DatabricksParameters.FeatureFlagCacheEnabled] = "notabool"
             };
-            var cache = FeatureFlagCache.GetInstance();
+            var cache = new FeatureFlagCache();
 
             // Act
             var result = await cache.MergePropertiesWithFeatureFlagsAsync(localProperties, DriverVersion);
 
-            // Assert - Should return local properties unchanged (can't parse as bool)
+            // Assert - fetch fails for test host => resilient path returns local properties unchanged
             Assert.Same(localProperties, result);
+        }
+
+        #endregion
+
+        #region MergePropertiesWithFeatureFlags (sync) Tests
+
+        [Fact]
+        public void MergePropertiesWithFeatureFlags_WarmCache_MergesFlagsSynchronously_LocalPropertiesWin()
+        {
+            // The connection-open path (DatabricksDatabase) calls this synchronous wrapper so the
+            // opening connection carries server feature flags from the start. With a warm per-host
+            // cache the merge must happen inline (no network) and local properties must override
+            // server flags on conflict.
+            const string host = "warm-host.databricks.com";
+            var warmContext = CreateTestContext(new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableFastMetadataQuery] = "true",
+                ["adbc.databricks.some_server_flag"] = "server_value"
+            });
+            var memCache = new MemoryCache(new MemoryCacheOptions());
+            memCache.Set($"feature_flags:{host}", warmContext);
+            var cache = new FeatureFlagCache(memCache);
+
+            var localProperties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = host,
+                // A local value for a flag the server also returns must win.
+                ["adbc.databricks.some_server_flag"] = "local_value"
+            };
+
+            // Act
+            var result = cache.MergePropertiesWithFeatureFlags(localProperties, DriverVersion);
+
+            // Assert - server flag applied inline; local property overrides the server flag.
+            Assert.Equal("true", result[DatabricksParameters.EnableFastMetadataQuery]);
+            Assert.Equal("local_value", result["adbc.databricks.some_server_flag"]);
+            Assert.Equal(host, result[SparkParameters.HostName]);
+        }
+
+        #endregion
+
+        #region Per-Host Locking Tests
+
+        [Fact]
+        public async Task GetOrCreateContext_DifferentColdHosts_ResolveConcurrently()
+        {
+            // Per-host locking must let first-time (cold-cache) resolves for DIFFERENT hosts proceed
+            // in parallel. With a single global lock these would serialize and max concurrency would
+            // be 1; with per-host locks both context creations are in flight at once (max 2).
+            int concurrent = 0;
+            int maxConcurrent = 0;
+            var gate = new object();
+
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    lock (gate)
+                    {
+                        concurrent++;
+                        maxConcurrent = Math.Max(maxConcurrent, concurrent);
+                    }
+
+                    // Hold both calls inside the factory simultaneously long enough to observe overlap.
+                    await Task.Delay(300, ct).ConfigureAwait(false);
+
+                    lock (gate)
+                    {
+                        concurrent--;
+                    }
+
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            var propsA = new Dictionary<string, string> { [SparkParameters.HostName] = "host-a.databricks.com" };
+            var propsB = new Dictionary<string, string> { [SparkParameters.HostName] = "host-b.databricks.com" };
+
+            // Act - kick off both resolves; each runs synchronously up to the factory's delay await.
+            var taskA = cache.MergePropertiesWithFeatureFlagsAsync(propsA, DriverVersion);
+            var taskB = cache.MergePropertiesWithFeatureFlagsAsync(propsB, DriverVersion);
+            await Task.WhenAll(taskA, taskB);
+
+            // Assert - both factory calls overlapped => different hosts did not serialize.
+            Assert.Equal(2, maxConcurrent);
+        }
+
+        [Fact]
+        public async Task GetOrCreateContext_SameColdHost_CreatesContextOnce()
+        {
+            // Regression guard for the lock's original purpose: concurrent first-time resolves for
+            // the SAME host must dedup to a single creation. The second caller acquires the per-host
+            // lock after the first, then finds the context already cached (post-lock double-check).
+            int factoryCalls = 0;
+
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    Interlocked.Increment(ref factoryCalls);
+                    await Task.Delay(200, ct).ConfigureAwait(false);
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            const string host = "same-host.databricks.com";
+            var props1 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
+            var props2 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
+
+            // Act
+            var task1 = cache.MergePropertiesWithFeatureFlagsAsync(props1, DriverVersion);
+            var task2 = cache.MergePropertiesWithFeatureFlagsAsync(props2, DriverVersion);
+            var results = await Task.WhenAll(task1, task2);
+
+            // Assert - fetched once; both connections still see the server flag merged in.
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal("v", results[0]["adbc.databricks.flag"]);
+            Assert.Equal("v", results[1]["adbc.databricks.flag"]);
+        }
+
+        #endregion
+
+        #region Feature Flag HttpClient Timeout Tests
+
+        [Fact]
+        public void CreateFeatureFlagHttpClient_NoOverride_DefaultsToFiveSecondTimeout()
+        {
+            // Arrange - no feature_flag_timeout_seconds property set
+            var properties = new Dictionary<string, string>();
+
+            // Act
+            using var client = AdbcDrivers.Databricks.Http.HttpClientFactory
+                .CreateFeatureFlagHttpClient(properties, TestHost, DriverVersion);
+
+            // Assert - default is 5s (would be 10s before the change)
+            Assert.Equal(TimeSpan.FromSeconds(5), client.Timeout);
+        }
+
+        [Fact]
+        public void CreateFeatureFlagHttpClient_WithOverride_HonorsConfiguredTimeout()
+        {
+            // Arrange - explicit override must still win over the default
+            var properties = new Dictionary<string, string>
+            {
+                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "3"
+            };
+
+            // Act
+            using var client = AdbcDrivers.Databricks.Http.HttpClientFactory
+                .CreateFeatureFlagHttpClient(properties, TestHost, DriverVersion);
+
+            // Assert
+            Assert.Equal(TimeSpan.FromSeconds(3), client.Timeout);
+        }
+
+        #endregion
+
+        #region Negative Cache Tests
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_Success_StatusHealthy()
+        {
+            var response = new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>(), TtlSeconds = 300 };
+            var context = await FeatureFlagContext.CreateAsync("ok.databricks.com", CreateMockHttpClient(response), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Healthy, context.LastFetchStatus);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_429_SetsFailedStatus()
+        {
+            // Retry-After is intentionally ignored: the negative TTL is a fixed 60s.
+            // Use (HttpStatusCode)429 since HttpStatusCode.TooManyRequests is not defined on net472.
+            var httpClient = CreateMockHttpClient((HttpStatusCode)429);
+            var context = await FeatureFlagContext.CreateAsync("rl.databricks.com", httpClient, DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_ServerError_SetsFailedStatus()
+        {
+            var context = await FeatureFlagContext.CreateAsync(
+                "err.databricks.com", CreateMockHttpClient(HttpStatusCode.InternalServerError), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_Timeout_DoesNotThrowAndSetsFailedStatus()
+        {
+            // HttpClient timeout surfaces as TaskCanceledException with an un-cancelled request token;
+            // it must be treated as a failed fetch (negatively cached), not propagated.
+            var context = await FeatureFlagContext.CreateAsync(
+                "to.databricks.com", CreateTimeoutMockHttpClient(), DriverVersion);
+
+            Assert.Equal(FeatureFlagFetchStatus.Failed, context.LastFetchStatus);
+
+            context.Dispose();
+        }
+
+        [Fact]
+        public async Task FeatureFlagContext_CreateAsync_CallerCancellation_Propagates()
+        {
+            // A genuinely cancelled caller token must propagate, unlike an HttpClient timeout.
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                FeatureFlagContext.CreateAsync(
+                    "cancel.databricks.com",
+                    CreateDelayedMockHttpClient(new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>() }, delayMs: 1000),
+                    DriverVersion,
+                    cancellationToken: cts.Token));
         }
 
         #endregion
@@ -686,6 +970,24 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         private static HttpClient CreateMockHttpClient(HttpStatusCode statusCode)
         {
             return CreateMockHttpClient(statusCode, "");
+        }
+
+        private static HttpClient CreateTimeoutMockHttpClient()
+        {
+            // Simulate an HttpClient timeout: SendAsync throws TaskCanceledException
+            // without the caller's token being cancelled.
+            var mockHandler = new Mock<HttpMessageHandler>();
+            mockHandler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(new TaskCanceledException("Simulated HttpClient timeout"));
+
+            return new HttpClient(mockHandler.Object)
+            {
+                BaseAddress = new Uri("https://test.databricks.com")
+            };
         }
 
         private static HttpClient CreateDelayedMockHttpClient(FeatureFlagsResponse response, int delayMs)

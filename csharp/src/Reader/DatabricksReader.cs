@@ -198,9 +198,9 @@ namespace AdbcDrivers.Databricks.Reader
                             new("row_count", batch.RowCount)
                         ]);
 
-                        // Pass the connection's buffer pool for efficient LZ4 decompression
+                        // Pass the connection's pooled stream manager + buffer pool for efficient LZ4 decompression
                         var connection = (DatabricksConnection)_statement.Connection;
-                        dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.Lz4BufferPool);
+                        dataToUse = Lz4Utilities.DecompressLz4(batch.Batch, connection.RecyclableMemoryStreamManager, connection.Lz4BufferPool);
 
                         activity?.AddEvent("databricks_reader.decompress_completed", [
                             new("batch_index", this.index),

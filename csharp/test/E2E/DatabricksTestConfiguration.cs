@@ -43,6 +43,9 @@ namespace AdbcDrivers.Databricks.Tests
         [JsonPropertyName("enableMultipleCatalogSupport")]
         public string EnableMultipleCatalogSupport { get; set; } = string.Empty;
 
+        [JsonPropertyName("scopeCurrentCatalog"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public string ScopeCurrentCatalog { get; set; } = string.Empty;
+
         [JsonPropertyName("tracePropagationEnabled"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string TracePropagationEnabled { get; set; } = string.Empty;
 

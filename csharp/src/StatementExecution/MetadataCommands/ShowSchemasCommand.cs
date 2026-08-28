@@ -37,7 +37,7 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
             else
                 sql.Append($" IN {QuoteIdentifier(_catalog)}");
             if (_schemaPattern != null)
-                sql.Append(string.Format(LikeFormat, ConvertPattern(_schemaPattern)));
+                sql.Append(string.Format(LikeFormat, LikePattern(_schemaPattern)));
             return sql.ToString();
         }
     }

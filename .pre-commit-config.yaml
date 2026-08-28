@@ -14,7 +14,7 @@
 
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: 0470f7c8a653e950f7cc5a653204ceb3fde4c02a  # frozen: v0.15.0
+  rev: v0.15.21
   hooks:
     - id: ruff-check
       name: "ruff check (isort)"
@@ -24,7 +24,7 @@ repos:
     - id: ruff-format
 
 - repo: https://github.com/codespell-project/codespell
-  rev: 63c8f8312b7559622c0d82815639671ae42132ac  # v2.4.1
+  rev: v2.4.2  # v2.4.1
   hooks:
   - id: codespell
     exclude: >
@@ -33,7 +33,7 @@ repos:
         )$
 
 - repo: https://github.com/golangci/golangci-lint
-  rev: e2e40021c9007020676c93680a36e3ab06c6cd33  # frozen: v2.8.0
+  rev: v2.12.2
   hooks:
   - id: golangci-lint
     name: lint
@@ -41,7 +41,7 @@ repos:
     types_or: [go, go-mod]
 
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+  rev: v6.0.0
   hooks:
   - id: check-added-large-files
     args: ["--enforce-all"]
@@ -57,7 +57,7 @@ repos:
   - id: trailing-whitespace
 
 - repo: https://github.com/adbc-drivers/dev
-  rev: 4e9fb185c5a600c0c1de0df011ce16ffbafb709e
+  rev: 6a41519f9af534d9582153c4a8e93bfe3d62b5fa
   hooks:
   - id: rat
 

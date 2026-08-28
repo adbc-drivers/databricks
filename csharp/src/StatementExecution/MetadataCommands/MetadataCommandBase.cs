@@ -92,6 +92,29 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
             return result.ToString();
         }
 
+        /// <summary>
+        /// Builds the value for a <c>LIKE '{0}'</c> clause from a JDBC search pattern.
+        /// Runs <see cref="ConvertPattern"/> (JDBC LIKE → Hive glob, byte-identical to the
+        /// JDBC driver's WildcardUtil.jdbcPatternToHive) and then escapes backslashes for
+        /// the SQL string literal.
+        ///
+        /// The glob is embedded inside a single-quoted SQL string, so the server's SQL
+        /// string-literal parser consumes one backslash layer before the SHOW ... LIKE
+        /// matcher (a regex) sees the pattern. Without this doubling a literal backslash
+        /// in the pattern (glob <c>a\\b</c>) collapses to a single backslash at parse time,
+        /// which the regex then consumes as an escape — so a schema/table literally named
+        /// <c>a\b</c> would never match. Doubling here (glob <c>a\\b</c> → literal
+        /// <c>a\\\\b</c>) makes it survive both layers and match correctly.
+        ///
+        /// NOTE: the JDBC reference driver does NOT do this (it interpolates
+        /// jdbcPatternToHive output straight into <c>LIKE '%s'</c>), so JDBC mishandles
+        /// backslash-containing identifiers the same way; see databricks-jdbc#1598.
+        /// </summary>
+        protected static string LikePattern(string? pattern)
+        {
+            return ConvertPattern(pattern).Replace("\\", "\\\\");
+        }
+
         protected static void AppendCatalogScope(StringBuilder sql, string? catalog)
         {
             if (catalog == null)

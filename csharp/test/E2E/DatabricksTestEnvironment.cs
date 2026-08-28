@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.Data.SqlTypes;
 using System.Text;
 using Apache.Arrow.Adbc;
+using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -170,6 +171,10 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 parameters.Add(DatabricksParameters.EnableMultipleCatalogSupport, testConfiguration.EnableMultipleCatalogSupport!);
             }
+            if (!string.IsNullOrEmpty(testConfiguration.ScopeCurrentCatalog))
+            {
+                parameters.Add(DatabricksParameters.ScopeCurrentCatalog, testConfiguration.ScopeCurrentCatalog!);
+            }
             if (!string.IsNullOrEmpty(testConfiguration.TracePropagationEnabled))
             {
                 parameters.Add(DatabricksParameters.TracePropagationEnabled, testConfiguration.TracePropagationEnabled!);
@@ -259,6 +264,13 @@ namespace AdbcDrivers.Databricks.Tests
                     }
                 }
             }
+
+            // Force client telemetry on for all e2e runs so the suite emits real events
+            // to {host}/telemetry-ext under the current driver version. Telemetry is off by
+            // default (TelemetryConfiguration.Enabled = false); the driver reads this key via
+            // TelemetryConfiguration.FromProperties. Indexer assignment keeps this idempotent
+            // if a future config field also sets the key.
+            parameters[TelemetryConfiguration.PropertyKeyEnabled] = "true";
 
             return parameters;
         }

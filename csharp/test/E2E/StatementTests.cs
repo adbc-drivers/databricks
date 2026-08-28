@@ -481,9 +481,9 @@ namespace AdbcDrivers.Databricks.Tests
 
         // TODO: PECO-3008 - CanGetColumnsExtended fails for SEA; investigate catalog/schema metadata path in StatementExecutionConnection
         [SkippableTheory]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true, new[] { "PK_IS_NULLABLE:NO" })]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
-        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true)]
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false)]
+        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended)
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
@@ -614,21 +614,6 @@ namespace AdbcDrivers.Databricks.Tests
                 .Replace("{TABLE_NAME}", tableName)
                 .Replace("{REF_TABLE_NAME}", refTableName);
 
-            // Apply extra placeholder replacements if provided
-            if (extraPlaceholdsInResult != null)
-            {
-                foreach (var placeholderReplacement in extraPlaceholdsInResult)
-                {
-                    var parts = placeholderReplacement.Split(':');
-                    if (parts.Length == 2)
-                    {
-                        var placeholder = parts[0];
-                        var replacement = parts[1];
-                        resultString = resultString.Replace("{" + placeholder + "}", replacement);
-                    }
-                }
-            }
-
             var expectedResult = JsonSerializer.Deserialize<List<Dictionary<string, object?>>>(resultString);
 
             // For debug
@@ -686,6 +671,131 @@ namespace AdbcDrivers.Databricks.Tests
                 actualBatchLength += batch.Length;
             }
             Assert.Equal(0, actualBatchLength);
+        }
+
+        // Issue #568: GetColumns on a table with a GEOMETRY/GEOGRAPHY column previously threw
+        // NotSupportedException on the Thrift path (SqlTypeNameParser had no entry for the geo
+        // types and no catch-all). The root-cause fix lives in the hiveserver2 submodule's
+        // SqlTypeNameParser.Parse (stripped-base-name fallback); this test guards that GetColumns
+        // returns a row for the geo column and reports the stripped BASE_TYPE_NAME (e.g.
+        // "geometry(0)" -> "GEOMETRY"), consistent on whatever protocol the run is configured with.
+        [SkippableTheory]
+        [InlineData("GEOMETRY", "geom_col")]
+        [InlineData("GEOGRAPHY", "geog_col")]
+        public async Task CanGetColumnsOnGeospatialColumn(string geoType, string columnName)
+        {
+            string? catalogName = TestConfiguration.Metadata.Catalog;
+            string? schemaName = TestConfiguration.Metadata.Schema;
+            string tableName = Guid.NewGuid().ToString("N");
+            string fullTableName = string.Format(
+                "{0}{1}{2}",
+                string.IsNullOrEmpty(catalogName) ? string.Empty : DelimitIdentifier(catalogName) + ".",
+                string.IsNullOrEmpty(schemaName) ? string.Empty : DelimitIdentifier(schemaName) + ".",
+                DelimitIdentifier(tableName));
+            using TemporaryTable temporaryTable = await TemporaryTable.NewTemporaryTableAsync(
+                Statement,
+                fullTableName,
+                $"CREATE TABLE IF NOT EXISTS {fullTableName} (id INT, {columnName} {geoType}(4326));",
+                OutputHelper);
+
+            var statement = Connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, catalogName);
+            statement.SetOption(ApacheParameters.SchemaName, schemaName);
+            statement.SetOption(ApacheParameters.TableName, tableName);
+            statement.SqlQuery = "GetColumns";
+
+            // Prior to the fix this throws NotSupportedException while parsing the geo type name.
+            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            Assert.NotNull(queryResult.Stream);
+
+            int columnNameIndex = -1;
+            int baseTypeNameIndex = -1;
+            for (int i = 0; i < queryResult.Stream!.Schema.FieldsList.Count; i++)
+            {
+                string name = queryResult.Stream.Schema.FieldsList[i].Name;
+                if (name.Equals("COLUMN_NAME", StringComparison.OrdinalIgnoreCase)) columnNameIndex = i;
+                else if (name.Equals("BASE_TYPE_NAME", StringComparison.OrdinalIgnoreCase)) baseTypeNameIndex = i;
+            }
+            Assert.True(columnNameIndex >= 0, "COLUMN_NAME column not found in GetColumns result");
+            Assert.True(baseTypeNameIndex >= 0, "BASE_TYPE_NAME column not found in GetColumns result");
+
+            bool foundGeoColumn = false;
+            string? geoBaseTypeName = null;
+            while (queryResult.Stream != null)
+            {
+                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                if (batch == null)
+                {
+                    break;
+                }
+                var columnNames = (StringArray)batch.Column(columnNameIndex);
+                var baseTypeNames = (StringArray)batch.Column(baseTypeNameIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (string.Equals(columnNames.GetString(i), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundGeoColumn = true;
+                        geoBaseTypeName = baseTypeNames.GetString(i);
+                    }
+                }
+            }
+
+            Assert.True(foundGeoColumn, $"GetColumns should return a row for the {geoType} column '{columnName}'");
+            // BASE_TYPE_NAME is the stripped base name (no (SRID) suffix), matching how the
+            // recognized types report it and the JDBC reference driver's stripBaseTypeName.
+            Assert.Equal(geoType, geoBaseTypeName);
+        }
+
+        // Issue #568 follow-up to #627: #627 fixed GEOMETRY/GEOGRAPHY only on the GetColumns
+        // *metadata* path and never exercised a geo *data* column. This verifies that selecting a
+        // geospatial value round-trips through the driver as a UTF-8 EWKT string, identically on
+        // Thrift and SEA. Databricks serializes a geo value to its EWKT text on the wire
+        // ("SRID=4326;POINT(30 10)"); since Arrow has no OTHER type (JDBC reports Types.OTHER),
+        // ArrowTypeParser maps the unmodeled GEOMETRY/GEOGRAPHY SQL type to StringType via its
+        // catch-all, so the declared schema is Utf8 and the wire StringArray already agrees with it
+        // (no serializing stream needed, unlike untyped NULL). Asserting the concrete EWKT value on
+        // whatever protocol the run is configured with makes a two-config CI run prove Thrift↔SEA
+        // parity, the guarantee #627 relied on but did not test for data.
+        [SkippableTheory]
+        [InlineData("st_geomfromtext('POINT(30 10)', 4326)", "GEOMETRY(4326)")]
+        [InlineData("to_geography('POINT(30 10)')", "GEOGRAPHY(ANY)")]
+        public async Task GeospatialDataColumnReportsStringEwkt(string geoExpr, string expectedSqlName)
+        {
+            using AdbcConnection connection = NewConnection();
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            // Schema: the geo column is declared Utf8, carrying the server's SQL type name in the
+            // Spark:DataType:SqlName field metadata (the same signal #627 strips for BASE_TYPE_NAME).
+            Field field = Assert.Single(reader!.Schema.FieldsList);
+            Assert.Equal("geo_col", field.Name);
+            Assert.Equal(ArrowTypeId.String, field.DataType.TypeId);
+            Assert.True(
+                field.Metadata != null &&
+                field.Metadata.TryGetValue("Spark:DataType:SqlName", out string? sqlName) &&
+                sqlName == expectedSqlName,
+                $"expected Spark:DataType:SqlName={expectedSqlName}");
+
+            // Data: the batch array agrees with the declared Utf8 schema, and the value round-trips
+            // as the server's EWKT text (SRID-prefixed WKT).
+            int totalRows = 0;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                StringArray geoValues = Assert.IsType<StringArray>(batch.Column(0));
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    Assert.Equal("SRID=4326;POINT(30 10)", geoValues.GetString(i));
+                }
+                totalRows += batch.Length;
+            }
+            Assert.Equal(1, totalRows);
         }
 
         [SkippableFact]

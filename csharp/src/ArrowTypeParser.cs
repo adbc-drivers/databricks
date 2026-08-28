@@ -108,7 +108,11 @@ namespace AdbcDrivers.Databricks
                 "TIMESTAMP" or "TIMESTAMP_NTZ" or "TIMESTAMP_LTZ" => TimestampType.Default,
                 // INTERVAL is converted to string by IntervalSerializingStream; StringType is the output contract.
                 "INTERVAL" => StringType.Default,
-                "NULL" or "VOID" => NullType.Default,
+                // An untyped NULL column (SQL type VOID, e.g. `SELECT NULL`) is reported as STRING to
+                // match Thrift, which returns STRING_TYPE for untyped NULL. The SEA IPC data arrives as
+                // an Arrow NullArray; NullColumnSerializingStream converts it to an all-null StringArray
+                // so the declared StringType schema and the batch array agree (the output contract).
+                "NULL" or "VOID" => StringType.Default,
                 _ => StringType.Default,
             };
         }

@@ -75,6 +75,13 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("STRING", "STRING")]
         [InlineData("BOOLEAN", "BOOLEAN")]
         [InlineData("DOUBLE", "DOUBLE")]
+        // Unmodeled types (geospatial, and any future server type) fall back to the shared
+        // parser's stripped base name — the (SRID) suffix is removed, matching the Thrift path
+        // (SparkConnection.SetPrecisionScaleAndTypeName) so both protocols agree on BASE_TYPE_NAME.
+        [InlineData("GEOMETRY(0)", "GEOMETRY")]
+        [InlineData("GEOGRAPHY(4326)", "GEOGRAPHY")]
+        [InlineData("GEOMETRY", "GEOMETRY")]
+        [InlineData("VARIANT", "VARIANT")]
         [InlineData("", "")]
         public void GetBaseTypeName_ReturnsCorrectName(string typeName, string expectedBase)
         {

@@ -46,8 +46,8 @@ fn main() {
     println!("=== Slow Consumer CloudFetch Test ===\n");
     println!("This test uses a low memory limit (max_chunks_in_memory=2) and");
     println!("slow consumption to demonstrate backpressure behavior.\n");
-    println!("Host: {}", &host);
-    println!("HTTP Path: {}", &http_path);
+    println!("Host: {}", host);
+    println!("HTTP Path: {}", http_path);
     println!();
 
     // Create driver and database

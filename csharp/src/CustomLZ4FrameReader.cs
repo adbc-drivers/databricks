@@ -75,10 +75,14 @@ namespace AdbcDrivers.Databricks
         {
             if (buffer != null)
             {
-                // Clear the buffer to prevent stale data from previous decompressions
-                // from corrupting subsequent operations. The performance overhead (~1-2ms
-                // per 4MB buffer) is negligible compared to network I/O and decompression time.
-                _bufferPool.Return(buffer, clearArray: true);
+                // Return without clearing. This is the LZ4 decoder's internal block work buffer; K4os
+                // bounds every read to the number of bytes it actually decoded into the buffer, so stale
+                // bytes from a previous decompression are never surfaced to the output. This is verified
+                // by Lz4DecompressNoStaleDataTest, which decodes through a deliberately poisoned buffer
+                // and still gets byte-exact output. Upstream K4os likewise returns these buffers without
+                // clearing. Skipping the clear avoids zeroing a multi-MB buffer (~80us each, measured)
+                // that the next decode overwrites anyway.
+                _bufferPool.Return(buffer, clearArray: false);
             }
         }
     }

@@ -23,7 +23,7 @@ class DatabricksQuirks(model.DriverQuirks):
     driver = "adbc_driver_databricks"
     driver_name = "ADBC Driver Foundry Driver for Databricks"
     vendor_name = "Databricks"
-    vendor_version = re.compile(r"(17\.[0-9]+.*|2025\.[0-9]+)")
+    vendor_version = re.compile(r"(17\.[0-9]+.*|2026\.[0-9]+)")
     short_version = "17"
     features = model.DriverFeatures(
         connection_get_table_schema=False,

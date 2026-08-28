@@ -255,7 +255,7 @@ public static IConnectionTelemetry Create(
     IReadOnlyDictionary<string, string> properties,
     string host,
     string assemblyVersion,
-    IOAuthTokenProvider? oauthTokenProvider,
+    OAuthClientCredentialsProvider? oauthTokenProvider,
     string sessionId,                          // CHANGED: was TSessionHandle? sessionHandle
     DriverMode.Types.Type mode,                // NEW: Thrift or Sea
     bool enableDirectResults,
@@ -264,7 +264,9 @@ public static IConnectionTelemetry Create(
     Activity? activity);
 ```
 
-Thrift caller converts at the boundary: `sessionHandle.SessionId.Guid.ToString()`. SEA caller passes its `_sessionId` directly.
+Thrift caller converts at the boundary: `sessionHandle.SessionId.Guid.ToString()` (with a null-check; an empty string is mapped to `null` `SessionId` inside `Create` to match the prior behavior). SEA caller passes its `_sessionId` directly.
+
+The `mode` parameter is also threaded through `BuildDriverConnectionParams` and `SafeBuildDriverConnectionParams` — both methods previously hardcoded `Mode = DriverMode.Types.Type.Thrift`. The literal is gone from `ConnectionTelemetry.cs`; only the `DatabricksConnection` (Thrift) call site supplies it.
 
 ### 5.3 `IConnectionTelemetry` — no surface change
 

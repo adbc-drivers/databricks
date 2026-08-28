@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
@@ -48,7 +49,7 @@ namespace AdbcDrivers.Databricks
     /// JDBC Reference: DatabricksDriverFeatureFlagsContextFactory.java
     /// </para>
     /// </remarks>
-    internal sealed class FeatureFlagCache : IDisposable
+    internal class FeatureFlagCache : IDisposable
     {
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
 
@@ -63,7 +64,16 @@ namespace AdbcDrivers.Databricks
         public static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(15);
 
         private readonly IMemoryCache _cache;
-        private readonly SemaphoreSlim _createLock = new SemaphoreSlim(1, 1);
+
+        /// <summary>
+        /// Per-host locks that serialize context creation for a single host (preventing duplicate
+        /// fetches) without serializing across hosts. Keyed by the same cache key as the entries in
+        /// <see cref="_cache"/>. A single shared lock would make concurrent first-time connects to
+        /// different cold hosts queue behind one another, inflating worst-case connect latency to
+        /// roughly N × the fetch timeout.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
+
         private bool _disposed;
 
         /// <summary>
@@ -124,8 +134,11 @@ namespace AdbcDrivers.Databricks
                 return context;
             }
 
-            // Cache miss - create new context with async lock to prevent duplicate creation
-            await _createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Cache miss - create new context under a PER-HOST lock. This dedups concurrent
+            // first-time creations for the same host (only one fetch) without serializing
+            // creations for different hosts behind a single process-wide lock.
+            var createLock = _createLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 // Double-check after acquiring lock
@@ -134,22 +147,33 @@ namespace AdbcDrivers.Databricks
                     return context;
                 }
 
-                // Create HttpClient only on cache miss (lazy creation)
-                using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
-
-                // Create context asynchronously - this waits for initial fetch to complete
-                context = await FeatureFlagContext.CreateAsync(
+                // Create the context (network fetch) only on cache miss. Extracted into a virtual
+                // method so tests can override the fetch without any test-only branching here.
+                context = await CreateContextAsync(
                     host,
-                    httpClient,
+                    properties,
                     driverVersion,
                     endpointFormat,
                     cancellationToken).ConfigureAwait(false);
 
-                // Set cache options with sliding expiration
-                // Using sliding expiration so that reads extend the expiration window
-                var cacheOptions = new MemoryCacheEntryOptions()
-                    .SetSlidingExpiration(effectiveCacheTtl)
-                    .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                // Choose cache expiration based on the fetch outcome:
+                // - Healthy: sliding TTL so active use keeps flags warm.
+                // - Failed: short fixed ABSOLUTE negative TTL so a slow/erroring
+                //   connector-service is retried soon via recreation instead of on every
+                //   connection, and a transient failure is not pinned for the full positive TTL.
+                MemoryCacheEntryOptions cacheOptions;
+                if (context.LastFetchStatus == FeatureFlagFetchStatus.Failed)
+                {
+                    cacheOptions = new MemoryCacheEntryOptions()
+                        .SetAbsoluteExpiration(FeatureFlagContext.DefaultNegativeTtl)
+                        .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                }
+                else
+                {
+                    cacheOptions = new MemoryCacheEntryOptions()
+                        .SetSlidingExpiration(effectiveCacheTtl)
+                        .RegisterPostEvictionCallback(OnCacheEntryEvicted);
+                }
 
                 _cache.Set(cacheKey, context, cacheOptions);
 
@@ -164,16 +188,61 @@ namespace AdbcDrivers.Databricks
             }
             finally
             {
-                _createLock.Release();
+                createLock.Release();
             }
         }
 
         /// <summary>
-        /// Callback invoked when a cache entry is evicted.
-        /// Disposes the context to clean up resources (stops background refresh task).
+        /// Creates a feature flag context on cache miss. The default (production) implementation
+        /// builds an HttpClient and fetches feature flags from the connector service, waiting for
+        /// the initial fetch to complete. Overridden in tests to supply a context without network
+        /// I/O, keeping the fetch seam out of the production code path.
         /// </summary>
-        private static void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        /// <param name="host">The host to create a context for.</param>
+        /// <param name="properties">Connection properties used to build the HttpClient.</param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The newly created feature flag context.</returns>
+        internal virtual async Task<FeatureFlagContext> CreateContextAsync(
+            string host,
+            IReadOnlyDictionary<string, string> properties,
+            string driverVersion,
+            string? endpointFormat,
+            CancellationToken cancellationToken)
         {
+            // Create HttpClient only on cache miss (lazy creation)
+            using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+
+            // Create context asynchronously - this waits for initial fetch to complete
+            return await FeatureFlagContext.CreateAsync(
+                host,
+                httpClient,
+                driverVersion,
+                endpointFormat,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Callback invoked when a cache entry is evicted.
+        /// Disposes the context to clean up resources (stops background refresh task) and drops the
+        /// host's per-host create lock so <see cref="_createLocks"/> does not grow unbounded over
+        /// the process lifetime as connections are made to many distinct hosts.
+        /// </summary>
+        private void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        {
+            // Drop the per-host create lock for this evicted entry. We only remove it from the map
+            // (and let the GC reclaim it) rather than disposing it: a concurrent GetOrCreateContextAsync
+            // for the same host may already hold this semaphore, and disposing it out from under that
+            // caller would throw ObjectDisposedException on WaitAsync/Release. A SemaphoreSlim that has
+            // never had its AvailableWaitHandle accessed (as here) holds no OS handle, so dropping the
+            // reference leaks nothing. If a create is racing this eviction it may briefly create a
+            // fresh lock for the same key; that only weakens dedup for one window, never correctness.
+            if (key is string cacheKey)
+            {
+                _createLocks.TryRemove(cacheKey, out _);
+            }
+
             if (value is FeatureFlagContext context)
             {
                 context.Dispose();
@@ -281,7 +350,11 @@ namespace AdbcDrivers.Databricks
 
             _disposed = true;
 
-            _createLock.Dispose();
+            foreach (var kvp in _createLocks)
+            {
+                kvp.Value.Dispose();
+            }
+            _createLocks.Clear();
 
             if (_cache is IDisposable disposableCache)
             {
@@ -307,10 +380,8 @@ namespace AdbcDrivers.Databricks
 
             try
             {
-                // Check if feature flag cache is enabled (default: false)
-                if (!localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) ||
-                    !bool.TryParse(enabledStr, out bool enabled) ||
-                    !enabled)
+                // Check if feature flag cache is enabled (default: true).
+                if (!IsCacheEnabled(localProperties))
                 {
                     activity?.AddEvent(new ActivityEvent("feature_flags.skipped",
                         tags: new ActivityTagsCollection { { "reason", "disabled_by_config" } }));
@@ -390,6 +461,24 @@ namespace AdbcDrivers.Databricks
                 .ConfigureAwait(false)
                 .GetAwaiter()
                 .GetResult();
+        }
+
+        /// <summary>
+        /// Whether the feature-flag cache is enabled for the given properties. Enabled by default;
+        /// only an explicit, parseable <c>"false"</c> for
+        /// <see cref="DatabricksParameters.FeatureFlagCacheEnabled"/> disables it. An absent or
+        /// unparsable value keeps the default (enabled).
+        /// </summary>
+        private static bool IsCacheEnabled(IReadOnlyDictionary<string, string> localProperties)
+        {
+            bool enabled = true;
+            if (localProperties.TryGetValue(DatabricksParameters.FeatureFlagCacheEnabled, out string? enabledStr) &&
+                bool.TryParse(enabledStr, out bool parsedEnabled))
+            {
+                enabled = parsedEnabled;
+            }
+
+            return enabled;
         }
 
         /// <summary>

@@ -57,6 +57,12 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
+        /// </summary>
+        public const string AdbcConfigEnvironmentVariable = "ADBC_DATABRICKS_CONFIG_FILE";
+
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
         /// </summary>
         public const string DefaultConfigEnvironmentVariable = "DATABRICKS_CONFIG_FILE";
 
@@ -69,6 +75,7 @@ namespace AdbcDrivers.Databricks
         private bool _applySSPWithQueries = false;
         private bool _enableDirectResults = true;
         private bool _enableMultipleCatalogSupport = true;
+        private bool _scopeCurrentCatalog = false;
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
         private bool _enableComplexDatatypeSupport = false;
@@ -80,7 +87,7 @@ namespace AdbcDrivers.Databricks
         private long _directResultMaxRows = DefaultDirectResultMaxRows;
         // CloudFetch configuration
         private const long DefaultMaxBytesPerFile = 20 * 1024 * 1024; // 20MB
-        private const int DefaultQueryTimeSeconds = 3 * 60 * 60; // 3 hours
+        private const int DefaultQueryTimeSeconds = DatabricksConstants.DefaultQueryTimeoutSeconds; // 3 hours (shared with SEA path)
         private bool _useCloudFetch = true;
         private bool _canDecompressLz4 = true;
         private long _maxBytesPerFile = DefaultMaxBytesPerFile;
@@ -90,6 +97,7 @@ namespace AdbcDrivers.Databricks
         private const bool DefaultRateLimitRetry = true;
         private const bool DefaultTransportErrorRetry = true;
         private bool _useDescTableExtended = false;
+        private bool _enableFastMetadataQuery = false;
 
         // Trace propagation configuration
         private bool _tracePropagationEnabled = true;
@@ -200,6 +208,7 @@ namespace AdbcDrivers.Databricks
         {
             _enablePKFK = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnablePKFK, _enablePKFK);
             _enableMultipleCatalogSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableMultipleCatalogSupport, _enableMultipleCatalogSupport);
+            _scopeCurrentCatalog = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ScopeCurrentCatalog, _scopeCurrentCatalog);
             _applySSPWithQueries = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.ApplySSPWithQueries, _applySSPWithQueries);
             _enableDirectResults = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableDirectResults, _enableDirectResults);
 
@@ -207,6 +216,7 @@ namespace AdbcDrivers.Databricks
             _useCloudFetch = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseCloudFetch, _useCloudFetch);
             _canDecompressLz4 = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.CanDecompressLz4, _canDecompressLz4);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.UseDescTableExtended, _useDescTableExtended);
+            _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableFastMetadataQuery, _enableFastMetadataQuery);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
 
@@ -355,6 +365,33 @@ namespace AdbcDrivers.Databricks
         internal TNamespace? DefaultNamespace => _defaultNamespace;
 
         /// <summary>
+        /// Whether statement-level catalog scoping (adbc.databricks.scope_current_catalog) is opted in.
+        /// </summary>
+        internal bool ScopeCurrentCatalog => _scopeCurrentCatalog;
+
+        // The session's current catalog, so a statement-level USE CATALOG (see
+        // DatabricksStatement.EnsureCatalogScopedAsync) is issued only when the target differs —
+        // matching the ODBC driver, which issues USE CATALOG on change, not per query. Seeded once
+        // from the open-time namespace (UpdateCurrentCatalog, called at session open) and thereafter
+        // mutated only by a USE CATALOG the driver itself issues; a user's own USE CATALOG in
+        // native SQL is not observed (accepted, opt-in-only staleness). Volatile for cross-thread
+        // visibility on a shared connection.
+        private string? _currentCatalog;
+
+        /// <summary>
+        /// The session's current catalog, seeded from the open-time namespace and updated whenever
+        /// the driver issues a USE CATALOG on this connection.
+        /// </summary>
+        internal string? CurrentCatalog => Volatile.Read(ref _currentCatalog);
+
+        /// <summary>
+        /// Records the session's current catalog — both the one-time seed from the open-time
+        /// namespace and each subsequent change after the driver issues a USE CATALOG, so a
+        /// statement skips a redundant USE CATALOG to the catalog already in effect.
+        /// </summary>
+        internal void UpdateCurrentCatalog(string? catalog) => Volatile.Write(ref _currentCatalog, HandleSparkCatalog(catalog));
+
+        /// <summary>
         /// Gets the heartbeat interval in seconds for long-running operations.
         /// </summary>
         internal int FetchHeartbeatIntervalSeconds => _fetchHeartbeatIntervalSeconds;
@@ -373,6 +410,44 @@ namespace AdbcDrivers.Databricks
         /// Check if current connection can use `DESC TABLE EXTENDED` query
         /// </summary>
         internal bool CanUseDescTableExtended => _useDescTableExtended && ServerProtocolVersion != null && FeatureVersionNegotiator.SupportsDESCTableExtended(ServerProtocolVersion.Value);
+
+        private static readonly System.Text.RegularExpressions.Regex s_warehousePathPattern =
+            new System.Text.RegularExpressions.Regex(@"^/sql/1\.0/(warehouses|endpoints)/[^/]+/?$");
+
+        /// <summary>
+        /// True when the configured connection path targets a DBSQL warehouse
+        /// (/sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}). False for general
+        /// clusters (/sql/protocolv1/o/{orgId}/{clusterId}) or when no path is set.
+        /// </summary>
+        internal bool IsWarehousePath
+        {
+            get
+            {
+                string? path = null;
+                if (Properties.TryGetValue(SparkParameters.Path, out string? rawPath) && !string.IsNullOrEmpty(rawPath))
+                {
+                    path = rawPath;
+                    // Only the raw-Path branch can carry a query string; Uri.AbsolutePath strips it.
+                    int q = path!.IndexOf('?');
+                    if (q >= 0) path = path.Substring(0, q);
+                }
+                else if (Properties.TryGetValue(AdbcOptions.Uri, out string? uri)
+                    && !string.IsNullOrEmpty(uri)
+                    && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+                {
+                    path = parsedUri.AbsolutePath;
+                }
+
+                return !string.IsNullOrEmpty(path) && s_warehousePathPattern.IsMatch(path!);
+            }
+        }
+
+        /// <summary>
+        /// True when the driver should opt into the fast metadata query path. Requires
+        /// both the connection flag and a DBSQL warehouse path; otherwise false.
+        /// See <see cref="DatabricksParameters.EnableFastMetadataQuery"/>.
+        /// </summary>
+        internal bool UseFastMetadataQuery => _enableFastMetadataQuery && IsWarehousePath;
 
         /// <summary>
         /// Gets whether PK/FK metadata call is enabled
@@ -475,6 +550,10 @@ namespace AdbcDrivers.Databricks
                 _ => Telemetry.Proto.Operation.Types.Type.Unspecified
             };
 
+            // Empty (non-null) tableTypes → match no table types (zero rows); null →
+            // all. This is enforced by the shared HiveServer2 base (see
+            // adbc-drivers/hiveserver2#83), which short-circuits an empty filter before
+            // the RPC. No Databricks-layer handling is required.
             return this.TraceActivity(activity =>
                 _telemetry.ExecuteWithMetadataTelemetry(
                     operationType,
@@ -673,6 +752,10 @@ namespace AdbcDrivers.Databricks
                 await SetSchema(_defaultNamespace.SchemaName);
             }
 
+            // Seed the current-catalog tracker from the open-time namespace so statement-level
+            // catalog scoping (EnsureCatalogScopedAsync) issues USE CATALOG only on a genuine change.
+            UpdateCurrentCatalog(_defaultNamespace?.CatalogName);
+
             // Initialize telemetry after successful session creation
             InitializeTelemetry(activity);
 
@@ -727,14 +810,47 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private void InitializeTelemetry(Activity? activity = null)
         {
+            // Convert TSessionHandle -> string at the transport boundary so
+            // ConnectionTelemetry.Create stays transport-agnostic. SEA will pass its
+            // server-assigned session id string directly.
+            //
+            // Wrap the byte[] -> Guid conversion locally: `new Guid(byte[])` throws
+            // ArgumentException on a wrong-length array, and that must not propagate
+            // to connection-open.
+            //
+            // Behavior on conversion failure: sessionId stays empty, and
+            // ConnectionTelemetry.Create maps that to SessionId = null on a live
+            // TelemetrySessionContext (see ConnectionTelemetry.cs ~L133). Telemetry
+            // remains enabled — only the session-id field is unset. This is a small,
+            // deliberate behavior change from pre-refactor, where the same conversion
+            // sat inside Create's outer try/catch and a bad GUID returned the NoOp
+            // telemetry instance. Both paths keep the *connection* fail-open; the new
+            // path additionally keeps telemetry on so we still emit driver_connection_params,
+            // driver_system_configuration, and error events for the affected session.
+            string sessionId = string.Empty;
+            try
+            {
+                if (SessionHandle?.SessionId?.Guid != null)
+                {
+                    sessionId = new Guid(SessionHandle.SessionId.Guid).ToString();
+                }
+            }
+            catch
+            {
+                // Intentionally swallowed. Leaves sessionId = string.Empty, which
+                // Create maps to SessionId = null on a live ConnectionTelemetry.
+                // See block comment above for the deliberate behavior choice.
+            }
+
             _telemetry = Telemetry.ConnectionTelemetry.Create(
                 properties: Properties,
                 host: GetHost(),
                 assemblyVersion: s_assemblyVersion,
                 oauthTokenProvider: _oauthTokenProvider,
-                sessionHandle: SessionHandle,
+                sessionId: sessionId,
+                mode: Telemetry.Proto.DriverMode.Types.Type.Thrift,
                 enableDirectResults: _enableDirectResults,
-                useDescTableExtended: _useDescTableExtended,
+                enableComplexDatatypeSupport: _enableComplexDatatypeSupport,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
                 activity: activity);
         }

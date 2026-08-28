@@ -46,6 +46,59 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
+        /// Runs one trivial query to force the server to fully initialize the session before a
+        /// concurrent burst. A freshly-provisioned warehouse can return a transient server-side
+        /// <c>BAD_REQUEST</c> (<c>"sparkSession is null"</c>) when several threads fire their FIRST
+        /// query simultaneously against a not-yet-warm SparkSession. Warming up serially first
+        /// removes that cold-start race without weakening any concurrency assertion.
+        /// </summary>
+        private async Task WarmUpAsync(AdbcConnection connection)
+        {
+            // The warm-up query is itself the first statement against a possibly-cold warehouse,
+            // so it can be the very victim of the cold-start race it exists to prevent. Retry a
+            // bounded number of times on the known transient error rather than aborting the test.
+            const int maxAttempts = 5;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    using var statement = connection.CreateStatement();
+                    statement.SqlQuery = "SELECT 1";
+                    var result = statement.ExecuteQuery();
+                    using var reader = result.Stream;
+                    while (await reader.ReadNextRecordBatchAsync() != null) { }
+                    return;
+                }
+                catch (Exception ex) when (IsTransientColdStartError(ex) && attempt < maxAttempts)
+                {
+                    OutputHelper?.WriteLine($"Warm-up attempt {attempt} hit transient cold-start error, retrying: {ex.Message}");
+                    await Task.Delay(500 * attempt);
+                }
+            }
+        }
+
+        /// <summary>
+        /// True for the known transient server-side cold-start error where the warehouse accepts
+        /// the statement but its SparkSession is not yet initialized. This is a server warmup race,
+        /// not a driver defect or a concurrency-correctness failure, so the stress tests tolerate a
+        /// small number of these rather than failing the whole run.
+        /// </summary>
+        private static bool IsTransientColdStartError(Exception ex) =>
+            // Match the common base type: on the Thrift/HiveServer2 path the server execute error
+            // surfaces as HiveServer2Exception, on the SEA path as DatabricksException. Both are
+            // siblings extending AdbcException, so gating on AdbcException covers both protocols.
+            // The message-substring test below does the real discrimination.
+            ex is AdbcException
+            // Require the server-side BAD_REQUEST marker as well as the sparkSession/is-null text.
+            // The cold-start race is specifically a BAD_REQUEST the server raises before its
+            // SparkSession is initialized; demanding all three substrings keeps this from masking
+            // a hypothetical driver-side session-lifecycle regression that merely mentions a null
+            // sparkSession without the server's BAD_REQUEST classification.
+            && ex.Message.IndexOf("BAD_REQUEST", StringComparison.OrdinalIgnoreCase) >= 0
+            && ex.Message.IndexOf("sparkSession", StringComparison.OrdinalIgnoreCase) >= 0
+            && ex.Message.IndexOf("is null", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        /// <summary>
         /// CONCURRENT-001: Multiple independent connections execute queries concurrently.
         /// Each thread gets its own connection and runs queries in a loop.
         /// Tests: connection independence, shared singleton safety (FeatureFlagCache,
@@ -136,7 +189,12 @@ namespace AdbcDrivers.Databricks.Tests
 
             using AdbcConnection connection = NewConnection();
 
+            // Warm up the server session before the concurrent burst so the first wave of queries
+            // does not race a cold, not-yet-initialized SparkSession (see WarmUpAsync).
+            await WarmUpAsync(connection);
+
             var errors = new ConcurrentBag<(int threadId, int iteration, Exception ex)>();
+            var transientErrors = new ConcurrentBag<(int threadId, int iteration, Exception ex)>();
             var results = new ConcurrentBag<(int threadId, int iteration, long firstVal)>();
 
             var tasks = Enumerable.Range(0, statementCount).Select(threadId =>
@@ -160,7 +218,6 @@ namespace AdbcDrivers.Databricks.Tests
                             // Verify we got OUR value back, not another thread's
                             var array = (Int32Array)batch.Column(0);
                             long actual = array.GetValue(0)!.Value;
-                            results.Add((threadId, i, actual));
 
                             if (actual != expected)
                             {
@@ -170,6 +227,17 @@ namespace AdbcDrivers.Databricks.Tests
 
                             // Drain remaining batches
                             while (await reader.ReadNextRecordBatchAsync() != null) { }
+
+                            // Record success only after the full result set has drained. If a cold-start
+                            // transient surfaces mid-drain it is caught below and counted solely in
+                            // transientErrors, keeping the results/transientErrors accounting exact so the
+                            // final Assert.Equal invariant cannot spuriously fail.
+                            results.Add((threadId, i, actual));
+                        }
+                        catch (Exception ex) when (IsTransientColdStartError(ex))
+                        {
+                            // Known server cold-start race — tolerated (bounded assert below).
+                            transientErrors.Add((threadId, i, ex));
                         }
                         catch (Exception ex)
                         {
@@ -193,9 +261,21 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 OutputHelper?.WriteLine($"Thread {threadId}, iteration {iteration}: {ex.GetType().Name}: {ex.Message}");
             }
+            foreach (var (threadId, iteration, ex) in transientErrors)
+            {
+                OutputHelper?.WriteLine($"[transient tolerated] Thread {threadId}, iteration {iteration}: {ex.Message}");
+            }
 
+            // No genuine (non-transient) errors, and no result-isolation violations.
             Assert.Empty(errors);
-            Assert.Equal(statementCount * queriesPerStatement, results.Count);
+            // Tolerate a small number of server cold-start transients, but a flood signals a real
+            // problem rather than warmup noise.
+            int totalQueries = statementCount * queriesPerStatement;
+            Assert.True(transientErrors.Count <= 2,
+                $"Too many transient cold-start errors ({transientErrors.Count}/{totalQueries}); " +
+                $"expected the warm-up to prevent all but an occasional race.");
+            // Every query that did not hit the tolerated transient must have succeeded.
+            Assert.Equal(totalQueries - transientErrors.Count, results.Count);
         }
 
         /// <summary>

@@ -47,6 +47,7 @@ namespace AdbcDrivers.Databricks.Tests
     public class CloseOperationE2ETest : TestBase<DatabricksTestConfiguration, DatabricksTestEnvironment>, IDisposable
     {
         private readonly List<(string ActivityName, string EventName)> _capturedEvents = new();
+        private readonly List<(string ActivityName, ActivityEvent Event)> _capturedFullEvents = new();
         private readonly object _capturedEventsLock = new();
         private readonly ActivityListener _activityListener;
         private bool _disposed;
@@ -67,6 +68,7 @@ namespace AdbcDrivers.Databricks.Tests
                         foreach (var evt in activity.Events)
                         {
                             _capturedEvents.Add((activity.OperationName, evt.Name));
+                            _capturedFullEvents.Add((activity.OperationName, evt));
                         }
                     }
                 }
@@ -112,16 +114,17 @@ namespace AdbcDrivers.Databricks.Tests
         ];
 
         /// <summary>
-        /// Validates that DatabricksCompositeReader.Dispose emits the composite_reader.close_operation
-        /// trace event for all result delivery modes when the reader is disposed without closing
-        /// the underlying connection (simulating connection pooling).
+        /// Validates that disposing a statement releases the server-side operation across all
+        /// result delivery modes when the connection is not closed (simulating connection pooling).
+        /// The protocol is inherited from config / the CI matrix, and the assertion branches:
         ///
-        /// The composite_reader.close_operation event is only present in the code path introduced
-        /// by the fix. Without the fix:
-        /// - Inline (DirectResults or not): event missing because _activeReader != null caused
-        ///   the old code to delegate to _activeReader.Dispose() instead.
-        /// - CloudFetch: same delegation, but CloseOperation is never sent at all, orphaning
-        ///   the server operation for ~1 hour.
+        /// - Thrift: DatabricksCompositeReader.Dispose must emit composite_reader.close_operation.
+        ///   Without the fix this event is missing — Inline (DirectResults or not) because the old
+        ///   code delegated to _activeReader.Dispose(); CloudFetch because CloseOperation was never
+        ///   sent at all, orphaning the server operation for ~1 hour.
+        /// - REST/SEA: there is no composite reader; StatementExecutionStatement.Dispose must emit
+        ///   statement.dispose, which brackets the CloseStatementAsync (HTTP DELETE) that releases
+        ///   the server statement.
         ///
         /// For Thrift wire-level assertions, see proxy-based tests in databricks-driver-test:
         /// CLOUDFETCH-013 through CLOUDFETCH-016.
@@ -132,9 +135,14 @@ namespace AdbcDrivers.Databricks.Tests
         {
             lock (_capturedEventsLock) { _capturedEvents.Clear(); }
 
+            // Inherit the protocol from config / CI matrix rather than hardcoding it.
+            // The two protocols release the server-side operation through different
+            // code paths, so the assertion below branches on the effective protocol.
+            string protocol = string.IsNullOrEmpty(TestConfiguration.Protocol)
+                ? "thrift" : TestConfiguration.Protocol.ToLowerInvariant();
+
             var parameters = new Dictionary<string, string>
             {
-                [DatabricksParameters.Protocol] = "thrift",
                 [DatabricksParameters.UseCloudFetch] = useCloudFetch.ToString(),
                 [DatabricksParameters.EnableDirectResults] = enableDirectResults.ToString(),
             };
@@ -163,24 +171,164 @@ namespace AdbcDrivers.Databricks.Tests
 
                 OutputHelper?.WriteLine($"[{description}] Read {totalRows} rows, reader disposed.");
 
-                // Collect the events emitted by DatabricksCompositeReader.Dispose.
-                List<string> disposeEvents;
+                if (protocol == "rest")
+                {
+                    // SEA path: there is no composite reader. The server statement is
+                    // released by StatementExecutionStatement.Dispose via CloseStatementAsync
+                    // (HTTP DELETE), traced as the statement.dispose event under that span.
+                    List<string> seaDisposeEvents;
+                    lock (_capturedEventsLock)
+                    {
+                        seaDisposeEvents = _capturedEvents
+                            .Where(e => e.ActivityName == "StatementExecutionStatement.Dispose")
+                            .Select(e => e.EventName)
+                            .ToList();
+                    }
+
+                    OutputHelper?.WriteLine($"[{description}] SEA dispose events: [{string.Join(", ", seaDisposeEvents)}]");
+
+                    Assert.True(seaDisposeEvents.Contains("statement.dispose"),
+                        $"[{description}] statement.dispose event not found in " +
+                        $"StatementExecutionStatement.Dispose. The SEA path must release the " +
+                        $"server statement via CloseStatementAsync (HTTP DELETE) on dispose. " +
+                        $"Got events: [" + string.Join(", ", seaDisposeEvents) + "]");
+                }
+                else
+                {
+                    // Thrift path: the operation is closed by DatabricksCompositeReader.Dispose.
+                    List<string> disposeEvents;
+                    lock (_capturedEventsLock)
+                    {
+                        disposeEvents = _capturedEvents
+                            .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
+                            .Select(e => e.EventName)
+                            .ToList();
+                    }
+
+                    OutputHelper?.WriteLine($"[{description}] Dispose events: [{string.Join(", ", disposeEvents)}]");
+
+                    // The composite_reader.close_operation.started event is only present after
+                    // the original CloseOperation fix (it was renamed from the bare
+                    // "composite_reader.close_operation" by issue #489 to mark when the RPC
+                    // begins). Without that fix, the CloudFetch path silently skips
+                    // CloseOperation entirely and neither event is emitted.
+                    Assert.True(disposeEvents.Contains("composite_reader.close_operation.started"),
+                        $"[{description}] composite_reader.close_operation.started event not found in " +
+                        $"DatabricksCompositeReader.Dispose. Without the close-operation fix, server " +
+                        $"operations are orphaned until SQL Gateway closes them with " +
+                        $"CommandInactivityTimeout (~1 hour). Got events: [" +
+                        string.Join(", ", disposeEvents) + "]");
+                }
+            }
+            finally
+            {
+                connection.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Regression test for issue #489: the trace events bracketing the Thrift
+        /// CloseOperation RPC must allow operators to measure the RPC's latency.
+        ///
+        /// Previously DatabricksCompositeReader.Dispose emitted a single
+        /// "composite_reader.close_operation" event before invoking the RPC, so its
+        /// timestamp was identical to the surrounding "composite_reader.disposing"
+        /// event and the RPC's wall-clock cost was invisible in traces.
+        ///
+        /// The fix mirrors the cancel_operation event-pair pattern used in
+        /// HiveServer2Statement.CancelOperationAsync ("db.operation.cancel_operation.starting"
+        /// + ".completed"): emit "composite_reader.close_operation.started" BEFORE the
+        /// RPC and "composite_reader.close_operation.completed" AFTER it, so the
+        /// timestamp delta between them captures the RPC's latency.
+        /// </summary>
+        [SkippableFact]
+        public async Task DisposeCloseOperation_EmitsStartedAndCompletedWithDistinctTimestamps_Issue489()
+        {
+            lock (_capturedEventsLock)
+            {
+                _capturedEvents.Clear();
+                _capturedFullEvents.Clear();
+            }
+
+            var parameters = new Dictionary<string, string>
+            {
+                // Thrift-pinned by design: this test measures the latency of the Thrift
+                // TCloseOperationReq RPC via the started/completed event pair, which only
+                // exists on the composite-reader (Thrift) path. The REST/SEA close is a
+                // single HTTP DELETE with no equivalent latency-bracketing pair.
+                [DatabricksParameters.Protocol] = "thrift",
+                [DatabricksParameters.UseCloudFetch] = "false",
+                [DatabricksParameters.EnableDirectResults] = "false",
+            };
+
+            // Use a query that requires a real (non-inline) CloseOperation RPC so the
+            // event pair brackets a network round-trip with measurable latency.
+            const string query = "SELECT * FROM range(1, 100)";
+
+            var connection = NewConnection(TestConfiguration, parameters);
+            try
+            {
+                var statement = connection.CreateStatement();
+                statement.SqlQuery = query;
+                var result = await statement.ExecuteQueryAsync();
+
+                using (var reader = result.Stream!)
+                {
+                    RecordBatch? batch;
+                    while ((batch = await reader.ReadNextRecordBatchAsync()) != null)
+                    {
+                    }
+                }
+                // Reader.Dispose() above triggers DatabricksCompositeReader.Dispose,
+                // which is where the close_operation events are emitted.
+                statement.Dispose();
+
+                // Pull the events emitted by DatabricksCompositeReader.Dispose.
+                List<ActivityEvent> disposeEvents;
                 lock (_capturedEventsLock)
                 {
-                    disposeEvents = _capturedEvents
+                    disposeEvents = _capturedFullEvents
                         .Where(e => e.ActivityName == "DatabricksCompositeReader.Dispose")
-                        .Select(e => e.EventName)
+                        .Select(e => e.Event)
                         .ToList();
                 }
 
-                OutputHelper?.WriteLine($"[{description}] Dispose events: [{string.Join(", ", disposeEvents)}]");
+                OutputHelper?.WriteLine(
+                    "Dispose events (name @ timestamp): [" +
+                    string.Join(", ", disposeEvents.Select(e => $"{e.Name} @ {e.Timestamp:HH:mm:ss.ffffff}")) +
+                    "]");
 
-                // The composite_reader.close_operation event is only present after the fix.
-                // Without it, the CloudFetch path silently skips CloseOperation entirely.
-                Assert.True(disposeEvents.Contains("composite_reader.close_operation"),
-                    $"[{description}] composite_reader.close_operation event not found in " +
-                    $"DatabricksCompositeReader.Dispose. Without the fix, server operations are " +
-                    $"orphaned until SQL Gateway closes them with CommandInactivityTimeout (~1 hour).");
+                var startedEvent = disposeEvents
+                    .Where(e => e.Name == "composite_reader.close_operation.started")
+                    .Select(e => (ActivityEvent?)e)
+                    .FirstOrDefault();
+                var completedEvent = disposeEvents
+                    .Where(e => e.Name == "composite_reader.close_operation.completed")
+                    .Select(e => (ActivityEvent?)e)
+                    .FirstOrDefault();
+
+                Assert.True(startedEvent != null,
+                    "Expected 'composite_reader.close_operation.started' event in " +
+                    "DatabricksCompositeReader.Dispose. Without the fix the bare " +
+                    "'composite_reader.close_operation' event is emitted before the RPC " +
+                    "with the same timestamp as 'composite_reader.disposing', making the " +
+                    "RPC's latency unmeasurable. Got events: [" +
+                    string.Join(", ", disposeEvents.Select(e => e.Name)) + "]");
+                Assert.True(completedEvent != null,
+                    "Expected 'composite_reader.close_operation.completed' event in " +
+                    "DatabricksCompositeReader.Dispose. Without the fix only a single " +
+                    "pre-RPC event is emitted, so the RPC duration cannot be derived from " +
+                    "the trace. Got events: [" +
+                    string.Join(", ", disposeEvents.Select(e => e.Name)) + "]");
+
+                var startedAt = startedEvent!.Value.Timestamp;
+                var completedAt = completedEvent!.Value.Timestamp;
+                Assert.True(completedAt > startedAt,
+                    $"Expected 'composite_reader.close_operation.completed' timestamp " +
+                    $"({completedAt:HH:mm:ss.ffffff}) to be strictly later than " +
+                    $"'composite_reader.close_operation.started' ({startedAt:HH:mm:ss.ffffff}). " +
+                    "If they are equal, the RPC's latency is still invisible in the trace " +
+                    "(issue #489).");
             }
             finally
             {

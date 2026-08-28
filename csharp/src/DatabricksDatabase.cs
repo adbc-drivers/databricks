@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.HiveServer2;
@@ -36,6 +37,12 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     public class DatabricksDatabase : AdbcDatabase
     {
+        /// <summary>
+        /// The environment variable name that contains the path to the default Databricks configuration file.
+        /// Takes precedence over <see cref="DefaultConfigEnvironmentVariable"/> when both are set.
+        /// </summary>
+        public const string AdbcConfigEnvironmentVariable = "ADBC_DATABRICKS_CONFIG_FILE";
+
         /// <summary>
         /// The environment variable name that contains the path to the default Databricks configuration file.
         /// </summary>
@@ -58,6 +65,17 @@ namespace AdbcDrivers.Databricks
         /// Sized for 4MB buffers (Databricks maxBlockSize) with capacity for 10 buffers.
         /// This pool is instance-based to allow cleanup when the database is disposed.
         /// </summary>
+        /// <remarks>
+        /// IMPORTANT: This pool MUST remain database-scoped — do not promote it to a static or
+        /// otherwise global/process-wide pool. <see cref="CustomLZ4FrameReader.ReleaseBuffer"/>
+        /// returns the decoder's work buffers <b>without</b> clearing them (a measured perf win;
+        /// K4os bounds every read to the bytes it actually decoded, so stale bytes are never
+        /// surfaced on the normal path). Because the buffers are not zeroed on return, the pool's
+        /// reuse boundary is also a data-isolation boundary: a database-scoped pool only ever
+        /// recycles buffers among connections of that one database. A global pool would let a
+        /// buffer rented by one DatabricksDatabase's decode be handed to another's — surfacing
+        /// stale decode bytes across tenants in a multi-tenant host. Keep it instance-scoped.
+        /// </remarks>
         internal readonly System.Buffers.ArrayPool<byte> Lz4BufferPool =
             System.Buffers.ArrayPool<byte>.Create(maxArrayLength: 4 * 1024 * 1024, maxArraysPerBucket: 10);
 
@@ -144,32 +162,37 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Merges properties with environment config and feature flags from server.
+        /// Merges properties with environment config and server feature flags.
         /// This is the single place where all property merging happens for both Thrift and REST connections.
         /// </summary>
         /// <param name="properties">Properties to merge.</param>
-        /// <returns>Merged properties dictionary.</returns>
+        /// <returns>Merged properties dictionary with any server feature flags applied.</returns>
         private static IReadOnlyDictionary<string, string> MergeWithEnvironmentConfigAndFeatureFlags(IReadOnlyDictionary<string, string> properties)
         {
-            // First, merge with environment config
             var mergedWithEnvConfig = MergeWithDefaultEnvironmentConfig(properties);
 
-            // Then, merge with feature flags from server (cached per host)
+            // Apply server feature flags synchronously so this connection carries them from the
+            // start: on a warm per-host cache the flags are merged in without a network call; on a
+            // cold cache this blocks for the initial fetch (bounded by the feature-flag HTTP
+            // timeout, default 5s). Local properties always win on conflict, and a failed or
+            // disabled fetch returns the properties unchanged so Connect() is never broken.
             return FeatureFlagCache.GetInstance()
                 .MergePropertiesWithFeatureFlags(mergedWithEnvConfig, s_assemblyVersion);
         }
 
         /// <summary>
-        /// Automatically merges properties from the default DATABRICKS_CONFIG_FILE environment variable with passed-in properties.
+        /// Automatically merges properties from the default config environment variable with passed-in properties.
+        /// Checks ADBC_DATABRICKS_CONFIG_FILE first, falling back to DATABRICKS_CONFIG_FILE.
         /// The merge priority is controlled by the "adbc.databricks.driver_config_take_precedence" property.
-        /// If DATABRICKS_CONFIG_FILE is not set or invalid, only passed-in properties are used.
+        /// If neither environment variable is set or valid, only passed-in properties are used.
         /// </summary>
         /// <param name="properties">Properties passed to constructor.</param>
         /// <returns>Merged properties dictionary.</returns>
         private static IReadOnlyDictionary<string, string> MergeWithDefaultEnvironmentConfig(IReadOnlyDictionary<string, string> properties)
         {
-            // Try to load configuration from the default environment variable
-            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
+            // Try to load configuration: ADBC_DATABRICKS_CONFIG_FILE takes precedence over DATABRICKS_CONFIG_FILE
+            var environmentConfig = DatabricksConfiguration.TryFromEnvironmentVariable(AdbcConfigEnvironmentVariable)
+                ?? DatabricksConfiguration.TryFromEnvironmentVariable(DefaultConfigEnvironmentVariable);
 
             if (environmentConfig != null)
             {
