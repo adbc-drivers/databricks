@@ -1000,6 +1000,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // AggregateException, not ObjectDisposedException) escape and skip the remote
                 // CancelStatement RPC below.
                 try { _cloudFetchStatementCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Cancel() can race (or follow) a Dispose() that already disposed this source.
+                    // A disposed-source Cancel() throwing ObjectDisposedException is benign teardown,
+                    // not an error — swallow silently (no error event), matching Dispose's handling.
+                }
                 catch (Exception ex)
                 {
                     Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",

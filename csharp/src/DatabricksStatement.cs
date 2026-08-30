@@ -1631,6 +1631,13 @@ namespace AdbcDrivers.Databricks
                     // AggregateException, not ObjectDisposedException) skip base.Cancel() and the
                     // telemetry emission in the finally below.
                     try { _cloudFetchStatementCts.Cancel(); }
+                    catch (ObjectDisposedException)
+                    {
+                        // Cancel() is explicitly supported from another thread, so it can race (or
+                        // follow) a Dispose() that already disposed this source. A disposed-source
+                        // Cancel() throwing ObjectDisposedException is benign teardown, not an error
+                        // — swallow silently (no error event), matching Dispose(bool)'s handling.
+                    }
                     catch (Exception ex)
                     {
                         Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
