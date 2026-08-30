@@ -161,6 +161,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         {
                             // Get the next downloaded file
                             this.currentDownloadResult = await this.downloadManager.GetNextDownloadedFileAsync(token);
+
+                            // Distinguish a cancelled null from a genuine end-of-results null.
+                            // On cancellation (statement Cancel() / connection Dispose()) the
+                            // download manager returns null without surfacing an error, so without
+                            // this check a cancel between chunks would look like a clean EOF and
+                            // silently present a truncated result set as a completed query.
+                            token.ThrowIfCancellationRequested();
+
                             if (this.currentDownloadResult == null)
                             {
                                 Activity.Current?.AddEvent("cloudfetch.reader_no_more_files", [
