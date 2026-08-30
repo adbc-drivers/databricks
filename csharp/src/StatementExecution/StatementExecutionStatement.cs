@@ -897,7 +897,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // shutdown token is always freed (this method early-returns below when nothing executed).
             lock (_cancelLock)
             {
-                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                // Best-effort: Cancel() runs cancellation callbacks synchronously and rethrows a
+                // faulting one wrapped in AggregateException (not ObjectDisposedException); letting
+                // that escape would skip the CTS Dispose and the statement-close teardown below.
+                try { _cloudFetchStatementCts.Cancel(); }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
                 _cloudFetchStatementCts.Dispose();
             }
 
@@ -977,7 +989,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Also cancel the CloudFetch pipeline for this statement: _executeCts is already
                 // disposed once results are streaming, so without this a Cancel() during CloudFetch
                 // would leave the downloads running.
-                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                // Best-effort: don't let a faulting cancellation callback (surfaced as
+                // AggregateException, not ObjectDisposedException) escape and skip the remote
+                // CancelStatement RPC below.
+                try { _cloudFetchStatementCts.Cancel(); }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
                 statementId = _currentStatementId;
             }
             if (statementId != null)

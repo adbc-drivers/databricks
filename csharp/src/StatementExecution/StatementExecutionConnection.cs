@@ -1207,7 +1207,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 // Signal in-flight CloudFetch pipelines to stop before tearing down the transport,
                 // so a reader parked on a download unblocks instead of failing on the disposed client.
-                try { _cloudFetchShutdownCts.Cancel(); } catch (ObjectDisposedException) { }
+                // Best-effort: Cancel() runs cancellation callbacks synchronously and rethrows a
+                // faulting one wrapped in AggregateException (not ObjectDisposedException); letting
+                // that escape would skip the HttpClient/session teardown below and leak them.
+                try { _cloudFetchShutdownCts.Cancel(); }
+                catch (Exception ex)
+                {
+                    activity?.AddEvent(new System.Diagnostics.ActivityEvent("cloudfetch.shutdown.cancel.error",
+                        tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                }
 
                 activity?.SetTag("session_id", _sessionId);
                 activity?.SetTag("warehouse_id", _warehouseId);

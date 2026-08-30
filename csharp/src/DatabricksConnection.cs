@@ -1219,7 +1219,20 @@ namespace AdbcDrivers.Databricks
                 // cancels the download loop and faults any in-flight download — unblocking a reader
                 // parked on GetNextDownloadedFileAsync / DownloadCompletedTask instead of leaving it
                 // to spin on retries against the about-to-be-disposed HttpClient.
-                try { _cloudFetchShutdownCts.Cancel(); } catch (ObjectDisposedException) { }
+                // Best-effort: teardown must continue even if Cancel() throws. Cancel() invokes
+                // registered cancellation callbacks synchronously and rethrows a faulting one wrapped
+                // in AggregateException (not ObjectDisposedException); letting that escape here would
+                // skip the HttpClient/session teardown below and leak them.
+                try { _cloudFetchShutdownCts.Cancel(); }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.shutdown.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
 
                 // Dispose the shared CloudFetch HttpClient before closing the session so any
                 // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).

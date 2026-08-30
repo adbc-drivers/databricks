@@ -1526,7 +1526,19 @@ namespace AdbcDrivers.Databricks
                 // re-execute's field swap (RefreshCloudFetchStatementCts) and act on a stale source.
                 lock (_cloudFetchStatementCtsLock)
                 {
-                    try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                    // Best-effort: Cancel() runs cancellation callbacks synchronously and rethrows a
+                    // faulting one wrapped in AggregateException (not ObjectDisposedException); letting
+                    // that escape would skip the CTS Dispose and telemetry emission below.
+                    try { _cloudFetchStatementCts.Cancel(); }
+                    catch (Exception ex)
+                    {
+                        Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
 
                     // Dispose the CloudFetch statement CTS before the telemetry emission below:
                     // it was already Cancel()ed just above and nothing in the telemetry blocks
@@ -1608,7 +1620,19 @@ namespace AdbcDrivers.Databricks
                 // The lock scopes only the field access — base.Cancel()'s remote RPC runs outside it.
                 lock (_cloudFetchStatementCtsLock)
                 {
-                    try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                    // Best-effort: don't let a faulting cancellation callback (surfaced as
+                    // AggregateException, not ObjectDisposedException) skip base.Cancel() and the
+                    // telemetry emission in the finally below.
+                    try { _cloudFetchStatementCts.Cancel(); }
+                    catch (Exception ex)
+                    {
+                        Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "error.type", ex.GetType().Name },
+                                { "error.message", ex.Message }
+                            }));
+                    }
                 }
 
                 base.Cancel();
