@@ -214,8 +214,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             // Start the download manager linked to the statement's CloudFetch token (itself linked to
             // the SEA connection's shutdown token), mirroring the Thrift path: closing the connection,
             // or cancelling/disposing this statement, tears down the pipeline and unblocks the reader.
-            // This is the SEA path, so the statement is always a StatementExecutionStatement.
-            downloadManager.StartAsync(((StatementExecutionStatement)statement).CloudFetchStatementToken).Wait();
+            // This is the SEA path, so the statement is always a StatementExecutionStatement; guard the
+            // cast so an unexpected future caller fails with a clear message rather than InvalidCastException.
+            if (statement is not StatementExecutionStatement seaStatement)
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(CreateStatementExecutionReader)} requires a {nameof(StatementExecutionStatement)}, but received {statement?.GetType().Name ?? "null"}.");
+            }
+
+            downloadManager.StartAsync(seaStatement.CloudFetchStatementToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
