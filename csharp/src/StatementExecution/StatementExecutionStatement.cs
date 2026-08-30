@@ -901,6 +901,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // faulting one wrapped in AggregateException (not ObjectDisposedException); letting
                 // that escape would skip the CTS Dispose and the statement-close teardown below.
                 try { _cloudFetchStatementCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Expected on a repeated Dispose(): the source was already disposed below on the
+                    // first pass. Dispose() has no idempotency guard, so this is a normal
+                    // double-dispose, not an error — swallow silently (no error event), matching the
+                    // Thrift DatabricksStatement.Dispose and CloudFetchStatementToken handling.
+                }
                 catch (Exception ex)
                 {
                     Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
