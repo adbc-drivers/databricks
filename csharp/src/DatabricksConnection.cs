@@ -1224,6 +1224,13 @@ namespace AdbcDrivers.Databricks
                 // in AggregateException (not ObjectDisposedException); letting that escape here would
                 // skip the HttpClient/session teardown below and leak them.
                 try { _cloudFetchShutdownCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Expected on a repeated Dispose(): the source was already disposed in the
+                    // finally below on the first pass. Dispose(bool) has no idempotency guard, so
+                    // this is a normal double-dispose, not an error — swallow silently (no error
+                    // event), matching DatabricksStatement.Dispose's ObjectDisposedException handling.
+                }
                 catch (Exception ex)
                 {
                     Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.shutdown.cancel.error",
