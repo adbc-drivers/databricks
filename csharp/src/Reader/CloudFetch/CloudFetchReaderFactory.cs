@@ -211,17 +211,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager with no external cancellation token.
-            //
-            // Unlike the Thrift path above, the SEA/StatementExecution reader is not linked into a
-            // connection-shutdown cascade: StatementExecutionConnection/StatementExecutionStatement
-            // have no CloudFetchShutdownToken equivalent (this factory receives only an
-            // ITracingStatement, not a DatabricksConnection), so there is no token to thread through.
-            // The connection-dispose ⊃ CloudFetch teardown fix in this PR therefore covers the Thrift
-            // path only, which is where the reported flake occurs. Extending the same cascade to SEA
-            // means introducing a shutdown-token cascade on the StatementExecution types and plumbing
-            // it here — a larger, protocol-specific change that is intentionally left out of scope.
-            downloadManager.StartAsync().Wait();
+            // Start the download manager linked to the statement's CloudFetch token (itself linked to
+            // the SEA connection's shutdown token), mirroring the Thrift path: closing the connection,
+            // or cancelling/disposing this statement, tears down the pipeline and unblocks the reader.
+            // This is the SEA path, so the statement is always a StatementExecutionStatement.
+            downloadManager.StartAsync(((StatementExecutionStatement)statement).CloudFetchStatementToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);

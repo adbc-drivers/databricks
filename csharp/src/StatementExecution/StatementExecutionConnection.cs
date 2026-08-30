@@ -48,6 +48,35 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string? _schema;
         private readonly HttpClient _httpClient;
         private readonly HttpClient _cloudFetchHttpClient; // Separate HttpClient without auth headers for CloudFetch downloads
+
+        // Connection-scoped shutdown signal for in-flight CloudFetch pipelines (SEA). Mirrors the
+        // Thrift DatabricksConnection: cancelled at the start of Dispose so any active download
+        // manager (which links this token into its own cancellation source) tears down, and
+        // statements link their per-statement CloudFetch token to it for the full
+        // connection ⊃ statement ⊃ cloudfetch cancel cascade.
+        private readonly CancellationTokenSource _cloudFetchShutdownCts = new CancellationTokenSource();
+
+        /// <summary>
+        /// Token cancelled when this connection is disposed. SEA CloudFetch download managers link
+        /// this into their pipeline source so connection close tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchShutdownToken
+        {
+            get
+            {
+                // Defensive against a read after Dispose() has disposed the source: return
+                // CancellationToken.None rather than throwing, matching the Thrift DatabricksConnection.
+                try
+                {
+                    return _cloudFetchShutdownCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
         private readonly IReadOnlyDictionary<string, string> _properties;
         private readonly bool _ownsHttpClient;
 
@@ -1176,6 +1205,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             this.TraceActivity(activity =>
             {
+                // Signal in-flight CloudFetch pipelines to stop before tearing down the transport,
+                // so a reader parked on a download unblocks instead of failing on the disposed client.
+                try { _cloudFetchShutdownCts.Cancel(); } catch (ObjectDisposedException) { }
+
                 activity?.SetTag("session_id", _sessionId);
                 activity?.SetTag("warehouse_id", _warehouseId);
 
@@ -1208,6 +1241,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 // Dispose the CloudFetch HTTP client (we always own it)
                 _cloudFetchHttpClient.Dispose();
+
+                _cloudFetchShutdownCts.Dispose();
 
                 _sessionLock.Dispose();
             });

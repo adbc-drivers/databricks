@@ -89,6 +89,39 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
 
+        // Statement-lifetime CloudFetch cancellation, linked to the connection's shutdown token, so
+        // the connection ⊃ statement ⊃ cloudfetch cancel cascade holds on the SEA path too. Distinct
+        // from _executeCts, which is disposed when execution returns and so cannot cover the later
+        // CloudFetch result-fetch phase. Refreshed per-execute (Cancel()/Dispose() cancel it
+        // permanently, so a reused statement needs a fresh one) via RefreshCloudFetchStatementCts().
+        private CancellationTokenSource _cloudFetchStatementCts;
+
+        /// <summary>
+        /// Token cancelled when this statement is cancelled or disposed — and, via linkage to the
+        /// connection's shutdown token, when the connection is disposed. The CloudFetch download
+        /// manager links this into its pipeline source so any of those tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchStatementToken
+        {
+            get
+            {
+                // Under _cancelLock so a concurrent re-execute's field swap (RefreshCloudFetchStatementCts)
+                // can't be read half-applied; guard ObjectDisposedException → None for a read after
+                // Dispose. Mirrors the Thrift DatabricksStatement.
+                lock (_cancelLock)
+                {
+                    try
+                    {
+                        return _cloudFetchStatementCts.Token;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return CancellationToken.None;
+                    }
+                }
+            }
+        }
+
         // Metadata command support
         private bool _isMetadataCommand;
         private bool _escapePatternWildcards;
@@ -178,6 +211,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             : base(connection)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+            _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(connection.CloudFetchShutdownToken);
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
             _warehouseId = warehouseId ?? throw new ArgumentNullException(nameof(warehouseId));
@@ -301,6 +335,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             CancellationToken cancellationToken = default,
             bool isMetadataExecution = false)
         {
+            // Refresh the CloudFetch cancellation source before the reader captures it, so a prior
+            // Cancel() doesn't leave the next read starting cancelled (the statement is reusable).
+            RefreshCloudFetchStatementCts();
+
             if (_isMetadataCommand)
             {
                 return await ExecuteMetadataCommandAsync(cancellationToken).ConfigureAwait(false);
@@ -730,6 +768,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new InvalidOperationException("SQL query is required");
             }
 
+            // Refresh the CloudFetch cancellation source (see ExecuteQueryAsync) so a prior Cancel()
+            // doesn't poison the internal result read this update performs.
+            RefreshCloudFetchStatementCts();
+
             var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             lock (_cancelLock) { _executeCts = cts; }
             try
@@ -850,6 +892,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
+            // Cancel + release the CloudFetch statement CTS first, regardless of whether a statement
+            // ran, so in-flight downloads stop promptly and its linked registration on the connection
+            // shutdown token is always freed (this method early-returns below when nothing executed).
+            lock (_cancelLock)
+            {
+                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
+                _cloudFetchStatementCts.Dispose();
+            }
+
             if (_currentStatementId == null)
             {
                 return;
@@ -897,12 +948,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }, activityName: nameof(StatementExecutionStatement) + "." + nameof(Dispose));
         }
 
+        /// <summary>
+        /// Recreates the statement-lifetime CloudFetch cancellation source (re-linked to the
+        /// connection's shutdown token) at the start of each execution. Cancel()/Dispose() cancel
+        /// this source permanently; without a refresh a cancel-then-reexecute would start the next
+        /// CloudFetch read with an already-cancelled token. Mirrors the Thrift DatabricksStatement.
+        /// </summary>
+        private void RefreshCloudFetchStatementCts()
+        {
+            lock (_cancelLock)
+            {
+                var previous = _cloudFetchStatementCts;
+                _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(_connection.CloudFetchShutdownToken);
+                // Release the prior source's registration on the connection shutdown token. Under
+                // normal usage the previous result set is fully consumed/disposed before the next
+                // Execute, so no pipeline is still linked to the old token. Disposing a source does
+                // not cancel its already-created linked children, so an open prior reader is unaffected.
+                previous?.Dispose();
+            }
+        }
+
         public override void Cancel()
         {
             string? statementId;
             lock (_cancelLock)
             {
                 _executeCts?.Cancel();
+                // Also cancel the CloudFetch pipeline for this statement: _executeCts is already
+                // disposed once results are streaming, so without this a Cancel() during CloudFetch
+                // would leave the downloads running.
+                try { _cloudFetchStatementCts.Cancel(); } catch (ObjectDisposedException) { }
                 statementId = _currentStatementId;
             }
             if (statementId != null)
