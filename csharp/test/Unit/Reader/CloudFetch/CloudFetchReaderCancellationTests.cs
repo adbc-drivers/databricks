@@ -80,5 +80,29 @@ namespace AdbcDrivers.Databricks.Tests.Reader.CloudFetch
                 () => CloudFetchReader.AwaitWithCancellationAsync(tcs.Task, cts.Token));
             Assert.Equal("download failed", ex.Message);
         }
+
+        [Fact]
+        public async Task AwaitWithCancellation_TokenWinsThenDownloadFaults_ObservesException()
+        {
+            // Reproduces the cancel/dispose teardown case: the token wins the race (so the
+            // reader abandons the wait with an OperationCanceledException) and the in-flight
+            // download subsequently fails against the torn-down HttpClient. The abandoned
+            // task's fault must be observed so it does not resurface via
+            // TaskScheduler.UnobservedTaskException.
+            var neverCompletes = new TaskCompletionSource<bool>();
+            using var cts = new CancellationTokenSource();
+
+            var waitTask = CloudFetchReader.AwaitWithCancellationAsync(neverCompletes.Task, cts.Token);
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitTask);
+
+            // The download now fails after having been abandoned.
+            neverCompletes.SetException(new InvalidOperationException("download failed after cancel"));
+
+            // The observing continuation runs synchronously on fault, so the exception is
+            // observed by the time SetException returns.
+            Assert.True(neverCompletes.Task.IsFaulted);
+            Assert.NotNull(neverCompletes.Task.Exception);
+        }
     }
 }

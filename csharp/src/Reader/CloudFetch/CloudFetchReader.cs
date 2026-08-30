@@ -261,6 +261,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             var completed = await Task.WhenAny(task, delayTask).ConfigureAwait(false);
             if (completed != task)
             {
+                // The token won the race, so we're about to abandon the download without
+                // awaiting it. Attach a continuation that observes its eventual fault (e.g. a
+                // download failing against a torn-down HttpClient during cancel/dispose) so the
+                // exception doesn't resurface later via TaskScheduler.UnobservedTaskException.
+                _ = task.ContinueWith(
+                    t => { _ = t.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
                 token.ThrowIfCancellationRequested();
             }
 
