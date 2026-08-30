@@ -1214,7 +1214,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 catch (Exception ex)
                 {
                     activity?.AddEvent(new System.Diagnostics.ActivityEvent("cloudfetch.shutdown.cancel.error",
-                        tags: new System.Diagnostics.ActivityTagsCollection { { "error", ex.Message } }));
+                        tags: new System.Diagnostics.ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
                 }
 
                 activity?.SetTag("session_id", _sessionId);
