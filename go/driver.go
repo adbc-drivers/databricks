@@ -67,6 +67,9 @@ const (
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 
+	// Arrow serialization options
+	OptionArrowNativeGeospatial = "databricks.arrow.native_geospatial"
+
 	// Default values
 	DefaultPort    = 443
 	DefaultSSLMode = "require"

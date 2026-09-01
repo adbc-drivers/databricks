@@ -80,6 +80,9 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+
+	// Arrow serialization options
+	useArrowNativeGeospatial bool
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -146,6 +149,13 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 	if d.downloadThreadCount > 0 {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
+	}
+
+	// Arrow-native geospatial serialization (SPARK-54232).
+	// When enabled, geometry/geography columns arrive as Struct<srid: Int32, wkb: Binary>
+	// instead of EWKT strings, enabling native geometry passthrough.
+	if d.useArrowNativeGeospatial {
+		opts = append(opts, dbsql.WithArrowNativeGeospatial(true))
 	}
 
 	// TLS/SSL handling
@@ -251,10 +261,11 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 	}
 
 	conn := &connectionImpl{
-		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
-		conn:               c,
+		ConnectionImplBase:      driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
+		catalog:                 d.catalog,
+		dbSchema:                d.schema,
+		conn:                    c,
+		useArrowNativeGeospatial: d.useArrowNativeGeospatial,
 	}
 
 	return driverbase.NewConnectionBuilder(conn).
@@ -320,6 +331,11 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionArrowNativeGeospatial:
+		if d.useArrowNativeGeospatial {
+			return adbc.OptionValueEnabled, nil
+		}
+		return adbc.OptionValueDisabled, nil
 	default:
 		return d.DatabaseImplBase.GetOption(key)
 	}
@@ -486,6 +502,18 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionArrowNativeGeospatial:
+		switch value {
+		case adbc.OptionValueEnabled:
+			d.useArrowNativeGeospatial = true
+		case adbc.OptionValueDisabled, "":
+			d.useArrowNativeGeospatial = false
+		default:
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("invalid value for %s: %s (expected 'true' or 'false')", OptionArrowNativeGeospatial, value),
+			}
+		}
 	default:
 		return d.DatabaseImplBase.SetOption(key, value)
 	}
