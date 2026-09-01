@@ -112,8 +112,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             // linked to the connection's shutdown token). This gives the full cancel cascade: closing
             // the connection, or cancelling/disposing this statement, tears down the pipeline and
             // unblocks the reader. This is the Thrift path, so the statement is always a
-            // DatabricksStatement — same assumption as the DatabricksConnection cast above.
-            downloadManager.StartAsync(((DatabricksStatement)statement).CloudFetchStatementToken).Wait();
+            // DatabricksStatement; guard the cast so an unexpected future caller fails with a clear
+            // message rather than InvalidCastException (mirrors the SEA path below).
+            if (statement is not DatabricksStatement databricksStatement)
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(CreateThriftReader)} requires a {nameof(DatabricksStatement)}, but received {statement?.GetType().Name ?? "null"}.");
+            }
+
+            downloadManager.StartAsync(databricksStatement.CloudFetchStatementToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
