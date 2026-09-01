@@ -15,94 +15,111 @@
 */
 
 using System;
+using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.HiveServer2.Hive2;
+using Apache.Arrow.Adbc.Tracing;
+using Moq;
 using Xunit;
 
-namespace AdbcDrivers.Databricks.Tests.Reader.CloudFetch
+namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 {
     /// <summary>
-    /// Regression tests for <see cref="CloudFetchReader.AwaitWithCancellationAsync"/>, which
-    /// guarantees the reader unparks from an in-flight download wait when the statement is
-    /// cancelled / the connection is disposed, even if the download never completes on its own.
+    /// Regression test for the CloudFetch dispose/cancel hang. The reader parks on
+    /// <see cref="IDownloadResult.DownloadCompletedTask"/> for a chunk that was enqueued while its
+    /// download is still in flight. On statement cancel / connection dispose the pipeline token
+    /// tears the download down, and the downloader must complete that task (with an
+    /// <see cref="OperationCanceledException"/>) so the reader unblocks promptly instead of parking
+    /// on a download that will never finish.
     /// </summary>
     public class CloudFetchReaderCancellationTests
     {
-        [Fact]
-        public async Task AwaitWithCancellation_TokenCancelledWhileDownloadHangs_Throws()
+        /// <summary>An HTTP handler whose response never arrives until its token is cancelled.</summary>
+        private sealed class HangingHttpHandler : HttpMessageHandler
         {
-            // A download that never completes on its own (simulates a hung download that
-            // does not honor its own token).
-            var neverCompletes = new TaskCompletionSource<bool>();
-            using var cts = new CancellationTokenSource();
-
-            var waitTask = CloudFetchReader.AwaitWithCancellationAsync(neverCompletes.Task, cts.Token);
-            Assert.False(waitTask.IsCompleted);
-
-            // Cancelling the token must promptly unpark the wait.
-            cts.Cancel();
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitTask);
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                return new HttpResponseMessage(); // unreachable — the delay always cancels first
+            }
         }
 
         [Fact]
-        public async Task AwaitWithCancellation_DownloadCompletesFirst_Returns()
+        public async Task PipelineCancelled_WhileDownloadInFlight_CompletesDownloadResult()
         {
-            var tcs = new TaskCompletionSource<bool>();
-            using var cts = new CancellationTokenSource();
+            // Arrange — a real downloader whose download hangs until the pipeline token fires.
+            var mockStatement = new Mock<IHiveServer2Statement>();
+            mockStatement.Setup(s => s.Trace).Returns(new ActivityTrace("TestActivitySource"));
+            mockStatement.Setup(s => s.TraceParent).Returns((string?)null);
+            mockStatement.Setup(s => s.AssemblyVersion).Returns("1.0.0");
+            mockStatement.Setup(s => s.AssemblyName).Returns("TestAssembly");
 
-            var waitTask = CloudFetchReader.AwaitWithCancellationAsync(tcs.Task, cts.Token);
-            Assert.False(waitTask.IsCompleted);
+            var mockFetcher = new Mock<ICloudFetchResultFetcher>();
+            mockFetcher.Setup(f => f.HasError).Returns(false);
+            mockFetcher.Setup(f => f.Error).Returns((Exception?)null);
+            mockFetcher.Setup(f => f.StartAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+            mockFetcher.Setup(f => f.StopAsync()).Returns(Task.CompletedTask);
 
-            tcs.SetResult(true);
+            var mockMemoryManager = new Mock<ICloudFetchMemoryBufferManager>();
+            mockMemoryManager.Setup(m => m.AcquireMemoryAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
 
-            // Completes normally without observing cancellation.
-            await waitTask;
-            Assert.False(cts.IsCancellationRequested);
-        }
+            var downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+            var resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+            using var httpClient = new HttpClient(new HangingHttpHandler());
 
-        [Fact]
-        public async Task AwaitWithCancellation_AlreadyCompletedTask_ReturnsImmediately()
-        {
-            using var cts = new CancellationTokenSource();
-            await CloudFetchReader.AwaitWithCancellationAsync(Task.CompletedTask, cts.Token);
-        }
+            var downloader = new CloudFetchDownloader(
+                mockStatement.Object,
+                downloadQueue,
+                resultQueue,
+                mockMemoryManager.Object,
+                httpClient,
+                mockFetcher.Object,
+                maxParallelDownloads: 3,
+                isLz4Compressed: false);
 
-        [Fact]
-        public async Task AwaitWithCancellation_FaultedDownload_PropagatesException()
-        {
-            var tcs = new TaskCompletionSource<bool>();
-            tcs.SetException(new InvalidOperationException("download failed"));
-            using var cts = new CancellationTokenSource();
+            var config = new CloudFetchConfiguration();
+            var manager = new CloudFetchDownloadManager(
+                mockFetcher.Object,
+                downloader,
+                mockMemoryManager.Object,
+                downloadQueue,
+                resultQueue,
+                config);
 
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => CloudFetchReader.AwaitWithCancellationAsync(tcs.Task, cts.Token));
-            Assert.Equal("download failed", ex.Message);
-        }
+            using var shutdownCts = new CancellationTokenSource();
+            await manager.StartAsync(shutdownCts.Token);
 
-        [Fact]
-        public async Task AwaitWithCancellation_TokenWinsThenDownloadFaults_ObservesException()
-        {
-            // Reproduces the cancel/dispose teardown case: the token wins the race (so the
-            // reader abandons the wait with an OperationCanceledException) and the in-flight
-            // download subsequently fails against the torn-down HttpClient. The abandoned
-            // task's fault must be observed so it does not resurface via
-            // TaskScheduler.UnobservedTaskException.
-            var neverCompletes = new TaskCompletionSource<bool>();
-            using var cts = new CancellationTokenSource();
+            // Enqueue one chunk; the downloader picks it up, starts the (hanging) download, and
+            // enqueues the result before the download completes — exactly the state in which the
+            // reader ends up parked on DownloadCompletedTask.
+            var result = new DownloadResult(
+                chunkIndex: 0,
+                fileUrl: "https://example.invalid/chunk0",
+                startRowOffset: 0,
+                rowCount: 10,
+                byteCount: 100,
+                expirationTime: DateTime.UtcNow.AddHours(1),
+                memoryManager: mockMemoryManager.Object);
+            downloadQueue.Add(result);
 
-            var waitTask = CloudFetchReader.AwaitWithCancellationAsync(neverCompletes.Task, cts.Token);
-            cts.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitTask);
+            // The reader dequeues the in-flight result, then waits on its download.
+            IDownloadResult? dequeued = await manager.GetNextDownloadedFileAsync(CancellationToken.None);
+            Assert.NotNull(dequeued);
+            Assert.False(dequeued!.DownloadCompletedTask.IsCompleted, "download should still be in flight before cancel");
 
-            // The download now fails after having been abandoned.
-            neverCompletes.SetException(new InvalidOperationException("download failed after cancel"));
+            // Act — simulate statement cancel / connection dispose.
+            shutdownCts.Cancel();
 
-            // The observing continuation runs synchronously on fault, so the exception is
-            // observed by the time SetException returns.
-            Assert.True(neverCompletes.Task.IsFaulted);
-            Assert.NotNull(neverCompletes.Task.Exception);
+            // Assert — the parked wait unblocks promptly with a cancellation, not a hang.
+            var completed = await Task.WhenAny(dequeued.DownloadCompletedTask, Task.Delay(5000));
+            Assert.Same(dequeued.DownloadCompletedTask, completed);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dequeued.DownloadCompletedTask);
+
+            manager.Dispose();
         }
     }
 }

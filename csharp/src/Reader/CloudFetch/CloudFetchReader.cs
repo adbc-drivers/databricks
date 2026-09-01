@@ -193,11 +193,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 new("chunk_row_count", this.currentDownloadResult.RowCount)
                             ]);
 
-                            // Wait for this chunk's download to complete, but observe the token so
-                            // teardown is prompt even if a download hangs without honoring its own
-                            // token. Task.WaitAsync(token) isn't available on netstandard2.0/net472,
-                            // so race the download against an infinite delay tied to the token.
-                            await AwaitWithCancellationAsync(this.currentDownloadResult.DownloadCompletedTask, token);
+                            // Wait for this chunk's download to complete. On statement cancel /
+                            // connection dispose the pipeline token tears the download down and the
+                            // downloader completes this task with an OperationCanceledException (see
+                            // CloudFetchDownloader), so the wait unblocks promptly rather than
+                            // parking on a download that will never finish.
+                            await this.currentDownloadResult.DownloadCompletedTask;
 
                             // Track bytes downloaded for telemetry
                             _totalBytesDownloaded += this.currentDownloadResult.Size;
@@ -238,44 +239,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     return null;
                 }
             });
-        }
-
-        /// <summary>
-        /// Awaits <paramref name="task"/> while observing <paramref name="token"/>, throwing
-        /// <see cref="OperationCanceledException"/> if the token fires first. Provides the
-        /// equivalent of Task.WaitAsync(token), which is unavailable on netstandard2.0/net472,
-        /// so a hung download can't leave the reader parked after a statement cancel / dispose.
-        /// </summary>
-        internal static async Task AwaitWithCancellationAsync(Task task, CancellationToken token)
-        {
-            if (task.IsCompleted || !token.CanBeCanceled)
-            {
-                await task;
-                return;
-            }
-
-            // Race the download against an infinite delay tied to the token. The linked CTS
-            // lets us cancel the delay once the download wins so we don't leak a pending timer.
-            using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            var delayTask = Task.Delay(Timeout.Infinite, delayCts.Token);
-            var completed = await Task.WhenAny(task, delayTask).ConfigureAwait(false);
-            if (completed != task)
-            {
-                // The token won the race, so we're about to abandon the download without
-                // awaiting it. Attach a continuation that observes its eventual fault (e.g. a
-                // download failing against a torn-down HttpClient during cancel/dispose) so the
-                // exception doesn't resurface later via TaskScheduler.UnobservedTaskException.
-                _ = task.ContinueWith(
-                    t => { _ = t.Exception; },
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-                token.ThrowIfCancellationRequested();
-            }
-
-            // Cancel the delay to release its timer, then observe the download's result/exception.
-            delayCts.Cancel();
-            await task;
         }
 
         /// <summary>
