@@ -108,8 +108,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
                 while (true)
                 {
-                    token.ThrowIfCancellationRequested();
-
                     // Check global row limit first (used by SEA with manifest.TotalRowCount)
                     if (_totalExpectedRows > 0 && _rowsRead >= _totalExpectedRows)
                     {
