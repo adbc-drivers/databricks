@@ -172,30 +172,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Regression: Cancel() cancels the statement-lifetime CloudFetch token permanently, but the
-        /// statement is reusable (repeated ExecuteQuery). Each execution refreshes the CloudFetch CTS,
-        /// so a cancel-then-reexecute must start the next CloudFetch read with a fresh, non-cancelled
-        /// token rather than the poisoned one.
+        /// Cancel() cancels execution only — it must NOT cancel the statement-lifetime CloudFetch
+        /// token. That keeps a reused statement (repeated ExecuteQuery) usable after a cancel without
+        /// any per-execute refresh; tearing down the CloudFetch pipeline is Dispose()'s job.
         /// </summary>
         [Fact]
-        public void RefreshCloudFetchStatementCts_AfterCancel_YieldsFreshUncancelledToken()
+        public void Cancel_DoesNotCancelCloudFetchToken()
         {
             using var statement = CreateStatement();
 
             // Fresh statement: token is live.
             Assert.False(statement.CloudFetchStatementToken.IsCancellationRequested);
 
-            // Cancel() cancels the statement-lifetime CloudFetch source.
+            // Cancel() cancels execution only; the CloudFetch token stays live so reuse is safe.
             statement.Cancel();
-            Assert.True(statement.CloudFetchStatementToken.IsCancellationRequested);
-
-            // The next execution refreshes the source; the new token must not be born cancelled.
-            statement.RefreshCloudFetchStatementCts();
             Assert.False(statement.CloudFetchStatementToken.IsCancellationRequested);
 
-            // And a subsequent Cancel() still cancels the refreshed source.
+            // Repeated cancels remain no-ops on the CloudFetch token.
             statement.Cancel();
-            Assert.True(statement.CloudFetchStatementToken.IsCancellationRequested);
+            Assert.False(statement.CloudFetchStatementToken.IsCancellationRequested);
         }
     }
 }
