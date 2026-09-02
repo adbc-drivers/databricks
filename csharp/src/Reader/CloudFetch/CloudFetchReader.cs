@@ -195,8 +195,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                             // connection dispose the pipeline token tears the download down and the
                             // downloader completes this task with an OperationCanceledException (see
                             // CloudFetchDownloader), so the wait unblocks promptly rather than
-                            // parking on a download that will never finish.
-                            await this.currentDownloadResult.DownloadCompletedTask;
+                            // parking on a download that will never finish. We also observe `token`
+                            // directly so a caller who cancels only their own token (without
+                            // cancelling the statement/connection, which wouldn't fire the pipeline
+                            // token) still unblocks promptly instead of parking until the download
+                            // finishes. Task.WaitAsync(token) isn't available on netstandard2.0, so
+                            // link the wait to the token manually.
+                            await AwaitWithCancellation(this.currentDownloadResult.DownloadCompletedTask, token);
 
                             // Track bytes downloaded for telemetry
                             _totalBytesDownloaded += this.currentDownloadResult.Size;
@@ -237,6 +242,35 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     return null;
                 }
             });
+        }
+
+        /// <summary>
+        /// Awaits <paramref name="task"/> while observing <paramref name="token"/>. If the token is
+        /// cancelled before the task completes, throws <see cref="OperationCanceledException"/>
+        /// promptly instead of parking on the task. This is the netstandard2.0-compatible stand-in
+        /// for Task.WaitAsync(CancellationToken); the underlying task is not itself cancelled, but
+        /// the caller stops waiting on it.
+        /// </summary>
+        private static async Task AwaitWithCancellation(Task task, CancellationToken token)
+        {
+            if (!token.CanBeCanceled || task.IsCompleted)
+            {
+                await task;
+                return;
+            }
+
+            var cancelTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (token.Register(state => ((TaskCompletionSource<bool>)state!).TrySetResult(true), cancelTcs))
+            {
+                Task completed = await Task.WhenAny(task, cancelTcs.Task).ConfigureAwait(false);
+                if (completed != task)
+                {
+                    token.ThrowIfCancellationRequested();
+                }
+            }
+
+            // Task completed first (or a spurious wake): observe its result/exception.
+            await task;
         }
 
         /// <summary>
