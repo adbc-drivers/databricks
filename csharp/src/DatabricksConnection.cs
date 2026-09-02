@@ -1241,11 +1241,6 @@ namespace AdbcDrivers.Databricks
                         }));
                 }
 
-                // Dispose the shared CloudFetch HttpClient before closing the session so any
-                // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
-                _cloudFetchHttpClient?.Dispose();
-                _cloudFetchHttpClient = null;
-
                 // Order matters here:
                 // 1. base.Dispose runs the TCloseSessionReq RPC (in HiveServer2Connection.DisposeClient);
                 //    time it so DELETE_SESSION can report real operation_latency_ms.
@@ -1254,9 +1249,21 @@ namespace AdbcDrivers.Databricks
                 //    queued event is exported before we return.
                 long closeSessionElapsedMs = 0;
                 Exception? closeSessionError = null;
-                var closeStopwatch = Stopwatch.StartNew();
+                var closeStopwatch = new Stopwatch();
                 try
                 {
+                    // Dispose the shared CloudFetch HttpClient before closing the session so any
+                    // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
+                    // Kept inside this try so the finally below unconditionally disposes
+                    // _cloudFetchShutdownCts even if HttpClient.Dispose() throws — otherwise the CTS
+                    // (and its lazily-allocated WaitHandle) would leak. Mirrors the SEA path
+                    // (StatementExecutionConnection.Dispose).
+                    _cloudFetchHttpClient?.Dispose();
+                    _cloudFetchHttpClient = null;
+
+                    // Start timing only around base.Dispose so the HttpClient teardown above
+                    // doesn't inflate the reported TCloseSessionReq latency.
+                    closeStopwatch.Start();
                     base.Dispose(disposing);
                 }
                 catch (Exception ex)
