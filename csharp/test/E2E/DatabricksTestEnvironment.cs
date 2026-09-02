@@ -59,6 +59,12 @@ namespace AdbcDrivers.Databricks.Tests
         /// Only the map's own keys are reordered; each value's raw JSON is preserved
         /// verbatim, so nested STRUCT field order (which IS significant) is untouched.
         /// Non-object JSON (e.g. a top-level array) is returned unchanged.
+        ///
+        /// Normalization is intentionally shallow: a MAP nested inside a value keeps the
+        /// server's key order in its raw JSON and is NOT reordered. Current MAP test data
+        /// only has scalar values, so this is safe today; if a future case nests a MAP
+        /// inside a value, this method must be made recursive to avoid reintroducing the
+        /// key-order flake for that case.
         /// </summary>
         internal static string? NormalizeMapJson(string? json)
         {
