@@ -767,10 +767,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             for (int i = 0; i < events.Count; i++)
             {
                 var tags = events[i].Tags.ToDictionary(t => t.Key, t => t.Value);
-                Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
-                Assert.True(Convert.ToInt64(tags["delay_ms"]) >= 1000); // Retry-After: 1 → 1000ms
-                Assert.Contains(expectedReasonSubstring, (string)tags["reason"]!);
-                Assert.Equal((int)status, Convert.ToInt32(tags["status_code"])); // folded from the old http.response.status_code tag
+                Assert.Equal(i + 1, Convert.ToInt32(tags["http.retry.attempt_number"]));
+                Assert.True(Convert.ToInt64(tags["http.retry.delay_ms"]) >= 1000); // Retry-After: 1 → 1000ms
+                Assert.Contains(expectedReasonSubstring, (string)tags["http.retry.reason"]!);
+                Assert.Equal((int)status, Convert.ToInt32(tags["http.response.status_code"])); // OTel semantic-convention name
             }
         }
 
@@ -799,9 +799,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             for (int i = 0; i < events.Count; i++)
             {
                 var tags = events[i].Tags.ToDictionary(t => t.Key, t => t.Value);
-                Assert.Equal(i + 1, Convert.ToInt32(tags["attempt_number"]));
-                Assert.Contains("transport_error", (string)tags["reason"]!);
-                Assert.Equal("Connection refused", (string)tags["error_message"]!);
+                Assert.Equal(i + 1, Convert.ToInt32(tags["http.retry.attempt_number"]));
+                Assert.True(Convert.ToInt64(tags["http.retry.delay_ms"]) >= 1000); // backoff is Math.Max(1, ...) seconds → ≥ 1000ms
+                Assert.StartsWith("transport_error_", (string)tags["http.retry.reason"]!);
+                Assert.Equal("Connection refused", (string)tags["http.retry.error_message"]!);
             }
         }
 

@@ -165,10 +165,10 @@ namespace AdbcDrivers.Databricks
                         // span tags (attempt number, error type via reason, error message).
                         activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
                         {
-                            new("attempt_number", attemptCount),
-                            new("delay_ms", (long)transportWaitSeconds * 1000L),
-                            new("reason", $"transport_error_{ex.GetType().Name}"),
-                            new("error_message", ex.Message)
+                            new("http.retry.attempt_number", attemptCount),
+                            new("http.retry.delay_ms", (long)transportWaitSeconds * 1000L),
+                            new("http.retry.reason", $"transport_error_{ex.GetType().Name}"),
+                            new("http.retry.error_message", ex.Message)
                         });
 
                         await Task.Delay(TimeSpan.FromSeconds(transportWaitSeconds), cancellationToken);
@@ -267,12 +267,14 @@ namespace AdbcDrivers.Databricks
                     // carries all its retry attempts as ordered events. The event is
                     // self-contained — it carries the per-retry detail that used to be
                     // written as overwritten span tags (attempt number, status code).
+                    // Attribute keys are namespaced to match the driver's telemetry
+                    // vocabulary (http.retry.* / OTel http.response.status_code).
                     activity?.AddEvent("retry.attempt", new List<KeyValuePair<string, object?>>
                     {
-                        new("attempt_number", attemptCount),
-                        new("delay_ms", (long)waitSeconds * 1000L),
-                        new("reason", retryReason),
-                        new("status_code", (int)statusCode)
+                        new("http.retry.attempt_number", attemptCount),
+                        new("http.retry.delay_ms", (long)waitSeconds * 1000L),
+                        new("http.retry.reason", retryReason),
+                        new("http.response.status_code", (int)statusCode)
                     });
 
                     // Wait for the calculated time
