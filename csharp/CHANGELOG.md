@@ -20,6 +20,13 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Fixed
+
+- Tear down in-flight CloudFetch downloads on connection dispose so closing a connection
+  mid-stream no longer hangs on the retry loop. `Statement.Cancel()` cancels execution (server
+  cancel RPC); stopping the download is a dispose/close concern (reader/statement/connection
+  dispose), matching the JDBC and Rust-kernel drivers (#659)
+
 ## [1.1.8] - 2026-08-11
 
 ### Added
