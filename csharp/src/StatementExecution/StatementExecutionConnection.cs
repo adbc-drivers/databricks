@@ -1252,18 +1252,27 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     }
                 }
 
-                // Dispose the HTTP client if we own it
-                if (_ownsHttpClient)
+                try
                 {
-                    _httpClient.Dispose();
+                    // Dispose the HTTP client if we own it
+                    if (_ownsHttpClient)
+                    {
+                        _httpClient.Dispose();
+                    }
+
+                    // Dispose the CloudFetch HTTP client (we always own it)
+                    _cloudFetchHttpClient.Dispose();
                 }
+                finally
+                {
+                    // Unconditional cleanup: the shutdown CTS was already Cancel()ed at the top of
+                    // Dispose and the session lock is no longer needed, so release them here even if
+                    // an HttpClient.Dispose() above throws — otherwise they'd be leaked. Mirrors the
+                    // Thrift path (DatabricksConnection.Dispose) which disposes the CTS in a finally.
+                    _cloudFetchShutdownCts.Dispose();
 
-                // Dispose the CloudFetch HTTP client (we always own it)
-                _cloudFetchHttpClient.Dispose();
-
-                _cloudFetchShutdownCts.Dispose();
-
-                _sessionLock.Dispose();
+                    _sessionLock.Dispose();
+                }
             });
         }
 
