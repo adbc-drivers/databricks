@@ -16,7 +16,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -29,8 +28,6 @@ using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
-using Apache.Arrow.Adbc.Telemetry.Traces.Listeners;
-using Apache.Arrow.Adbc.Telemetry.Traces.Listeners.FileListener;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using static Apache.Arrow.Adbc.AdbcConnection;
@@ -131,13 +128,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <param name="properties">Connection properties.</param>
         /// <param name="memoryStreamManager">Optional shared memory stream manager.</param>
         /// <param name="lz4BufferPool">Optional shared LZ4 buffer pool.</param>
-        // Per-connection id tagged onto the shared ActivitySource so the file trace listener
-        // captures only this connection's activities. Statements reuse this same source
-        // (TracingStatement copies connection.Trace), so their spans match too. Mirrors the
-        // file-listener wiring HiveServer2Connection does for the Thrift path.
-        private readonly string _traceInstanceId = Guid.NewGuid().ToString("N");
-        private readonly FileActivityListener? _fileActivityListener;
-
         public StatementExecutionConnection(
             IReadOnlyDictionary<string, string> properties,
             Microsoft.IO.RecyclableMemoryStreamManager? memoryStreamManager = null,
@@ -173,11 +163,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _ownsHttpClient = ownsHttpClient;
-
-            // Activate the adbcfile trace listener for this connection when the exporter is
-            // requested (adbc.traces.exporter / OTEL_TRACES_EXPORTER = adbcfile). Without this the
-            // SEA path produced no local trace file at all — only the Thrift path wired it up.
-            TryInitTracerProvider(out _fileActivityListener);
 
             // Parse configuration - check for URI first (same as Thrift protocol)
             properties.TryGetValue(AdbcOptions.Uri, out var uri);
@@ -1280,9 +1265,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _sessionLock.Dispose();
             });
-
-            // Deactivate the file trace listener last, so the dispose span above is still captured.
-            _fileActivityListener?.Dispose();
         }
 
         // TracingConnection provides IActivityTracer implementation
@@ -1290,26 +1272,5 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
-
-        /// <summary>
-        /// Tags the shared ActivitySource with a per-connection id so the file trace listener
-        /// (see <see cref="TryInitTracerProvider"/>) captures only this connection's spans.
-        /// Statements reuse this same source, so their spans carry the tag too.
-        /// </summary>
-        public override IEnumerable<KeyValuePair<string, object?>>? GetActivitySourceTags(IReadOnlyDictionary<string, string> properties)
-        {
-            IEnumerable<KeyValuePair<string, object?>>? tags = base.GetActivitySourceTags(properties);
-            tags ??= [];
-            tags = tags.Concat([new(_traceInstanceId, null)]);
-            return tags;
-        }
-
-        private bool TryInitTracerProvider(out FileActivityListener? fileActivityListener)
-        {
-            _properties.TryGetValue(ListenersOptions.Exporter, out string? exporterOption);
-            // This listener only listens for activity from this specific connection instance.
-            bool shouldListenTo(ActivitySource source) => source.Tags?.Any(t => ReferenceEquals(t.Key, _traceInstanceId)) == true;
-            return FileActivityListener.TryActivateFileListener(AssemblyName, exporterOption, out fileActivityListener, shouldListenTo: shouldListenTo);
-        }
     }
 }

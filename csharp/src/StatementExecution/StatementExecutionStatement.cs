@@ -25,7 +25,6 @@ using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
-using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -417,18 +416,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _connection.UpdateCurrentCatalog(catalog);
         }
 
-        private Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
-        {
-            // Wrap execute + poll + reader-creation in a named span so the SEA path emits the same
-            // kind of local trace as Thrift's HiveServer2Statement.ExecuteStatementAsync. Without
-            // this, the whole SEA query path is invisible in the adbcfile trace (only Dispose and
-            // the cloudfetch.* read events show up).
-            return this.TraceActivityAsync(
-                activity => ExecuteQueryInternalCoreAsync(activity, cancellationToken, isMetadataExecution),
-                activityName: nameof(StatementExecutionStatement) + "." + nameof(ExecuteQueryInternalAsync));
-        }
-
-        private async Task<QueryResult> ExecuteQueryInternalCoreAsync(Activity? activity, CancellationToken cancellationToken, bool isMetadataExecution)
+        private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
             // If the caller explicitly scoped this statement to a catalog, set the session's
             // current catalog first via USE CATALOG so a 2-level `schema`.`table` name
@@ -471,11 +459,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // CANCELED: user canceled; can come from explicit cancel call, or timeout with on_wait_timeout=CANCEL
             // CLOSED: execution successful, and statement closed; result no longer available for fetch
             var state = response.Status?.State;
-            activity?.SetTag(StatementExecutionEvent.StatementId, response.StatementId);
-            activity?.SetTag(StatementExecutionEvent.ResultFormat, _resultFormat);
-            activity?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, !string.IsNullOrEmpty(_resultCompression));
-            activity?.AddEvent(new ActivityEvent("statement.execute.submitted",
-                tags: new ActivityTagsCollection { { "initial_state", state ?? "(null)" } }));
             if (state == "PENDING" || state == "RUNNING")
             {
                 response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
@@ -548,12 +531,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // Return query result - use 0 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? 0;
-            activity?.AddEvent(new ActivityEvent("statement.execute.completed",
-                tags: new ActivityTagsCollection
-                {
-                    { "final_state", state ?? "(null)" },
-                    { "result.row_count", rowCount }
-                }));
             return new QueryResult(rowCount, reader);
         }
 
@@ -599,12 +576,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<ExecuteStatementResponse> PollUntilCompleteAsync(string statementId, CancellationToken cancellationToken)
         {
-            // Capture the ambient execute span (opened by ExecuteQueryInternalAsync) so aggregate
-            // poll metrics can be stamped on it once a terminal state is reached.
-            Activity? executeActivity = Activity.Current;
-            int pollCount = 0;
-            long pollLatencyMs = 0;
-
             while (true)
             {
                 // Check for cancellation before each polling iteration
@@ -616,27 +587,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check for cancellation after delay
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Get statement status. Trace each poll (count + latency + state) so the SEA path
-                // exposes the same polling signal Thrift's DatabricksOperationStatusPoller does.
-                var response = await this.TraceActivityAsync(async pollActivity =>
-                {
-                    Stopwatch pollStopwatch = Stopwatch.StartNew();
-                    var r = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
-                    pollStopwatch.Stop();
-
-                    pollCount++;
-                    pollLatencyMs += pollStopwatch.ElapsedMilliseconds;
-
-                    pollActivity?.SetTag(StatementExecutionEvent.PollCount, pollCount);
-                    pollActivity?.AddEvent(new ActivityEvent("statement.poll_status",
-                        tags: new ActivityTagsCollection
-                        {
-                            { StatementExecutionEvent.PollCount, pollCount },
-                            { StatementExecutionEvent.PollLatencyMs, pollStopwatch.ElapsedMilliseconds },
-                            { "operation_state", r.Status?.State ?? "(null)" }
-                        }));
-                    return r;
-                }, activityName: nameof(StatementExecutionStatement) + "." + nameof(PollUntilCompleteAsync)).ConfigureAwait(false);
+                // Get statement status
+                var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
@@ -654,9 +606,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     state == "CANCELED" ||
                     state == "CLOSED")
                 {
-                    // Stamp aggregate polling metrics on the execute span.
-                    executeActivity?.SetTag(StatementExecutionEvent.PollCount, pollCount);
-                    executeActivity?.SetTag(StatementExecutionEvent.PollLatencyMs, pollLatencyMs);
                     return executeResponse;
                 }
 
@@ -841,17 +790,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        private Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
-        {
-            // Named span for the SEA update path, mirroring ExecuteQueryInternalAsync — otherwise a
-            // DML/DDL statement's poll span (PollUntilCompleteAsync) would be orphaned with no parent
-            // execute span, and its aggregate poll.count/poll.latency_ms would land nowhere.
-            return this.TraceActivityAsync(
-                activity => ExecuteUpdateInternalCoreAsync(activity, cancellationToken),
-                activityName: nameof(StatementExecutionStatement) + "." + nameof(ExecuteUpdateInternalAsync));
-        }
-
-        private async Task<UpdateResult> ExecuteUpdateInternalCoreAsync(Activity? activity, CancellationToken cancellationToken)
+        private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
         {
             // Scope the session to the caller's catalog first (see ExecuteQueryInternalAsync), so a
             // DML statement with a bare 2-level `schema`.`table` name resolves against it too.
@@ -884,11 +823,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // Handle query status - poll until complete
             var state = response.Status?.State;
-            activity?.SetTag(StatementExecutionEvent.StatementId, response.StatementId);
-            activity?.SetTag(StatementExecutionEvent.ResultFormat, _resultFormat);
-            activity?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, !string.IsNullOrEmpty(_resultCompression));
-            activity?.AddEvent(new ActivityEvent("statement.execute.submitted",
-                tags: new ActivityTagsCollection { { "initial_state", state ?? "(null)" } }));
             if (state == "PENDING" || state == "RUNNING")
             {
                 response = await PollWithTimeoutAsync(response.StatementId, cancellationToken).ConfigureAwait(false);
@@ -927,14 +861,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // yields no batch; return -1 per the ADBC convention for "unknown or not
             // applicable", matching what the Thrift path does.
             using var reader = CreateReader(response, cancellationToken);
-            long affectedRows = await ReadNumAffectedRowsAsync(reader, cancellationToken).ConfigureAwait(false);
-            activity?.AddEvent(new ActivityEvent("statement.execute.completed",
-                tags: new ActivityTagsCollection
-                {
-                    { "final_state", state ?? "(null)" },
-                    { "num_affected_rows", affectedRows }
-                }));
-            return new UpdateResult(affectedRows);
+            return new UpdateResult(await ReadNumAffectedRowsAsync(reader, cancellationToken).ConfigureAwait(false));
         }
 
         private static async Task<long> ReadNumAffectedRowsAsync(IArrowArrayStream reader, CancellationToken cancellationToken)
