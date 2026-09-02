@@ -736,7 +736,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _properties,
                 _recyclableMemoryStreamManager,
                 _lz4BufferPool,
-                this); // Pass statement as ITracingStatement (via TracingStatement base class)
+                this, // Pass statement as ITracingStatement (via TracingStatement base class)
+                CloudFetchStatementToken); // the statement's CloudFetch token, passed explicitly
         }
 
         /// <summary>
