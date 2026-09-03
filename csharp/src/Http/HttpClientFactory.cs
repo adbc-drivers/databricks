@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
@@ -40,7 +41,14 @@ namespace AdbcDrivers.Databricks.Http
         {
             var tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
             var proxyConfigurator = HiveServer2ProxyConfigurator.FromProperties(properties);
-            return HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+            var handler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+            // Request gzip/deflate transport compression and auto-decompress responses.
+            // SEA inline results are base64-encoded Arrow (~+33% vs binary); the server honors
+            // Accept-Encoding: gzip and returns the body ~18% smaller (e.g. 3.58MB -> 2.97MB),
+            // matching how the JDBC/OSS driver fetches results. Without this, the .NET default
+            // sends no Accept-Encoding and downloads the full uncompressed base64 body.
+            handler.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            return handler;
         }
 
         /// <summary>
