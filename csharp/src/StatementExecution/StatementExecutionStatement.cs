@@ -93,6 +93,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private bool _isMetadataCommand;
         private bool _escapePatternWildcards;
         private string? _metadataCatalogName;
+        // Whether the caller explicitly set the (parent) catalog via adbc.get_metadata.target_catalog.
+        // _metadataCatalogName is otherwise seeded from the connection's default catalog at construction,
+        // so it cannot serve as a "caller supplied a parent catalog" signal in GetCrossReference.
+        private bool _metadataCatalogSet;
         private string? _metadataSchemaName;
         private string? _metadataTableName;
         private string? _metadataColumnName;
@@ -221,6 +225,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     break;
                 case ApacheParameters.CatalogName:
                     _metadataCatalogName = value;
+                    _metadataCatalogSet = true;
                     break;
                 case ApacheParameters.SchemaName:
                     _metadataSchemaName = value;
@@ -1866,8 +1871,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw NewInvalidArgumentException("schema may not be null when catalog is specified");
             }
 
+            // Pass the parent catalog to the filter ONLY when the caller explicitly supplied it. When
+            // unset, _metadataCatalogName holds the connection's seeded default catalog; using it as the
+            // parent-catalog filter (added in the ParentMatches step) wrongly drops every FK whose real
+            // parent is in another catalog — e.g. getImportedKeys (no parent supplied) returns empty while
+            // Thrift returns the row. Parent schema/table are not seeded, so they already no-op when unset
+            // and are passed through as-is; only the catalog needs this guard.
             return await GetCrossReferenceAsyncNoThrow(
-                _metadataCatalogName, _metadataSchemaName, _metadataTableName,
+                _metadataCatalogSet ? _metadataCatalogName : null, _metadataSchemaName, _metadataTableName,
                 _metadataForeignCatalogName, _metadataForeignSchemaName, _metadataForeignTableName,
                 cancellationToken).ConfigureAwait(false);
         }

@@ -926,5 +926,105 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
             Assert.Equal(0, result.RowCount);
         }
+
+        // Regression: a getImportedKeys-style call (only the FOREIGN table set, no parent supplied)
+        // must NOT filter by the statement's SEEDED default catalog. The statement is seeded with
+        // catalog "main" (CreateMetadataStatement), the caller sets no target_catalog, and the server
+        // returns an FK whose real parent is in a DIFFERENT catalog ("prod_cat"). Before the fix, the
+        // seeded "main" was passed to the parent-catalog filter and dropped the row — SEA returned empty
+        // while Thrift returned it (the comparator's getImportedKeys Thrift-vs-SEA diffs). The other
+        // filter tests miss this because their fixture's parent catalog is also "main", so the seed
+        // happens to match. Expect the row kept.
+        private static byte[] BuildShowForeignKeysArrowCrossCatalogParent()
+        {
+            var columns = new[]
+            {
+                "parentCatalogName", "parentNamespace", "parentTableName", "parentColName",
+                "catalogName", "namespace", "tableName", "col_name", "constraintName",
+            };
+            var schema = new Schema(columns.Select(c => new Field(c, StringType.Default, true)), null);
+            IArrowArray Col(string a) => new StringArray.Builder().Append(a).Build();
+            var arrays = new IArrowArray[]
+            {
+                Col("prod_cat"),      // parentCatalogName — DIFFERENT from the seeded "main"
+                Col("sales"),         // parentNamespace
+                Col("customers"),     // parentTableName
+                Col("id"),            // parentColName
+                Col("main"),          // catalogName (FK side)
+                Col("default"),       // namespace (FK side)
+                Col("orders"),        // tableName (FK side)
+                Col("customer_id"),   // col_name (FK side)
+                Col("fk_customer"),   // constraintName
+            };
+            var batch = new RecordBatch(schema, arrays, 1);
+            using var raw = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(raw, schema))
+            {
+                writer.WriteRecordBatch(batch);
+                writer.WriteEnd();
+            }
+            return raw.ToArray();
+        }
+
+        private static HttpClient HttpClientReturningCrossCatalogForeignKey()
+        {
+            byte[] attachment = BuildShowForeignKeysArrowCrossCatalogParent();
+            var executeBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-fk-xcat",
+                status = new { state = "SUCCEEDED" },
+                manifest = new
+                {
+                    total_row_count = 1,
+                    schema = new
+                    {
+                        column_count = 9,
+                        columns = new[]
+                        {
+                            new { name = "parentCatalogName", position = 0, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentNamespace", position = 1, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentTableName", position = 2, type_name = "STRING", type_text = "STRING" },
+                            new { name = "parentColName", position = 3, type_name = "STRING", type_text = "STRING" },
+                            new { name = "catalogName", position = 4, type_name = "STRING", type_text = "STRING" },
+                            new { name = "namespace", position = 5, type_name = "STRING", type_text = "STRING" },
+                            new { name = "tableName", position = 6, type_name = "STRING", type_text = "STRING" },
+                            new { name = "col_name", position = 7, type_name = "STRING", type_text = "STRING" },
+                            new { name = "constraintName", position = 8, type_name = "STRING", type_text = "STRING" },
+                        },
+                    },
+                },
+                result = new { attachment },
+            });
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    var path = req.RequestUri?.AbsolutePath ?? string.Empty;
+                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : executeBody;
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+                });
+            return new HttpClient(handler.Object);
+        }
+
+        [Fact]
+        public async Task GetCrossReference_ImportedKeys_DoesNotFilterBySeededCatalog()
+        {
+            using var http = HttpClientReturningCrossCatalogForeignKey();
+            using var stmt = CreateMetadataStatement(http);
+            stmt.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            stmt.SetOption(ApacheParameters.ForeignCatalogName, "main");
+            stmt.SetOption(ApacheParameters.ForeignSchemaName, "default");
+            stmt.SetOption(ApacheParameters.ForeignTableName, "orders");
+            // No target_catalog / parent identifiers set → the seeded "main" must not filter.
+            stmt.SqlQuery = "getcrossreference";
+
+            var result = await stmt.ExecuteQueryAsync(CancellationToken.None);
+            Assert.Equal(1, result.RowCount);
+        }
     }
 }

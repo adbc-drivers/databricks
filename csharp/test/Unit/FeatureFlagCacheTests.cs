@@ -40,6 +40,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         private const string TestHost = "test-host.databricks.com";
         private const string DriverVersion = "1.0.0";
 
+        /// <summary>
+        /// Test-only FeatureFlagCache that overrides context creation with a supplied factory,
+        /// exercising the per-host locking logic without any network I/O. Keeps the fetch seam in
+        /// the test project rather than in production code.
+        /// </summary>
+        private sealed class TestableFeatureFlagCache : FeatureFlagCache
+        {
+            private readonly Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> _factory;
+
+            public TestableFeatureFlagCache(
+                IMemoryCache cache,
+                Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory)
+                : base(cache)
+            {
+                _factory = factory;
+            }
+
+            internal override Task<FeatureFlagContext> CreateContextAsync(
+                string host,
+                IReadOnlyDictionary<string, string> properties,
+                string driverVersion,
+                string? endpointFormat,
+                CancellationToken cancellationToken)
+                => _factory(host, driverVersion, endpointFormat, cancellationToken);
+        }
+
         #region FeatureFlagContext Tests - Basic Functionality
 
         [Fact]
@@ -663,12 +689,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
         #endregion
 
-        #region MergeWarmFeatureFlags Tests
+        #region MergePropertiesWithFeatureFlags (sync) Tests
 
         [Fact]
-        public void MergeWarmFeatureFlags_WarmCache_MergesFlags_LocalPropertiesWin()
+        public void MergePropertiesWithFeatureFlags_WarmCache_MergesFlagsSynchronously_LocalPropertiesWin()
         {
-            // Arrange - seed a warm context (server flags) for the host under the cache key.
+            // The connection-open path (DatabricksDatabase) calls this synchronous wrapper so the
+            // opening connection carries server feature flags from the start. With a warm per-host
+            // cache the merge must happen inline (no network) and local properties must override
+            // server flags on conflict.
             const string host = "warm-host.databricks.com";
             var warmContext = CreateTestContext(new Dictionary<string, string>
             {
@@ -687,68 +716,93 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             };
 
             // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+            var result = cache.MergePropertiesWithFeatureFlags(localProperties, DriverVersion);
 
-            // Assert - server flag applied; local property overrides the server flag.
+            // Assert - server flag applied inline; local property overrides the server flag.
             Assert.Equal("true", result[DatabricksParameters.EnableFastMetadataQuery]);
             Assert.Equal("local_value", result["adbc.databricks.some_server_flag"]);
             Assert.Equal(host, result[SparkParameters.HostName]);
         }
 
+        #endregion
+
+        #region Per-Host Locking Tests
+
         [Fact]
-        public void MergeWarmFeatureFlags_ColdCache_ReturnsLocalPropertiesUnchanged()
+        public async Task GetOrCreateContext_DifferentColdHosts_ResolveConcurrently()
         {
-            // Arrange - empty (cold) cache. The method must not block; it starts a background
-            // warm-up and returns the local properties unchanged for this connection.
-            // A 1s timeout keeps the background fetch fast even when it fails for this test host.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                [SparkParameters.HostName] = "cold-host.databricks.com",
-                [DatabricksParameters.FeatureFlagTimeoutSeconds] = "1",
-                ["some_property"] = "some_value"
-            };
+            // Per-host locking must let first-time (cold-cache) resolves for DIFFERENT hosts proceed
+            // in parallel. With a single global lock these would serialize and max concurrency would
+            // be 1; with per-host locks both context creations are in flight at once (max 2).
+            int concurrent = 0;
+            int maxConcurrent = 0;
+            var gate = new object();
 
-            // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    lock (gate)
+                    {
+                        concurrent++;
+                        maxConcurrent = Math.Max(maxConcurrent, concurrent);
+                    }
 
-            // Assert - unchanged (same reference) since nothing was cached.
-            Assert.Same(localProperties, result);
+                    // Hold both calls inside the factory simultaneously long enough to observe overlap.
+                    await Task.Delay(300, ct).ConfigureAwait(false);
+
+                    lock (gate)
+                    {
+                        concurrent--;
+                    }
+
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            var propsA = new Dictionary<string, string> { [SparkParameters.HostName] = "host-a.databricks.com" };
+            var propsB = new Dictionary<string, string> { [SparkParameters.HostName] = "host-b.databricks.com" };
+
+            // Act - kick off both resolves; each runs synchronously up to the factory's delay await.
+            var taskA = cache.MergePropertiesWithFeatureFlagsAsync(propsA, DriverVersion);
+            var taskB = cache.MergePropertiesWithFeatureFlagsAsync(propsB, DriverVersion);
+            await Task.WhenAll(taskA, taskB);
+
+            // Assert - both factory calls overlapped => different hosts did not serialize.
+            Assert.Equal(2, maxConcurrent);
         }
 
         [Fact]
-        public void MergeWarmFeatureFlags_Disabled_ReturnsLocalPropertiesUnchanged()
+        public async Task GetOrCreateContext_SameColdHost_CreatesContextOnce()
         {
-            // Arrange - FeatureFlagCacheEnabled explicitly false.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                [SparkParameters.HostName] = TestHost,
-                [DatabricksParameters.FeatureFlagCacheEnabled] = "false"
-            };
+            // Regression guard for the lock's original purpose: concurrent first-time resolves for
+            // the SAME host must dedup to a single creation. The second caller acquires the per-host
+            // lock after the first, then finds the context already cached (post-lock double-check).
+            int factoryCalls = 0;
+
+            Func<string, string, string?, CancellationToken, Task<FeatureFlagContext>> factory =
+                async (host, driverVersion, endpointFormat, ct) =>
+                {
+                    Interlocked.Increment(ref factoryCalls);
+                    await Task.Delay(200, ct).ConfigureAwait(false);
+                    return CreateTestContext(new Dictionary<string, string> { ["adbc.databricks.flag"] = "v" });
+                };
+
+            var cache = new TestableFeatureFlagCache(new MemoryCache(new MemoryCacheOptions()), factory);
+
+            const string host = "same-host.databricks.com";
+            var props1 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
+            var props2 = new Dictionary<string, string> { [SparkParameters.HostName] = host };
 
             // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
+            var task1 = cache.MergePropertiesWithFeatureFlagsAsync(props1, DriverVersion);
+            var task2 = cache.MergePropertiesWithFeatureFlagsAsync(props2, DriverVersion);
+            var results = await Task.WhenAll(task1, task2);
 
-            // Assert
-            Assert.Same(localProperties, result);
-        }
-
-        [Fact]
-        public void MergeWarmFeatureFlags_NoHost_ReturnsLocalPropertiesUnchanged()
-        {
-            // Arrange - no host present in properties.
-            var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
-            var localProperties = new Dictionary<string, string>
-            {
-                ["some_property"] = "some_value"
-            };
-
-            // Act
-            var result = cache.MergeWarmFeatureFlags(localProperties, DriverVersion);
-
-            // Assert
-            Assert.Same(localProperties, result);
+            // Assert - fetched once; both connections still see the server flag merged in.
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal("v", results[0]["adbc.databricks.flag"]);
+            Assert.Equal("v", results[1]["adbc.databricks.flag"]);
         }
 
         #endregion

@@ -15,6 +15,7 @@
 */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
@@ -48,7 +49,7 @@ namespace AdbcDrivers.Databricks
     /// JDBC Reference: DatabricksDriverFeatureFlagsContextFactory.java
     /// </para>
     /// </remarks>
-    internal sealed class FeatureFlagCache : IDisposable
+    internal class FeatureFlagCache : IDisposable
     {
         private static readonly FeatureFlagCache s_instance = new FeatureFlagCache();
 
@@ -63,7 +64,16 @@ namespace AdbcDrivers.Databricks
         public static readonly TimeSpan DefaultCacheTtl = TimeSpan.FromMinutes(15);
 
         private readonly IMemoryCache _cache;
-        private readonly SemaphoreSlim _createLock = new SemaphoreSlim(1, 1);
+
+        /// <summary>
+        /// Per-host locks that serialize context creation for a single host (preventing duplicate
+        /// fetches) without serializing across hosts. Keyed by the same cache key as the entries in
+        /// <see cref="_cache"/>. A single shared lock would make concurrent first-time connects to
+        /// different cold hosts queue behind one another, inflating worst-case connect latency to
+        /// roughly N × the fetch timeout.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
+
         private bool _disposed;
 
         /// <summary>
@@ -124,8 +134,11 @@ namespace AdbcDrivers.Databricks
                 return context;
             }
 
-            // Cache miss - create new context with async lock to prevent duplicate creation
-            await _createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Cache miss - create new context under a PER-HOST lock. This dedups concurrent
+            // first-time creations for the same host (only one fetch) without serializing
+            // creations for different hosts behind a single process-wide lock.
+            var createLock = _createLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+            await createLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 // Double-check after acquiring lock
@@ -134,13 +147,11 @@ namespace AdbcDrivers.Databricks
                     return context;
                 }
 
-                // Create HttpClient only on cache miss (lazy creation)
-                using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
-
-                // Create context asynchronously - this waits for initial fetch to complete
-                context = await FeatureFlagContext.CreateAsync(
+                // Create the context (network fetch) only on cache miss. Extracted into a virtual
+                // method so tests can override the fetch without any test-only branching here.
+                context = await CreateContextAsync(
                     host,
-                    httpClient,
+                    properties,
                     driverVersion,
                     endpointFormat,
                     cancellationToken).ConfigureAwait(false);
@@ -177,16 +188,61 @@ namespace AdbcDrivers.Databricks
             }
             finally
             {
-                _createLock.Release();
+                createLock.Release();
             }
         }
 
         /// <summary>
-        /// Callback invoked when a cache entry is evicted.
-        /// Disposes the context to clean up resources (stops background refresh task).
+        /// Creates a feature flag context on cache miss. The default (production) implementation
+        /// builds an HttpClient and fetches feature flags from the connector service, waiting for
+        /// the initial fetch to complete. Overridden in tests to supply a context without network
+        /// I/O, keeping the fetch seam out of the production code path.
         /// </summary>
-        private static void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        /// <param name="host">The host to create a context for.</param>
+        /// <param name="properties">Connection properties used to build the HttpClient.</param>
+        /// <param name="driverVersion">The driver version for the API endpoint.</param>
+        /// <param name="endpointFormat">Optional custom endpoint format. If null, uses the default endpoint.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The newly created feature flag context.</returns>
+        internal virtual async Task<FeatureFlagContext> CreateContextAsync(
+            string host,
+            IReadOnlyDictionary<string, string> properties,
+            string driverVersion,
+            string? endpointFormat,
+            CancellationToken cancellationToken)
         {
+            // Create HttpClient only on cache miss (lazy creation)
+            using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+
+            // Create context asynchronously - this waits for initial fetch to complete
+            return await FeatureFlagContext.CreateAsync(
+                host,
+                httpClient,
+                driverVersion,
+                endpointFormat,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Callback invoked when a cache entry is evicted.
+        /// Disposes the context to clean up resources (stops background refresh task) and drops the
+        /// host's per-host create lock so <see cref="_createLocks"/> does not grow unbounded over
+        /// the process lifetime as connections are made to many distinct hosts.
+        /// </summary>
+        private void OnCacheEntryEvicted(object key, object? value, EvictionReason reason, object? state)
+        {
+            // Drop the per-host create lock for this evicted entry. We only remove it from the map
+            // (and let the GC reclaim it) rather than disposing it: a concurrent GetOrCreateContextAsync
+            // for the same host may already hold this semaphore, and disposing it out from under that
+            // caller would throw ObjectDisposedException on WaitAsync/Release. A SemaphoreSlim that has
+            // never had its AvailableWaitHandle accessed (as here) holds no OS handle, so dropping the
+            // reference leaks nothing. If a create is racing this eviction it may briefly create a
+            // fresh lock for the same key; that only weakens dedup for one window, never correctness.
+            if (key is string cacheKey)
+            {
+                _createLocks.TryRemove(cacheKey, out _);
+            }
+
             if (value is FeatureFlagContext context)
             {
                 context.Dispose();
@@ -294,7 +350,11 @@ namespace AdbcDrivers.Databricks
 
             _disposed = true;
 
-            _createLock.Dispose();
+            foreach (var kvp in _createLocks)
+            {
+                kvp.Value.Dispose();
+            }
+            _createLocks.Clear();
 
             if (_cache is IDisposable disposableCache)
             {
@@ -420,56 +480,6 @@ namespace AdbcDrivers.Databricks
 
             return enabled;
         }
-
-        /// <summary>
-        /// Non-blocking feature-flag application for the connection-open path.
-        /// <para>
-        /// If flags for the host are already cached (warm), returns <paramref name="localProperties"/>
-        /// merged with them (local properties win) so the connection sees the server flags immediately.
-        /// If the cache is cold, starts a background warm-up so a subsequent connection to the same
-        /// host applies the flags, and returns <paramref name="localProperties"/> unchanged for this
-        /// connection.
-        /// </para>
-        /// <para>
-        /// Never performs a blocking network fetch, so it never stalls <c>Connect()</c>. Always returns
-        /// a valid properties dictionary — <paramref name="localProperties"/> unchanged when the cache
-        /// is disabled (<see cref="DatabricksParameters.FeatureFlagCacheEnabled"/> explicitly
-        /// <c>false</c>), when no host can be determined, or when the cache is cold.
-        /// </para>
-        /// </summary>
-        /// <param name="localProperties">The connection properties (already merged with environment config).</param>
-        /// <param name="assemblyVersion">Driver version, used when warming the cache.</param>
-        /// <returns>The properties with warm-cache flags merged in, or <paramref name="localProperties"/> unchanged.</returns>
-        public IReadOnlyDictionary<string, string> MergeWarmFeatureFlags(
-            IReadOnlyDictionary<string, string> localProperties,
-            string assemblyVersion)
-        {
-            if (!IsCacheEnabled(localProperties))
-            {
-                return localProperties;
-            }
-
-            var host = TryGetHost(localProperties);
-            if (string.IsNullOrEmpty(host))
-            {
-                return localProperties;
-            }
-
-            // Warm cache (or negatively-cached failure): apply whatever flags are cached, synchronously.
-            // A negative entry has no flags, so this is a no-op merge and — importantly — does NOT
-            // trigger another fetch, honoring the negative-cache backoff.
-            if (TryGetContext(host!, out var context) && context != null)
-            {
-                var flags = context.GetAllFlags();
-                return flags.Count > 0 ? MergeProperties(flags, localProperties) : localProperties;
-            }
-
-            // Cold cache: warm it in the background so the next connection to this host gets flags.
-            // This connection proceeds without them (never blocks).
-            _ = Task.Run(() => MergePropertiesWithFeatureFlagsAsync(localProperties, assemblyVersion));
-            return localProperties;
-        }
-
 
         /// <summary>
         /// Tries to extract the host from properties without throwing.
