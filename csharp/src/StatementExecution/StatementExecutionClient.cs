@@ -227,12 +227,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 httpRequest.Headers.TryAddWithoutValidation("x-databricks-sea-can-run-fully-sync", "true");
             }
 
-            var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+            // ResponseHeadersRead: return once headers arrive so the JSON parse below streams off the
+            // socket and overlaps the body download, rather than the default ResponseContentRead which
+            // buffers the whole (multi-MB for inline results) body first.
+            var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseContent, s_jsonOptions);
+            // Stream-deserialize straight from the response instead of materializing the whole body as
+            // a string first. Inline results carry a multi-MB base64 attachment; ReadAsStringAsync
+            // allocates a ~2x UTF-16 string and the deserializer then re-encodes it to UTF-8 before
+            // parsing. On .NET Framework (net472, used by PowerBI) those large-buffer copies are a
+            // measurable part of the SEA execute path; DeserializeAsync(stream) parses UTF-8 directly.
+            using var responseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            var executeResponse = await JsonSerializer.DeserializeAsync<ExecuteStatementResponse>(responseStream, s_jsonOptions, cancellationToken).ConfigureAwait(false);
 
             if (executeResponse == null)
             {
