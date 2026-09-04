@@ -105,9 +105,43 @@ namespace AdbcDrivers.Databricks
 
         public override long BatchSize { get; protected set; } = DatabricksBatchSizeDefault;
 
+        // Statement-lifetime cancellation for the CloudFetch pipeline, linked to the connection's
+        // shutdown token. The CloudFetch download manager links this into its pipeline source, so
+        // disposing the statement — or the connection, via the link — tears down in-flight downloads.
+        // Created once: Cancel() cancels execution only (not this source), so a reused statement is
+        // never left with an already-cancelled CloudFetch token and needs no per-execute refresh.
+        // Distinct from the base HiveServer2Statement._executeTokenSource, which is disposed when
+        // ExecuteQuery() returns and so cannot cover the later CloudFetch result-fetch phase.
+        private readonly CancellationTokenSource _cloudFetchStatementCts;
+
+        /// <summary>
+        /// Token cancelled when this statement is cancelled or disposed — and, via linkage to the
+        /// connection's shutdown token, when the connection is disposed. The CloudFetch download
+        /// manager links this into its pipeline source so any of those tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchStatementToken
+        {
+            get
+            {
+                // Defensive against a read after Dispose(bool) has disposed the source: return
+                // CancellationToken.None rather than throwing, matching the sibling
+                // CloudFetchDownloadManager.PipelineToken so the two tokens behave symmetrically.
+                try
+                {
+                    return _cloudFetchStatementCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
         public DatabricksStatement(DatabricksConnection connection)
             : base(connection)
         {
+            _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(connection.CloudFetchShutdownToken);
+
             // set the catalog name for legacy compatibility
             // TODO: use catalog and schema fields in hiveserver2 connection instead of DefaultNamespace so we don't need to cast
             var defaultNamespace = ((DatabricksConnection)Connection).DefaultNamespace;
@@ -1434,6 +1468,31 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
+                // Cancel + dispose this statement's CloudFetch pipeline so in-flight downloads stop
+                // promptly if the caller disposed the statement mid-stream (dispose = stop fetch).
+                // Best-effort: Cancel() runs cancellation callbacks synchronously and rethrows a
+                // faulting one wrapped in AggregateException; letting that escape would skip the CTS
+                // Dispose and the telemetry emission below.
+                try { _cloudFetchStatementCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Repeated Dispose(): the source was already disposed on the first pass — benign.
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
+
+                // Dispose the CloudFetch statement CTS before the telemetry emission below so the
+                // linked-token registration it holds on the connection's _cloudFetchShutdownCts is
+                // freed even if the telemetry calls throw. Mirrors DatabricksConnection.Dispose.
+                _cloudFetchStatementCts.Dispose();
+
                 if (PendingTelemetryContext != null)
                 {
                     // Emit telemetry now that results have been consumed
@@ -1495,6 +1554,11 @@ namespace AdbcDrivers.Databricks
             long startMs = _statementLifetimeStopwatch.ElapsedMilliseconds;
             try
             {
+                // Cancel execution only: base.Cancel() signals the per-execute token and issues the
+                // remote CancelOperation RPC, which aborts a still-running query. The CloudFetch
+                // pipeline is intentionally NOT torn down here — once results are streaming the query
+                // has already finished server-side, so there is nothing to cancel; stopping the
+                // download is a close/dispose concern (reader or connection Dispose), not a cancel.
                 base.Cancel();
             }
             catch (Exception ex)

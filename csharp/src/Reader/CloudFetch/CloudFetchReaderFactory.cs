@@ -20,6 +20,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Threading;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
@@ -46,6 +47,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="initialResults">Initial fetch results (may be null if not from direct results).</param>
         /// <param name="httpClient">The HTTP client for downloads.</param>
         /// <param name="isLz4Compressed">Whether results are LZ4 compressed.</param>
+        /// <param name="cloudFetchStatementToken">
+        /// The statement's CloudFetch cancellation token (itself linked to the connection's shutdown
+        /// token). Cancelling it — via statement Cancel()/Dispose() or connection dispose — tears down
+        /// the pipeline and unblocks the reader.
+        /// </param>
         /// <returns>A CloudFetchReader configured for Thrift protocol.</returns>
         public static CloudFetchReader CreateThriftReader(
             IHiveServer2Statement statement,
@@ -53,7 +59,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             IResponse response,
             TFetchResultsResp? initialResults,
             HttpClient httpClient,
-            bool isLz4Compressed)
+            bool isLz4Compressed,
+            CancellationToken cloudFetchStatementToken)
         {
             if (statement == null) throw new ArgumentNullException(nameof(statement));
             if (schema == null) throw new ArgumentNullException(nameof(schema));
@@ -108,8 +115,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager
-            downloadManager.StartAsync().Wait();
+            // Start the download manager, linked to the statement's CloudFetch token (itself linked to
+            // the connection's shutdown token). This gives the full cancel cascade: closing the
+            // connection, or cancelling/disposing this statement, tears down the pipeline and unblocks
+            // the reader.
+            downloadManager.StartAsync(cloudFetchStatementToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);
@@ -132,6 +142,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="memoryStreamManager">The recyclable memory stream manager.</param>
         /// <param name="lz4BufferPool">The LZ4 buffer pool for decompression.</param>
         /// <param name="statement">The statement for tracing support (StatementExecutionStatement implements ITracingStatement).</param>
+        /// <param name="cloudFetchStatementToken">
+        /// The statement's CloudFetch cancellation token (itself linked to the SEA connection's shutdown
+        /// token). Cancelling it — via statement Cancel()/Dispose() or connection dispose — tears down
+        /// the pipeline and unblocks the reader.
+        /// </param>
         /// <returns>A CloudFetchReader configured for Statement Execution API protocol.</returns>
         public static CloudFetchReader CreateStatementExecutionReader(
             IStatementExecutionClient client,
@@ -143,7 +158,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             IReadOnlyDictionary<string, string> properties,
             RecyclableMemoryStreamManager memoryStreamManager,
             ArrayPool<byte> lz4BufferPool,
-            ITracingStatement statement)
+            ITracingStatement statement,
+            CancellationToken cloudFetchStatementToken)
         {
             if (client == null) throw new ArgumentNullException(nameof(client));
             if (string.IsNullOrEmpty(statementId)) throw new ArgumentNullException(nameof(statementId));
@@ -207,8 +223,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 resultQueue,
                 config);
 
-            // Start the download manager
-            downloadManager.StartAsync().Wait();
+            // Start the download manager linked to the statement's CloudFetch token (itself linked to
+            // the SEA connection's shutdown token), mirroring the Thrift path: closing the connection,
+            // or cancelling/disposing this statement, tears down the pipeline and unblocks the reader.
+            downloadManager.StartAsync(cloudFetchStatementToken).Wait();
 
             // Add telemetry tag for compression
             Activity.Current?.SetTag(StatementExecutionEvent.ResultCompressionEnabled, isLz4Compressed);

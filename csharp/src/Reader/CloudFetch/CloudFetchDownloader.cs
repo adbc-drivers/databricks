@@ -470,7 +470,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     // Signal that we should stop processing downloads
                                     downloadTaskCompletionSource.TrySetException(ex);
                                 }
-                                else if (!t.IsFaulted && !t.IsCanceled)
+                                else if (t.IsCanceled)
+                                {
+                                    // The pipeline token fired (statement cancel / connection
+                                    // dispose) while this chunk was still downloading. Complete the
+                                    // result so a reader parked on DownloadCompletedTask unblocks
+                                    // promptly instead of waiting on a download that will never
+                                    // finish. Mirrors the JDBC driver, which completes its pending
+                                    // chunk future exceptionally on shutdown.
+                                    downloadResult.SetFailed(new OperationCanceledException(cancellationToken));
+                                }
+                                else
                                 {
                                     successfulDownloads++;
                                     totalBytes += downloadResult.Size;

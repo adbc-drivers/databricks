@@ -122,6 +122,37 @@ namespace AdbcDrivers.Databricks
         // Shared HttpClient for CloudFetch downloads (created once, reused across queries)
         private HttpClient? _cloudFetchHttpClient;
 
+        // Connection-scoped shutdown signal for in-flight CloudFetch pipelines. Cancelled at the
+        // start of Dispose so any active download manager (which links this token into its own
+        // cancellation source) tears down promptly, unblocking a reader parked on a download.
+        // Without this, closing a connection mid-CloudFetch cannot cancel the pipeline (the reader
+        // that owns it is blocked), so the reader spins on download retries until the retry budget
+        // expires (minutes) — see CloseConnection_DuringCloudFetch_ShouldNotHang.
+        private readonly CancellationTokenSource _cloudFetchShutdownCts = new CancellationTokenSource();
+
+        /// <summary>
+        /// Token cancelled when this connection is disposed. CloudFetch download managers link this
+        /// into their pipeline cancellation source so connection close tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchShutdownToken
+        {
+            get
+            {
+                // Defensive against a read after Dispose(bool) has disposed the source: return
+                // CancellationToken.None rather than throwing, matching the sibling
+                // DatabricksStatement.CloudFetchStatementToken and CloudFetchDownloadManager.PipelineToken
+                // so the three tokens behave symmetrically.
+                try
+                {
+                    return _cloudFetchShutdownCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
         // Telemetry
         private IConnectionTelemetry _telemetry = NoOpConnectionTelemetry.Instance;
         // Stopwatch covering the connection lifetime; started at construction and used to
@@ -1183,10 +1214,32 @@ namespace AdbcDrivers.Databricks
         {
             if (disposing)
             {
-                // Dispose the shared CloudFetch HttpClient before closing the session so any
-                // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
-                _cloudFetchHttpClient?.Dispose();
-                _cloudFetchHttpClient = null;
+                // Signal in-flight CloudFetch pipelines to stop before tearing down the transport.
+                // The download manager links this token into its own cancellation source, so this
+                // cancels the download loop and faults any in-flight download — unblocking a reader
+                // parked on GetNextDownloadedFileAsync / DownloadCompletedTask instead of leaving it
+                // to spin on retries against the about-to-be-disposed HttpClient.
+                // Best-effort: teardown must continue even if Cancel() throws. Cancel() invokes
+                // registered cancellation callbacks synchronously and rethrows a faulting one wrapped
+                // in AggregateException (not ObjectDisposedException); letting that escape here would
+                // skip the HttpClient/session teardown below and leak them.
+                try { _cloudFetchShutdownCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Expected on a repeated Dispose(): the source was already disposed in the
+                    // finally below on the first pass. Dispose(bool) has no idempotency guard, so
+                    // this is a normal double-dispose, not an error — swallow silently (no error
+                    // event), matching DatabricksStatement.Dispose's ObjectDisposedException handling.
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.shutdown.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
 
                 // Order matters here:
                 // 1. base.Dispose runs the TCloseSessionReq RPC (in HiveServer2Connection.DisposeClient);
@@ -1196,9 +1249,21 @@ namespace AdbcDrivers.Databricks
                 //    queued event is exported before we return.
                 long closeSessionElapsedMs = 0;
                 Exception? closeSessionError = null;
-                var closeStopwatch = Stopwatch.StartNew();
+                var closeStopwatch = new Stopwatch();
                 try
                 {
+                    // Dispose the shared CloudFetch HttpClient before closing the session so any
+                    // in-flight CloudFetch HTTP work is torn down first (PR #385: concurrent Dispose deadlock fix).
+                    // Kept inside this try so the finally below unconditionally disposes
+                    // _cloudFetchShutdownCts even if HttpClient.Dispose() throws — otherwise the CTS
+                    // (and its lazily-allocated WaitHandle) would leak. Mirrors the SEA path
+                    // (StatementExecutionConnection.Dispose).
+                    _cloudFetchHttpClient?.Dispose();
+                    _cloudFetchHttpClient = null;
+
+                    // Start timing only around base.Dispose so the HttpClient teardown above
+                    // doesn't inflate the reported TCloseSessionReq latency.
+                    closeStopwatch.Start();
                     base.Dispose(disposing);
                 }
                 catch (Exception ex)
@@ -1210,6 +1275,13 @@ namespace AdbcDrivers.Databricks
                 {
                     closeStopwatch.Stop();
                     closeSessionElapsedMs = closeStopwatch.ElapsedMilliseconds;
+
+                    // Dispose the CloudFetch shutdown CTS first so cleanup is unconditional:
+                    // it was already Cancel()ed at the top of Dispose and nothing below depends
+                    // on it, so releasing it here guarantees it happens even if the telemetry
+                    // calls below throw.
+                    _cloudFetchShutdownCts.Dispose();
+
                     EmitDeleteSessionTelemetry(closeSessionElapsedMs, closeSessionError);
 
                     // Clean up telemetry client.

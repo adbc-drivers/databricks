@@ -434,5 +434,86 @@ namespace AdbcDrivers.Databricks.Tests
                 OutputHelper?.WriteLine("Query completed before cancel took effect (race condition — acceptable).");
             }
         }
+
+        /// <summary>
+        /// CONCURRENT-006: Dispose a statement while it is actively fetching results via CloudFetch.
+        /// By the time results are streaming the query has finished server-side, so stopping the
+        /// download is a close/dispose concern (not a cancel): disposing the statement cancels the
+        /// statement-lifetime CloudFetch token linked into the pipeline, tearing it down so the parked
+        /// reader unblocks instead of running the billion-row result to completion. Mirrors how the
+        /// JDBC/kernel drivers stop the fetch on close/drop rather than on cancel().
+        /// </summary>
+        [SkippableFact]
+        public async Task DisposeStatement_DuringCloudFetch_ShouldStopPromptly()
+        {
+            const int timeoutMs = 30_000;
+            var queryStarted = new ManualResetEventSlim(false);
+            Exception? queryException = null;
+            int rowsRead = 0;
+
+            using AdbcConnection connection = NewConnection();
+            // Not a `using`: this test disposes the statement itself, mid-stream, as the action under test.
+            var statement = connection.CreateStatement();
+
+            // Deliberately huge so a full read takes far longer than timeoutMs: if dispose failed to
+            // tear the pipeline down, the read would keep going well past the window (test fails);
+            // with teardown it ends in well under the window. We only read the first batch before disposing.
+            statement.SqlQuery = "SELECT * FROM RANGE(1000000000)";
+
+            var queryTask = Task.Run(async () =>
+            {
+                try
+                {
+                    var result = statement.ExecuteQuery();
+                    using var reader = result.Stream;
+
+                    while (true)
+                    {
+                        var batch = await reader.ReadNextRecordBatchAsync();
+                        if (batch == null) break;
+
+                        Interlocked.Add(ref rowsRead, batch.Length);
+
+                        // Signal after the first batch so we know CloudFetch streaming is active.
+                        if (!queryStarted.IsSet)
+                        {
+                            queryStarted.Set();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    queryException = ex;
+                }
+            });
+
+            bool started = queryStarted.Wait(30_000);
+            if (!started)
+            {
+                statement.Dispose();
+                Assert.Fail("Query did not start producing results within 30s");
+            }
+
+            OutputHelper?.WriteLine($"Query started, read {rowsRead} rows so far. Disposing statement...");
+
+            // Dispose the statement while results are streaming via CloudFetch — this tears down the
+            // pipeline (dispose = stop fetch), unblocking the reader.
+            statement.Dispose();
+
+            var completed = await Task.WhenAny(queryTask, Task.Delay(timeoutMs));
+
+            OutputHelper?.WriteLine($"Query task completed: {queryTask.IsCompleted}");
+            OutputHelper?.WriteLine($"Rows read before dispose: {rowsRead}");
+
+            if (queryException != null)
+            {
+                // A cancellation/disposal exception is expected — the pipeline was torn down mid-read.
+                OutputHelper?.WriteLine($"Query exception (expected): {queryException.GetType().Name}: {queryException.Message}");
+            }
+
+            Assert.True(queryTask.IsCompleted,
+                $"Statement dispose during CloudFetch did not stop the read within {timeoutMs}ms. " +
+                $"Query completed: {queryTask.IsCompleted}, rows read: {rowsRead}.");
+        }
     }
 }

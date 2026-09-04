@@ -89,6 +89,35 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly object _cancelLock = new();
         private CancellationTokenSource? _executeCts;
 
+        // Statement-lifetime CloudFetch cancellation, linked to the connection's shutdown token, so
+        // disposing the statement — or the connection, via the link — tears down in-flight downloads.
+        // Distinct from _executeCts, which is disposed when execution returns and so cannot cover the
+        // later CloudFetch result-fetch phase. Created once: Cancel() cancels execution only (not this
+        // source), so a reused statement is never left with an already-cancelled CloudFetch token.
+        private readonly CancellationTokenSource _cloudFetchStatementCts;
+
+        /// <summary>
+        /// Token cancelled when this statement is cancelled or disposed — and, via linkage to the
+        /// connection's shutdown token, when the connection is disposed. The CloudFetch download
+        /// manager links this into its pipeline source so any of those tears down in-flight downloads.
+        /// </summary>
+        internal CancellationToken CloudFetchStatementToken
+        {
+            get
+            {
+                // Guard ObjectDisposedException → None for a read after Dispose. Mirrors the Thrift
+                // DatabricksStatement and CloudFetchDownloadManager.PipelineToken.
+                try
+                {
+                    return _cloudFetchStatementCts.Token;
+                }
+                catch (ObjectDisposedException)
+                {
+                    return CancellationToken.None;
+                }
+            }
+        }
+
         // Metadata command support
         private bool _isMetadataCommand;
         private bool _escapePatternWildcards;
@@ -182,6 +211,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             : base(connection)
         {
             _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+            _cloudFetchStatementCts = CancellationTokenSource.CreateLinkedTokenSource(connection.CloudFetchShutdownToken);
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _sessionId = sessionId;
             _warehouseId = warehouseId ?? throw new ArgumentNullException(nameof(warehouseId));
@@ -652,7 +682,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _properties,
                 _recyclableMemoryStreamManager,
                 _lz4BufferPool,
-                this); // Pass statement as ITracingStatement (via TracingStatement base class)
+                this, // Pass statement as ITracingStatement (via TracingStatement base class)
+                CloudFetchStatementToken); // the statement's CloudFetch token, passed explicitly
         }
 
         /// <summary>
@@ -855,6 +886,34 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         public override void Dispose()
         {
+            // Cancel + release the CloudFetch statement CTS first, regardless of whether a statement
+            // ran, so in-flight downloads stop promptly and its linked registration on the connection
+            // shutdown token is always freed (this method early-returns below when nothing executed).
+            lock (_cancelLock)
+            {
+                // Best-effort: Cancel() runs cancellation callbacks synchronously and rethrows a
+                // faulting one wrapped in AggregateException (not ObjectDisposedException); letting
+                // that escape would skip the CTS Dispose and the statement-close teardown below.
+                try { _cloudFetchStatementCts.Cancel(); }
+                catch (ObjectDisposedException)
+                {
+                    // Expected on a repeated Dispose(): the source was already disposed below on the
+                    // first pass. Dispose() has no idempotency guard, so this is a normal
+                    // double-dispose, not an error — swallow silently (no error event), matching the
+                    // Thrift DatabricksStatement.Dispose and CloudFetchStatementToken handling.
+                }
+                catch (Exception ex)
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("cloudfetch.statement.cancel.error",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", ex.Message }
+                        }));
+                }
+                _cloudFetchStatementCts.Dispose();
+            }
+
             if (_currentStatementId == null)
             {
                 return;
@@ -907,6 +966,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string? statementId;
             lock (_cancelLock)
             {
+                // Cancel execution only: signal the per-execute token (interrupts an in-flight
+                // execute/poll) and capture the id for the remote cancel RPC below. The CloudFetch
+                // pipeline is NOT torn down here — once results are streaming the query has finished
+                // server-side, so stopping the download is a close/dispose concern, not a cancel.
                 _executeCts?.Cancel();
                 statementId = _currentStatementId;
             }

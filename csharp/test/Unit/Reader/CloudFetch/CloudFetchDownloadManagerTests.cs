@@ -16,11 +16,14 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc;
+using Apache.Arrow.Adbc.Tracing;
 using Moq;
 using Xunit;
 
@@ -183,6 +186,81 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             await manager.StopAsync();
             downloadQueue.Dispose();
             resultQueue.Dispose();
+        }
+
+        /// <summary>
+        /// Regression for the CloudFetch-dispose hang (CloseConnection_DuringCloudFetch_ShouldNotHang):
+        /// cancelling the token passed to StartAsync (the connection's shutdown token) must tear down
+        /// the pipeline and unblock a reader parked in GetNextDownloadedFileAsync.
+        ///
+        /// Uses a REAL CloudFetchDownloader whose fetcher never enqueues anything, so a call to
+        /// GetNextDownloadedFileAsync blocks on the (empty, not-yet-completed) result queue — exactly
+        /// the state the reader is in when a connection is disposed mid-stream. Before the fix, the
+        /// download manager's internal CTS was linked to nothing, so cancelling an external token had
+        /// no effect and the read blocked indefinitely; with the fix the linked token cancels the
+        /// download loop, which completes the result queue and unblocks the read.
+        /// </summary>
+        [Fact]
+        public async Task StartAsync_TokenCancelled_UnblocksReaderWaitingForNextFile()
+        {
+            // Arrange — a real downloader backed by a tracer-providing statement mock.
+            var mockStatement = new Mock<IHiveServer2Statement>();
+            mockStatement.Setup(s => s.Trace).Returns(new ActivityTrace("TestActivitySource"));
+            mockStatement.Setup(s => s.TraceParent).Returns((string?)null);
+            mockStatement.Setup(s => s.AssemblyVersion).Returns("1.0.0");
+            mockStatement.Setup(s => s.AssemblyName).Returns("TestAssembly");
+
+            // Fetcher never enqueues any download, so the downloader's loop parks on the empty
+            // download queue and the reader parks on the empty result queue.
+            var mockFetcher = new Mock<ICloudFetchResultFetcher>();
+            mockFetcher.Setup(f => f.HasError).Returns(false);
+            mockFetcher.Setup(f => f.Error).Returns((Exception?)null);
+            mockFetcher.Setup(f => f.StartAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+            mockFetcher.Setup(f => f.StopAsync()).Returns(Task.CompletedTask);
+
+            var mockMemoryManager = new Mock<ICloudFetchMemoryBufferManager>();
+            var downloadQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+            var resultQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 10);
+            using var httpClient = new HttpClient();
+
+            var downloader = new CloudFetchDownloader(
+                mockStatement.Object,
+                downloadQueue,
+                resultQueue,
+                mockMemoryManager.Object,
+                httpClient,
+                mockFetcher.Object,
+                maxParallelDownloads: 3,
+                isLz4Compressed: false);
+
+            var config = new CloudFetchConfiguration();
+            var manager = new CloudFetchDownloadManager(
+                mockFetcher.Object,
+                downloader,
+                mockMemoryManager.Object,
+                downloadQueue,
+                resultQueue,
+                config);
+
+            using var shutdownCts = new CancellationTokenSource();
+            await manager.StartAsync(shutdownCts.Token);
+
+            // Reader parks waiting for the next downloaded file (token None, like the real reader).
+            var readTask = Task.Run(() => manager.GetNextDownloadedFileAsync(CancellationToken.None));
+
+            // Give the read a moment to reach the blocking Take, then simulate connection dispose.
+            await Task.Delay(200);
+            Assert.False(readTask.IsCompleted, "read should still be blocked before the token is cancelled");
+
+            shutdownCts.Cancel();
+
+            // Act & Assert — the read must unblock promptly (returns null: clean end of results).
+            var completed = await Task.WhenAny(readTask, Task.Delay(5000));
+            Assert.Same(readTask, completed);
+            Assert.Null(await readTask);
+
+            // Cleanup
+            manager.Dispose();
         }
     }
 }

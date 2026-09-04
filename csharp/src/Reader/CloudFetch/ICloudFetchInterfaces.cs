@@ -274,8 +274,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <summary>
         /// Starts the download manager.
         /// </summary>
+        /// <param name="cancellationToken">
+        /// Token linked into the pipeline's cancellation source; cancelling it (e.g. on connection
+        /// dispose) tears down the fetcher and downloader and unblocks any waiting reader.
+        /// </param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        Task StartAsync();
+        Task StartAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Stops the download manager.
@@ -287,6 +291,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// Gets a value indicating whether there are more results available.
         /// </summary>
         bool HasMoreResults { get; }
+
+        /// <summary>
+        /// The pipeline's cancellation token (linked to the token passed to <see cref="StartAsync"/>).
+        /// The reader observes this so a cancel/dispose stops the read promptly even while draining
+        /// already-buffered chunks — not just when it next blocks for a download. Returns
+        /// <see cref="CancellationToken.None"/> before start or after stop/dispose.
+        /// </summary>
+        CancellationToken PipelineToken { get; }
 
         /// <summary>
         /// Gets the aggregated chunk metrics from the downloader.

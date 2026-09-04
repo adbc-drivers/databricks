@@ -193,7 +193,8 @@ namespace AdbcDrivers.Databricks.Reader
                 _response,
                 initialResults,
                 _httpClient,
-                _isLz4Compressed);
+                _isLz4Compressed,
+                ((DatabricksStatement)_statement).CloudFetchStatementToken);
         }
 
         /// <summary>
