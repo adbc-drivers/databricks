@@ -25,6 +25,7 @@ using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
+using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -383,7 +384,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _connection.UpdateCurrentCatalog(catalog);
         }
 
-        private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
+        private Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
+        {
+            // Named span so the SEA execute path is traced like Thrift's ExecuteQueryAsyncInternal.
+            return this.TraceActivityAsync(
+                _ => ExecuteQueryInternalCoreAsync(cancellationToken, isMetadataExecution),
+                activityName: nameof(StatementExecutionStatement) + "." + nameof(ExecuteQueryInternalAsync));
+        }
+
+        private async Task<QueryResult> ExecuteQueryInternalCoreAsync(CancellationToken cancellationToken, bool isMetadataExecution)
         {
             // If the caller explicitly scoped this statement to a catalog, set the session's
             // current catalog first via USE CATALOG so a 2-level `schema`.`table` name
@@ -543,6 +552,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         private async Task<ExecuteStatementResponse> PollUntilCompleteAsync(string statementId, CancellationToken cancellationToken)
         {
+            int pollCount = 0;
             while (true)
             {
                 // Check for cancellation before each polling iteration
@@ -554,8 +564,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Check for cancellation after delay
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Get statement status
-                var response = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+                // Trace each poll like the Thrift path's DatabricksOperationStatusPoller.
+                var response = await this.TraceActivityAsync(async pollActivity =>
+                {
+                    var r = await _client.GetStatementAsync(statementId, cancellationToken).ConfigureAwait(false);
+                    pollActivity?.SetTag(StatementExecutionEvent.PollCount, ++pollCount);
+                    pollActivity?.AddEvent(new ActivityEvent("operation_status_poller.poll_success",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "poll_count", pollCount },
+                            { "operation_state", r.Status?.State }
+                        }));
+                    return r;
+                }, activityName: "PollOperationStatus").ConfigureAwait(false);
 
                 // Convert GetStatementResponse to ExecuteStatementResponse
                 var executeResponse = new ExecuteStatementResponse
@@ -752,7 +773,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        private async Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
+        private Task<UpdateResult> ExecuteUpdateInternalAsync(CancellationToken cancellationToken)
+        {
+            // Named span so the SEA update path is traced like the query path above.
+            return this.TraceActivityAsync(
+                _ => ExecuteUpdateInternalCoreAsync(cancellationToken),
+                activityName: nameof(StatementExecutionStatement) + "." + nameof(ExecuteUpdateInternalAsync));
+        }
+
+        private async Task<UpdateResult> ExecuteUpdateInternalCoreAsync(CancellationToken cancellationToken)
         {
             // Scope the session to the caller's catalog first (see ExecuteQueryInternalAsync), so a
             // DML statement with a bare 2-level `schema`.`table` name resolves against it too.
