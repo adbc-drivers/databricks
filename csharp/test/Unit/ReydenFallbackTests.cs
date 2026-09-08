@@ -129,19 +129,78 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-reyden",
             };
-            string? warehouseId = ReydenFallback.TryGetWarehouseId(props);
-            Assert.Equal("wh-reyden", warehouseId);
+            string? cacheKey = ReydenFallback.TryGetWarehouseCacheKey(props);
+            Assert.NotNull(cacheKey);
 
             // Before the error, Thrift is attempted (warehouse not yet known to be Reyden).
-            Assert.False(ReydenWarehouseCache.IsReyden(warehouseId));
+            Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
 
             // Simulate the failed Thrift OpenSession surfacing the Reyden rejection.
             var openSessionError = new AggregateException(new HttpRequestException(ReydenErrorText));
             Assert.True(ReydenFallback.IsThriftRejection(openSessionError));
-            ReydenWarehouseCache.Mark(warehouseId);
+            ReydenWarehouseCache.Mark(cacheKey);
 
             // Next connect's pre-check now short-circuits Thrift and uses SEA.
-            Assert.True(ReydenWarehouseCache.IsReyden(warehouseId));
+            Assert.True(ReydenWarehouseCache.IsReyden(cacheKey));
+        }
+
+        [Fact]
+        public void TryGetWarehouseCacheKey_IncludesHostComponent()
+        {
+            // Same warehouse id on two different workspaces must yield distinct cache keys.
+            var workspaceA = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://workspace-a.databricks.com/sql/1.0/warehouses/abc123",
+            };
+            var workspaceB = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://workspace-b.databricks.com/sql/1.0/warehouses/abc123",
+            };
+
+            string? keyA = ReydenFallback.TryGetWarehouseCacheKey(workspaceA);
+            string? keyB = ReydenFallback.TryGetWarehouseCacheKey(workspaceB);
+
+            Assert.NotNull(keyA);
+            Assert.NotNull(keyB);
+            Assert.NotEqual(keyA, keyB);
+        }
+
+        [Fact]
+        public void TryGetWarehouseCacheKey_NullForGeneralClusterPath()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/protocolv1/o/1234567890/0101-cluster",
+            };
+            Assert.Null(ReydenFallback.TryGetWarehouseCacheKey(props));
+        }
+
+        /// <summary>
+        /// A Reyden mark for a warehouse id in one workspace must not route a healthy, Thrift-capable
+        /// warehouse with the SAME id in a different workspace to SEA. Regression for the multi-tenant
+        /// host scenario where warehouse ids (workspace-local counters) can collide across workspaces.
+        /// </summary>
+        [Fact]
+        public void ReydenMarkDoesNotLeakAcrossWorkspacesWithSameWarehouseId()
+        {
+            var workspaceA = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://workspace-a.databricks.com/sql/1.0/warehouses/000000000107b7e3",
+            };
+            var workspaceB = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://workspace-b.databricks.com/sql/1.0/warehouses/000000000107b7e3",
+            };
+
+            string? keyA = ReydenFallback.TryGetWarehouseCacheKey(workspaceA);
+            string? keyB = ReydenFallback.TryGetWarehouseCacheKey(workspaceB);
+
+            // Workspace A's warehouse is marked Reyden.
+            ReydenWarehouseCache.Mark(keyA);
+
+            Assert.True(ReydenWarehouseCache.IsReyden(keyA));
+            // Workspace B's identically-numbered warehouse is unaffected and still tries Thrift.
+            Assert.False(ReydenWarehouseCache.IsReyden(keyB));
         }
     }
 }
