@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.HiveServer2.Spark;
@@ -244,6 +245,38 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal("sea", result);
             Assert.Equal(1, thriftAttempts);
             // The warehouse is now marked, so the next connect's pre-check short-circuits Thrift.
+            Assert.True(ReydenWarehouseCache.IsReyden(cacheKey));
+        }
+
+        /// <summary>
+        /// Routing glue: when the SEA fallback itself fails after a Thrift rejection, both causal
+        /// chains must survive — the original Thrift rejection must not be silently discarded. The
+        /// thrown exception retains both the SEA error and the Thrift rejection as inner exceptions.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_SeaFallbackFailureRetainsBothCauses()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-reyden-sea-fail",
+            };
+            string? cacheKey = ReydenFallback.TryGetWarehouseCacheKey(props);
+            Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
+
+            var thriftRejection = new HttpRequestException(ReydenErrorText);
+            var seaFailure = new HttpRequestException("SEA auth failed");
+
+            var thrown = Assert.Throws<AggregateException>(() =>
+                DatabricksDatabase.RouteConnection<string>(
+                    props,
+                    _ => throw new AggregateException(thriftRejection),
+                    _ => throw new AggregateException(seaFailure)));
+
+            // Both the SEA error and the original Thrift rejection are reachable from the chain.
+            var innerMessages = thrown.Flatten().InnerExceptions.Select(e => e.Message).ToList();
+            Assert.Contains(ReydenErrorText, innerMessages);
+            Assert.Contains("SEA auth failed", innerMessages);
+            // The warehouse is still marked so future connects skip the doomed Thrift open.
             Assert.True(ReydenWarehouseCache.IsReyden(cacheKey));
         }
 

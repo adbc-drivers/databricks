@@ -233,7 +233,26 @@ namespace AdbcDrivers.Databricks
                             { "warehouse_cache_key", warehouseCacheKey },
                             { "error", ex.Message },
                         }));
-                    return openStatementExecutionConnection(mergedProperties);
+                    try
+                    {
+                        return openStatementExecutionConnection(mergedProperties);
+                    }
+                    catch (Exception seaEx)
+                    {
+                        // Both protocols failed: Thrift was rejected (Reyden / Lakehouse-RT) and the
+                        // transparent Statement Execution (SEA) fallback also failed. Retain BOTH causal
+                        // chains so the failure stays diagnosable outside of tracing — otherwise the
+                        // original Thrift rejection is silently discarded and the user sees only the SEA
+                        // error with no hint that a protocol downgrade was attempted. The SEA error is
+                        // listed first so Connect()'s AggregateException unwrap surfaces it as the primary
+                        // AdbcException, while the original Thrift rejection is kept as an inner exception.
+                        throw new AggregateException(
+                            "Thrift is not supported for this warehouse (Reyden / Lakehouse-RT) and the " +
+                            "automatic Statement Execution (SEA) fallback also failed. See inner exceptions " +
+                            "for both the original Thrift rejection and the SEA error.",
+                            seaEx,
+                            ex);
+                    }
                 }
             }
             else
