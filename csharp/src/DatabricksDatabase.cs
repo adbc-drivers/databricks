@@ -23,6 +23,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
@@ -107,11 +108,22 @@ namespace AdbcDrivers.Databricks
                 // Reyden / Lakehouse-RT warehouses reject the Thrift protocol and must be driven over
                 // the Statement Execution API (SEA). If this warehouse has already been observed to be
                 // Reyden (cached below on a prior connect), skip the doomed Thrift OpenSession and go
-                // straight to SEA. Applies only when Thrift was requested; explicit rest/rest is untouched.
+                // straight to SEA.
+                //
+                // This applies whenever Thrift is in effect, whether it was requested explicitly
+                // (protocol=thrift) or by default. That is deliberate: a Reyden warehouse rejects Thrift
+                // no matter who selected it, so SEA is the only working path and an explicit protocol=thrift
+                // is intentionally (and transparently) downgraded here rather than left to fail. There is
+                // currently no override to force Thrift against a warehouse marked Reyden; the mark is not
+                // permanent — it expires after ReydenWarehouseCache.Ttl (6h), after which the warehouse is
+                // re-probed over Thrift, so a stale/transient mark self-heals. An explicit protocol=rest is
+                // untouched (it never enters this Thrift branch).
                 string? warehouseCacheKey = ReydenFallback.TryGetWarehouseCacheKey(mergedProperties);
                 if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseCacheKey))
                 {
                     protocol = "rest";
+                    Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.skip_thrift",
+                        tags: new ActivityTagsCollection { { "warehouse_cache_key", warehouseCacheKey } }));
                 }
 
                 AdbcConnection connection;
@@ -132,6 +144,12 @@ namespace AdbcDrivers.Databricks
                         // so subsequent connects skip Thrift, and transparently retry over SEA (the
                         // driver-side equivalent of forcing the kernel/Statement Execution path).
                         ReydenWarehouseCache.Mark(warehouseCacheKey);
+                        Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.thrift_rejected",
+                            tags: new ActivityTagsCollection
+                            {
+                                { "warehouse_cache_key", warehouseCacheKey },
+                                { "error", ex.Message },
+                            }));
                         connection = OpenStatementExecutionConnection(mergedProperties);
                     }
                 }
