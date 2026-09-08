@@ -172,13 +172,30 @@ namespace AdbcDrivers.Databricks
                 return null;
             }
 
+            return BuildWarehouseCacheKey(FeatureFlagCache.TryGetHost(properties), warehouseId);
+        }
+
+        /// <summary>
+        /// Composes the cache key from components already resolved by <see cref="TryGetWarehouseId"/>
+        /// and <see cref="FeatureFlagCache.TryGetHost"/>, so a caller that needs those components for
+        /// its own purposes (e.g. telemetry dimensions) doesn't have to re-parse the URI/path and
+        /// re-run the warehouse regex a second time. Returns null when <paramref name="warehouseId"/>
+        /// is null/empty, i.e. the target is not a SQL warehouse and no fallback applies.
+        /// </summary>
+        internal static string? BuildWarehouseCacheKey(string? host, string? warehouseId)
+        {
+            if (string.IsNullOrEmpty(warehouseId))
+            {
+                return null;
+            }
+
             // Fall back to an empty host component when the host can't be resolved; the warehouse id
             // still keys the entry, so behavior degrades to the previous (id-only) semantics rather
             // than dropping the fallback entirely. Lowercase the host so that connects supplying the
             // same host with different casing hash to one entry — matching the normalization
             // FeatureFlagCache already applies to its per-host key (host.ToLowerInvariant()).
-            string host = (FeatureFlagCache.TryGetHost(properties) ?? string.Empty).ToLowerInvariant();
-            return host + CacheKeySeparator + warehouseId;
+            string normalizedHost = (host ?? string.Empty).ToLowerInvariant();
+            return normalizedHost + CacheKeySeparator + warehouseId;
         }
     }
 }

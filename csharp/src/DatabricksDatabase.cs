@@ -203,13 +203,17 @@ namespace AdbcDrivers.Databricks
 
             // Reyden / Lakehouse-RT pre-check: if this warehouse was previously observed to reject
             // Thrift, skip the doomed Thrift OpenSession and go straight to SEA.
-            string? warehouseCacheKey = ReydenFallback.TryGetWarehouseCacheKey(mergedProperties);
-            // Emit the cache key's components as discrete telemetry dimensions rather than the raw
-            // composite key: the composite embeds a literal newline (ReydenFallback.CacheKeySeparator),
+            //
+            // Resolve the cache key's components (host, warehouse id) once and compose the composite
+            // key from them, rather than resolving the composite key and then resolving the same
+            // components a second time — the resolution re-parses the URI/path and re-runs the
+            // warehouse regex. We keep the components as discrete telemetry dimensions rather than the
+            // raw composite key: the composite embeds a literal newline (ReydenFallback.CacheKeySeparator),
             // which some OpenTelemetry exporters/log sinks mangle or truncate, and separate tags are
             // easier to query.
             string? warehouseId = ReydenFallback.TryGetWarehouseId(mergedProperties);
             string? host = FeatureFlagCache.TryGetHost(mergedProperties);
+            string? warehouseCacheKey = ReydenFallback.BuildWarehouseCacheKey(host, warehouseId);
             if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseCacheKey))
             {
                 protocol = "rest";
