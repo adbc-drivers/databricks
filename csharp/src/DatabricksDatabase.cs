@@ -98,116 +98,38 @@ namespace AdbcDrivers.Databricks
                 // Merge with environment config (DATABRICKS_CONFIG_FILE) and feature flags from server
                 mergedProperties = MergeWithEnvironmentConfigAndFeatureFlags(mergedProperties);
 
-                // Check protocol selection
-                string protocol = "thrift"; // default
-                if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out var protocolValue))
-                {
-                    protocol = protocolValue.ToLowerInvariant();
-                }
-
-                // Reyden / Lakehouse-RT warehouses reject the Thrift protocol and must be driven over
-                // the Statement Execution API (SEA). If this warehouse has already been observed to be
-                // Reyden (cached below on a prior connect), skip the doomed Thrift OpenSession and go
-                // straight to SEA.
-                //
-                // This applies whenever Thrift is in effect, whether it was requested explicitly
-                // (protocol=thrift) or by default. That is deliberate: a Reyden warehouse rejects Thrift
-                // no matter who selected it, so SEA is the only working path and an explicit protocol=thrift
-                // is intentionally (and transparently) downgraded here rather than left to fail. There is
-                // currently no override to force Thrift against a warehouse marked Reyden; the mark is not
-                // permanent — it expires after ReydenWarehouseCache.Ttl (6h), after which the warehouse is
-                // re-probed over Thrift, so a stale/transient mark self-heals. An explicit protocol=rest is
-                // untouched (it never enters this Thrift branch).
-                string? warehouseCacheKey = ReydenFallback.TryGetWarehouseCacheKey(mergedProperties);
-                if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseCacheKey))
-                {
-                    protocol = "rest";
-                    Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.skip_thrift",
-                        tags: new ActivityTagsCollection { { "warehouse_cache_key", warehouseCacheKey } }));
-                }
-
-                AdbcConnection connection;
-
-                if (protocol == "rest")
-                {
-                    connection = OpenStatementExecutionConnection(mergedProperties);
-                }
-                else if (protocol == "thrift")
-                {
-                    try
-                    {
-                        connection = OpenThriftConnection(mergedProperties);
-                    }
-                    catch (Exception ex) when (warehouseCacheKey != null && ReydenFallback.IsThriftRejection(ex))
-                    {
-                        // This warehouse is Reyden / Lakehouse-RT: Thrift is not supported. Remember it
-                        // so subsequent connects skip Thrift, and transparently retry over SEA (the
-                        // driver-side equivalent of forcing the kernel/Statement Execution path).
-                        ReydenWarehouseCache.Mark(warehouseCacheKey);
-                        Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.thrift_rejected",
-                            tags: new ActivityTagsCollection
-                            {
-                                { "warehouse_cache_key", warehouseCacheKey },
-                                { "error", ex.Message },
-                            }));
-                        connection = OpenStatementExecutionConnection(mergedProperties);
-                    }
-                }
-                else
-                {
-                    throw new ArgumentException(
-                        $"Unsupported protocol: '{protocol}'. Supported values are 'thrift' and 'rest'.",
-                        nameof(mergedProperties));
-                }
-
-                return connection;
+                // Select the protocol and route to the right connection, applying the Reyden /
+                // Lakehouse-RT fallback (pre-check + Thrift-rejection interception). Extracted into a
+                // seam so the routing glue is unit-testable without a live warehouse (see
+                // ReydenFallbackTests.RouteConnection_*).
+                return RouteConnection(mergedProperties, OpenThriftConnection, OpenStatementExecutionConnection);
 
                 // Builds and opens a Statement Execution API (SEA) connection. It creates its own HTTP
                 // client with the proper handler chain (TracingDelegatingHandler, RetryHttpHandler, and
                 // OAuth handlers when OAuth is configured). Disposes the connection if the open fails so
                 // a fallback (or a propagated error) does not leak the failed connection's HTTP client /
                 // handler chain.
-                AdbcConnection OpenStatementExecutionConnection(IReadOnlyDictionary<string, string> props)
-                {
-                    var seaConnection = new StatementExecutionConnection(
-                        props,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
-                    try
-                    {
-                        seaConnection.OpenAsync().Wait();
-                        // When apply_ssp_with_queries=true, run post-open SET statements for each
-                        // adbc.databricks.ssp_*. No-op when false (SSPs already in CreateSession.session_confs).
-                        seaConnection.ApplyServerSidePropertiesAsync().Wait();
-                        return seaConnection;
-                    }
-                    catch
-                    {
-                        seaConnection.Dispose();
-                        throw;
-                    }
-                }
+                AdbcConnection OpenStatementExecutionConnection(IReadOnlyDictionary<string, string> props) =>
+                    OpenOrDispose(
+                        new StatementExecutionConnection(props, this.RecyclableMemoryStreamManager, this.Lz4BufferPool),
+                        seaConnection =>
+                        {
+                            seaConnection.OpenAsync().Wait();
+                            // When apply_ssp_with_queries=true, run post-open SET statements for each
+                            // adbc.databricks.ssp_*. No-op when false (SSPs already in CreateSession.session_confs).
+                            seaConnection.ApplyServerSidePropertiesAsync().Wait();
+                        });
 
                 // Builds and opens a traditional Thrift/HiveServer2 connection, disposing it if the open
                 // fails so a fallback to SEA does not leak the failed connection's resources.
-                AdbcConnection OpenThriftConnection(IReadOnlyDictionary<string, string> props)
-                {
-                    var thriftConnection = new DatabricksConnection(
-                        props,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
-                    try
-                    {
-                        thriftConnection.OpenAsync().Wait();
-                        thriftConnection.ApplyServerSidePropertiesAsync().Wait();
-                        return thriftConnection;
-                    }
-                    catch
-                    {
-                        thriftConnection.Dispose();
-                        throw;
-                    }
-                }
+                AdbcConnection OpenThriftConnection(IReadOnlyDictionary<string, string> props) =>
+                    OpenOrDispose(
+                        new DatabricksConnection(props, this.RecyclableMemoryStreamManager, this.Lz4BufferPool),
+                        thriftConnection =>
+                        {
+                            thriftConnection.OpenAsync().Wait();
+                            thriftConnection.ApplyServerSidePropertiesAsync().Wait();
+                        });
             }
             catch (AggregateException ae)
             {
@@ -220,6 +142,105 @@ namespace AdbcDrivers.Databricks
                 }
 
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Runs <paramref name="open"/> against a freshly-constructed connection, disposing it if the
+        /// open throws so a propagated error (or a fallback to another protocol) does not leak the failed
+        /// connection's HTTP client / handler chain. Extracted as a seam so the dispose-on-failure
+        /// contract is unit-testable without opening a real connection.
+        /// </summary>
+        internal static TConnection OpenOrDispose<TConnection>(TConnection connection, Action<TConnection> open)
+            where TConnection : IDisposable
+        {
+            try
+            {
+                open(connection);
+                return connection;
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Selects the protocol and routes to the appropriate connection factory, applying the
+        /// Reyden / Lakehouse-RT fallback. This is the routing glue extracted from <see cref="Connect"/>
+        /// so it can be unit-tested without opening real connections: the caller supplies the Thrift and
+        /// SEA factories.
+        ///
+        /// Behavior:
+        /// <list type="bullet">
+        /// <item>When Thrift is in effect (explicit <c>protocol=thrift</c> or the default) and this
+        /// warehouse is already marked Reyden, the pre-check flips to SEA and skips the doomed Thrift
+        /// open. This downgrade is deliberate and transparent; the mark self-heals after
+        /// <see cref="ReydenWarehouseCache"/>'s TTL. An explicit <c>protocol=rest</c> never enters the
+        /// Thrift branch.</item>
+        /// <item>When a Thrift open fails with the server's "Thrift not supported" rejection, the
+        /// warehouse is marked Reyden and the connection is transparently retried over SEA. Any other
+        /// failure (or a warehouse whose cache key could not be resolved) propagates unchanged.</item>
+        /// </list>
+        /// </summary>
+        /// <typeparam name="TConnection">The connection type produced by the factories (production uses
+        /// <see cref="AdbcConnection"/>; tests use a sentinel so no real connection is opened).</typeparam>
+        /// <param name="mergedProperties">Fully merged connection properties.</param>
+        /// <param name="openThriftConnection">Opens a Thrift/HiveServer2 connection (or throws).</param>
+        /// <param name="openStatementExecutionConnection">Opens a Statement Execution (SEA) connection.</param>
+        internal static TConnection RouteConnection<TConnection>(
+            IReadOnlyDictionary<string, string> mergedProperties,
+            Func<IReadOnlyDictionary<string, string>, TConnection> openThriftConnection,
+            Func<IReadOnlyDictionary<string, string>, TConnection> openStatementExecutionConnection)
+        {
+            // Check protocol selection
+            string protocol = "thrift"; // default
+            if (mergedProperties.TryGetValue(DatabricksParameters.Protocol, out var protocolValue))
+            {
+                protocol = protocolValue.ToLowerInvariant();
+            }
+
+            // Reyden / Lakehouse-RT pre-check: if this warehouse was previously observed to reject
+            // Thrift, skip the doomed Thrift OpenSession and go straight to SEA.
+            string? warehouseCacheKey = ReydenFallback.TryGetWarehouseCacheKey(mergedProperties);
+            if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseCacheKey))
+            {
+                protocol = "rest";
+                Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.skip_thrift",
+                    tags: new ActivityTagsCollection { { "warehouse_cache_key", warehouseCacheKey } }));
+            }
+
+            if (protocol == "rest")
+            {
+                return openStatementExecutionConnection(mergedProperties);
+            }
+            else if (protocol == "thrift")
+            {
+                try
+                {
+                    return openThriftConnection(mergedProperties);
+                }
+                catch (Exception ex) when (warehouseCacheKey != null && ReydenFallback.IsThriftRejection(ex))
+                {
+                    // This warehouse is Reyden / Lakehouse-RT: Thrift is not supported. Remember it
+                    // so subsequent connects skip Thrift, and transparently retry over SEA (the
+                    // driver-side equivalent of forcing the kernel/Statement Execution path).
+                    ReydenWarehouseCache.Mark(warehouseCacheKey);
+                    Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.thrift_rejected",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "warehouse_cache_key", warehouseCacheKey },
+                            { "error", ex.Message },
+                        }));
+                    return openStatementExecutionConnection(mergedProperties);
+                }
+            }
+            else
+            {
+                throw new ArgumentException(
+                    $"Unsupported protocol: '{protocol}'. Supported values are 'thrift' and 'rest'.",
+                    nameof(mergedProperties));
             }
         }
 

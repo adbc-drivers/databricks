@@ -191,6 +191,170 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(keyLower, keyUpper);
         }
 
+        /// <summary>
+        /// Routing glue: when a warehouse is already marked Reyden, the pre-check in RouteConnection
+        /// flips the effective protocol to SEA and never invokes the Thrift factory — even though the
+        /// caller left the protocol at the Thrift default.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_MarkedWarehouseSkipsThriftAndUsesSea()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-reyden",
+            };
+            ReydenWarehouseCache.Mark(ReydenFallback.TryGetWarehouseCacheKey(props));
+
+            bool thriftCalled = false;
+            string result = DatabricksDatabase.RouteConnection<string>(
+                props,
+                _ => { thriftCalled = true; return "thrift"; },
+                _ => "sea");
+
+            Assert.Equal("sea", result);
+            Assert.False(thriftCalled);
+        }
+
+        /// <summary>
+        /// Routing glue: an unmarked warehouse opens over Thrift; when that open throws the Reyden
+        /// "Thrift not supported" rejection, RouteConnection intercepts it, marks the warehouse, and
+        /// transparently retries over SEA.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_ThriftRejectionMarksWarehouseAndFallsBackToSea()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-reyden",
+            };
+            string? cacheKey = ReydenFallback.TryGetWarehouseCacheKey(props);
+            Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
+
+            int thriftAttempts = 0;
+            string result = DatabricksDatabase.RouteConnection<string>(
+                props,
+                _ =>
+                {
+                    thriftAttempts++;
+                    // Mirror the real failed-open surface: OpenAsync().Wait() wraps in AggregateException.
+                    throw new AggregateException(new HttpRequestException(ReydenErrorText));
+                },
+                _ => "sea");
+
+            Assert.Equal("sea", result);
+            Assert.Equal(1, thriftAttempts);
+            // The warehouse is now marked, so the next connect's pre-check short-circuits Thrift.
+            Assert.True(ReydenWarehouseCache.IsReyden(cacheKey));
+        }
+
+        /// <summary>
+        /// Routing glue: a Thrift open failure that is NOT the Reyden rejection propagates unchanged —
+        /// the warehouse must not be marked and no SEA fallback is attempted.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_NonReydenThriftFailurePropagatesWithoutFallback()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-healthy",
+            };
+            string? cacheKey = ReydenFallback.TryGetWarehouseCacheKey(props);
+
+            bool seaCalled = false;
+            var thrown = Assert.Throws<AggregateException>(() =>
+                DatabricksDatabase.RouteConnection<string>(
+                    props,
+                    _ => throw new AggregateException(new HttpRequestException("some transient network error")),
+                    _ => { seaCalled = true; return "sea"; }));
+
+            Assert.False(seaCalled);
+            Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
+            Assert.NotNull(thrown);
+        }
+
+        /// <summary>
+        /// Routing glue: when the warehouse cache key cannot be resolved (e.g. a general cluster path),
+        /// the Reyden interception is disabled — a Thrift rejection propagates rather than falling back,
+        /// because there is nothing to mark or key a future pre-check on.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_NoCacheKeyDisablesFallback()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/protocolv1/o/1234567890/0101-cluster",
+            };
+            Assert.Null(ReydenFallback.TryGetWarehouseCacheKey(props));
+
+            bool seaCalled = false;
+            Assert.Throws<AggregateException>(() =>
+                DatabricksDatabase.RouteConnection<string>(
+                    props,
+                    _ => throw new AggregateException(new HttpRequestException(ReydenErrorText)),
+                    _ => { seaCalled = true; return "sea"; }));
+
+            Assert.False(seaCalled);
+        }
+
+        /// <summary>
+        /// Routing glue: an explicit protocol=rest is routed straight to SEA and never touches the
+        /// Thrift factory or the Reyden pre-check.
+        /// </summary>
+        [Fact]
+        public void RouteConnection_ExplicitRestUsesSeaDirectly()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [AdbcOptions.Uri] = "https://host/sql/1.0/warehouses/wh-any",
+                [DatabricksParameters.Protocol] = "rest",
+            };
+
+            bool thriftCalled = false;
+            string result = DatabricksDatabase.RouteConnection<string>(
+                props,
+                _ => { thriftCalled = true; return "thrift"; },
+                _ => "sea");
+
+            Assert.Equal("sea", result);
+            Assert.False(thriftCalled);
+        }
+
+        /// <summary>
+        /// Dispose-on-failure contract: when the open action throws, OpenOrDispose disposes the
+        /// connection before rethrowing so a failed open (e.g. the one that triggers the SEA fallback)
+        /// does not leak the connection's HTTP client / handler chain.
+        /// </summary>
+        [Fact]
+        public void OpenOrDispose_DisposesConnectionWhenOpenThrows()
+        {
+            var connection = new TrackingDisposable();
+            var thrown = Assert.Throws<InvalidOperationException>(() =>
+                DatabricksDatabase.OpenOrDispose(connection, _ => throw new InvalidOperationException("open failed")));
+
+            Assert.True(connection.Disposed);
+            Assert.Equal("open failed", thrown.Message);
+        }
+
+        /// <summary>
+        /// Dispose-on-failure contract: a successful open returns the connection undisposed.
+        /// </summary>
+        [Fact]
+        public void OpenOrDispose_ReturnsConnectionWhenOpenSucceeds()
+        {
+            var connection = new TrackingDisposable();
+            var result = DatabricksDatabase.OpenOrDispose(connection, _ => { });
+
+            Assert.Same(connection, result);
+            Assert.False(connection.Disposed);
+        }
+
+        private sealed class TrackingDisposable : IDisposable
+        {
+            public bool Disposed { get; private set; }
+
+            public void Dispose() => Disposed = true;
+        }
+
         [Fact]
         public void TryGetWarehouseCacheKey_NullForGeneralClusterPath()
         {

@@ -78,8 +78,14 @@ namespace AdbcDrivers.Databricks
                     return true;
                 }
 
-                // Expired: drop it so a reconfigured warehouse is re-probed over Thrift.
-                s_expiryByCacheKey.TryRemove(cacheKey!, out _);
+                // Expired: drop it so a reconfigured warehouse is re-probed over Thrift. Use a
+                // value-conditional remove so a concurrent Mark() that races in between the
+                // TryGetValue above and here — writing a fresh, non-expired expiry — is not
+                // clobbered. ConcurrentDictionary's ICollection<KeyValuePair<,>>.Remove removes
+                // only when both key and value match, and (unlike the TryRemove(KeyValuePair<,>)
+                // overload) is available on netstandard2.0.
+                ((ICollection<KeyValuePair<string, DateTime>>)s_expiryByCacheKey)
+                    .Remove(new KeyValuePair<string, DateTime>(cacheKey!, expiry));
             }
 
             return false;
