@@ -75,6 +75,17 @@ namespace AdbcDrivers.Databricks.Tests
                 new HttpRequestException("Thrift server error: TFetchOrientation ... (HTTP 500)")));
         }
 
+        [Fact]
+        public void IsThriftRejection_FalseForUnrelatedThriftUnsupportedError()
+        {
+            // An unrelated server error that merely mentions "...not supported for Thrift protocol..."
+            // (e.g. a specific unsupported feature) must NOT be mistaken for the Reyden rejection and
+            // pin an otherwise Thrift-capable warehouse to SEA: the distinctive "Lakehouse/RT" token
+            // is required in addition to the phrase.
+            Assert.False(ReydenFallback.IsThriftRejection(new HttpRequestException(
+                "BAD_REQUEST: FooBar feature is not supported for Thrift protocol (HTTP 400 Bad Request)")));
+        }
+
         [Theory]
         [InlineData("/sql/1.0/warehouses/000000000107b7e3", "000000000107b7e3")]
         [InlineData("/sql/1.0/endpoints/abc123", "abc123")]

@@ -77,7 +77,13 @@ namespace AdbcDrivers.Databricks
         // The Reyden signal surfaced by the SQL proxy in the x-thriftserver-error-message header and
         // propagated into the thrown exception's message (see ThriftErrorMessageHandler). The full text
         // is "BAD_REQUEST: Lakehouse/RT is not supported for Thrift protocol. Please update your ...".
-        // Matched case-insensitively as a substring so wrapping/prefix changes don't defeat detection.
+        // Both tokens are required (case-insensitive substrings) so that an unrelated future server
+        // error that merely says "...not supported for Thrift protocol..." for a different reason
+        // (a specific unsupported feature, a version gate, etc.) can't be mistaken for the Reyden
+        // rejection and wrongly pin a Thrift-capable warehouse to SEA for the full cache TTL. The
+        // distinctive "Lakehouse/RT" token is what identifies the Reyden rejection specifically;
+        // matching as substrings still tolerates wrapping/prefix changes around the message.
+        private const string LakehouseRtMarker = "Lakehouse/RT";
         private const string ThriftNotSupportedMarker = "not supported for Thrift protocol";
 
         // Path form for a SQL warehouse: /sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}.
@@ -94,6 +100,7 @@ namespace AdbcDrivers.Databricks
             for (Exception? current = exception; current != null; )
             {
                 if (current.Message != null &&
+                    current.Message.IndexOf(LakehouseRtMarker, StringComparison.OrdinalIgnoreCase) >= 0 &&
                     current.Message.IndexOf(ThriftNotSupportedMarker, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
