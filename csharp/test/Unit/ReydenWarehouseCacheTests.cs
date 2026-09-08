@@ -21,13 +21,15 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests
 {
     /// <summary>
-    /// Unit tests for <see cref="ReydenWarehouseCache"/> — presence tracking and TTL expiry.
+    /// Unit tests for <see cref="ReydenWarehouseCache"/> — presence tracking and the configured TTL.
+    /// Actual time-based eviction is delegated to (and covered by) IMemoryCache, mirroring how
+    /// FeatureFlagCache tests its cache layer: assert the TTL value and presence, not the framework's clock.
     /// </summary>
     public class ReydenWarehouseCacheTests
     {
         public ReydenWarehouseCacheTests()
         {
-            // The cache is process-wide static; isolate each test.
+            // The cache is process-wide; isolate each test.
             ReydenWarehouseCache.Clear();
         }
 
@@ -47,27 +49,13 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         [Fact]
-        public void EntryIsLiveWithinTtlAndExpiresAfter()
+        public void ClearRemovesEntries()
         {
-            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            ReydenWarehouseCache.Mark("wh-ttl", t0);
+            ReydenWarehouseCache.Mark("wh-clear");
+            Assert.True(ReydenWarehouseCache.IsReyden("wh-clear"));
 
-            // Just before expiry: still Reyden.
-            Assert.True(ReydenWarehouseCache.IsReyden("wh-ttl", t0 + ReydenWarehouseCache.Ttl - TimeSpan.FromMinutes(1)));
-            // At/after expiry: no longer Reyden.
-            Assert.False(ReydenWarehouseCache.IsReyden("wh-ttl", t0 + ReydenWarehouseCache.Ttl + TimeSpan.FromMinutes(1)));
-        }
-
-        [Fact]
-        public void ExpiredEntryIsReProbedNotPinned()
-        {
-            var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            ReydenWarehouseCache.Mark("wh-reprobe", t0);
-
-            // Reading after expiry evicts the stale entry...
-            Assert.False(ReydenWarehouseCache.IsReyden("wh-reprobe", t0 + ReydenWarehouseCache.Ttl + TimeSpan.FromHours(1)));
-            // ...so a default-clock read (now, well past t0) is also false: the warehouse is re-probed over Thrift.
-            Assert.False(ReydenWarehouseCache.IsReyden("wh-reprobe"));
+            ReydenWarehouseCache.Clear();
+            Assert.False(ReydenWarehouseCache.IsReyden("wh-clear"));
         }
 
         [Theory]
@@ -77,6 +65,14 @@ namespace AdbcDrivers.Databricks.Tests
         {
             ReydenWarehouseCache.Mark(id);
             Assert.False(ReydenWarehouseCache.IsReyden(id));
+        }
+
+        [Fact]
+        public void TtlIsSixHours()
+        {
+            // A mark is written to IMemoryCache with this absolute expiration; eviction after it lapses
+            // is IMemoryCache's contract. Asserting the value guards against an accidental TTL change.
+            Assert.Equal(TimeSpan.FromHours(6), ReydenWarehouseCache.Ttl);
         }
     }
 }

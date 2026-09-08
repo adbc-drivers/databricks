@@ -15,11 +15,11 @@
 */
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AdbcDrivers.Databricks
 {
@@ -33,66 +33,36 @@ namespace AdbcDrivers.Databricks
     /// legitimately present the same id. Including the host prevents a mark in one workspace from
     /// leaking to a healthy, Thrift-capable warehouse with the same id in another.
     ///
-    /// The cache is static so it lives for the process (a fresh driver load starts empty, matching
-    /// the documented "cleared on driver-instance restart" behavior) and entries expire after a TTL,
-    /// so a warehouse that is later reconfigured is re-probed rather than pinned to SEA forever.
+    /// Entries live in a process-wide <see cref="IMemoryCache"/> (the same mechanism
+    /// <see cref="FeatureFlagCache"/> uses), so a fresh driver load starts empty — matching the
+    /// documented "cleared on driver-instance restart" behavior — and each mark is written with an
+    /// absolute TTL that the cache expires and evicts on its own. Once a mark lapses the warehouse is
+    /// re-probed over Thrift rather than pinned to SEA forever.
     /// </summary>
     internal static class ReydenWarehouseCache
     {
         /// <summary>How long a warehouse stays marked as Reyden before it is re-probed.</summary>
         internal static readonly TimeSpan Ttl = TimeSpan.FromHours(6);
 
-        // Maps warehouse cache key -> UTC instant at which the entry expires.
-        private static readonly ConcurrentDictionary<string, DateTime> s_expiryByCacheKey =
-            new ConcurrentDictionary<string, DateTime>();
+        // Process-wide memory cache. Each mark is written with an absolute TTL that the cache expires
+        // and evicts on its own; a fresh driver load starts empty (matching "cleared on restart").
+        private static readonly MemoryCache s_cache = new MemoryCache(new MemoryCacheOptions());
 
         /// <summary>Marks a warehouse cache key as Reyden, expiring <see cref="Ttl"/> from now.</summary>
-        internal static void Mark(string? cacheKey) => Mark(cacheKey, DateTime.UtcNow);
-
-        /// <summary>Test seam: mark using an explicit clock so TTL behavior is deterministic.</summary>
-        internal static void Mark(string? cacheKey, DateTime nowUtc)
+        internal static void Mark(string? cacheKey)
         {
-            if (string.IsNullOrEmpty(cacheKey))
+            if (!string.IsNullOrEmpty(cacheKey))
             {
-                return;
+                s_cache.Set(cacheKey!, true, Ttl);
             }
-
-            s_expiryByCacheKey[cacheKey!] = nowUtc + Ttl;
         }
 
         /// <summary>Returns true if the warehouse cache key is a live (non-expired) Reyden entry.</summary>
-        internal static bool IsReyden(string? cacheKey) => IsReyden(cacheKey, DateTime.UtcNow);
-
-        /// <summary>Test seam: evaluate against an explicit clock so TTL behavior is deterministic.</summary>
-        internal static bool IsReyden(string? cacheKey, DateTime nowUtc)
-        {
-            if (string.IsNullOrEmpty(cacheKey))
-            {
-                return false;
-            }
-
-            if (s_expiryByCacheKey.TryGetValue(cacheKey!, out DateTime expiry))
-            {
-                if (nowUtc < expiry)
-                {
-                    return true;
-                }
-
-                // Expired: drop it so a reconfigured warehouse is re-probed over Thrift. Use a
-                // value-conditional remove so a concurrent Mark() that races in between the
-                // TryGetValue above and here — writing a fresh, non-expired expiry — is not
-                // clobbered. ConcurrentDictionary's ICollection<KeyValuePair<,>>.Remove removes
-                // only when both key and value match, and (unlike the TryRemove(KeyValuePair<,>)
-                // overload) is available on netstandard2.0.
-                ((ICollection<KeyValuePair<string, DateTime>>)s_expiryByCacheKey)
-                    .Remove(new KeyValuePair<string, DateTime>(cacheKey!, expiry));
-            }
-
-            return false;
-        }
+        internal static bool IsReyden(string? cacheKey)
+            => !string.IsNullOrEmpty(cacheKey) && s_cache.TryGetValue(cacheKey!, out _);
 
         /// <summary>Test seam: reset the cache between tests.</summary>
-        internal static void Clear() => s_expiryByCacheKey.Clear();
+        internal static void Clear() => s_cache.Compact(1.0);
     }
 
     /// <summary>
