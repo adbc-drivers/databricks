@@ -104,39 +104,36 @@ namespace AdbcDrivers.Databricks
                     protocol = protocolValue.ToLowerInvariant();
                 }
 
+                // Reyden / Lakehouse-RT warehouses reject the Thrift protocol and must be driven over
+                // the Statement Execution API (SEA). If this warehouse has already been observed to be
+                // Reyden (cached below on a prior connect), skip the doomed Thrift OpenSession and go
+                // straight to SEA. Applies only when Thrift was requested; explicit rest/rest is untouched.
+                string? warehouseId = ReydenFallback.TryGetWarehouseId(mergedProperties);
+                if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseId))
+                {
+                    protocol = "rest";
+                }
+
                 AdbcConnection connection;
 
                 if (protocol == "rest")
                 {
-                    // Use Statement Execution REST API
-                    // The connection creates its own HTTP client with proper handler chain
-                    // including TracingDelegatingHandler, RetryHttpHandler, and OAuth authentication
-                    // handlers (OAuthDelegatingHandler, TokenRefreshDelegatingHandler,
-                    // MandatoryTokenExchangeDelegatingHandler) when OAuth auth is configured
-                    connection = new StatementExecutionConnection(
-                        mergedProperties,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
-
-                    // Open the connection to create session if needed
-                    var statementConnection = (StatementExecutionConnection)connection;
-                    statementConnection.OpenAsync().Wait();
-                    // Mirrors Thrift wiring below: when apply_ssp_with_queries=true,
-                    // run post-open SET statements for each adbc.databricks.ssp_*.
-                    // No-op when the flag is false (SSPs already in CreateSession.session_confs).
-                    statementConnection.ApplyServerSidePropertiesAsync().Wait();
+                    connection = OpenStatementExecutionConnection(mergedProperties);
                 }
                 else if (protocol == "thrift")
                 {
-                    // Use traditional Thrift/HiveServer2 protocol
-                    connection = new DatabricksConnection(
-                        mergedProperties,
-                        this.RecyclableMemoryStreamManager,
-                        this.Lz4BufferPool);
-
-                    var databricksConnection = (DatabricksConnection)connection;
-                    databricksConnection.OpenAsync().Wait();
-                    databricksConnection.ApplyServerSidePropertiesAsync().Wait();
+                    try
+                    {
+                        connection = OpenThriftConnection(mergedProperties);
+                    }
+                    catch (Exception ex) when (warehouseId != null && ReydenFallback.IsThriftRejection(ex))
+                    {
+                        // This warehouse is Reyden / Lakehouse-RT: Thrift is not supported. Remember it
+                        // so subsequent connects skip Thrift, and transparently retry over SEA (the
+                        // driver-side equivalent of forcing the kernel/Statement Execution path).
+                        ReydenWarehouseCache.Mark(warehouseId);
+                        connection = OpenStatementExecutionConnection(mergedProperties);
+                    }
                 }
                 else
                 {
@@ -146,6 +143,43 @@ namespace AdbcDrivers.Databricks
                 }
 
                 return connection;
+
+                // Builds and opens a Statement Execution API (SEA) connection. It creates its own HTTP
+                // client with the proper handler chain (TracingDelegatingHandler, RetryHttpHandler, and
+                // OAuth handlers when OAuth is configured).
+                AdbcConnection OpenStatementExecutionConnection(IReadOnlyDictionary<string, string> props)
+                {
+                    var seaConnection = new StatementExecutionConnection(
+                        props,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+                    seaConnection.OpenAsync().Wait();
+                    // When apply_ssp_with_queries=true, run post-open SET statements for each
+                    // adbc.databricks.ssp_*. No-op when false (SSPs already in CreateSession.session_confs).
+                    seaConnection.ApplyServerSidePropertiesAsync().Wait();
+                    return seaConnection;
+                }
+
+                // Builds and opens a traditional Thrift/HiveServer2 connection, disposing it if the open
+                // fails so a fallback to SEA does not leak the failed connection's resources.
+                AdbcConnection OpenThriftConnection(IReadOnlyDictionary<string, string> props)
+                {
+                    var thriftConnection = new DatabricksConnection(
+                        props,
+                        this.RecyclableMemoryStreamManager,
+                        this.Lz4BufferPool);
+                    try
+                    {
+                        thriftConnection.OpenAsync().Wait();
+                        thriftConnection.ApplyServerSidePropertiesAsync().Wait();
+                        return thriftConnection;
+                    }
+                    catch
+                    {
+                        thriftConnection.Dispose();
+                        throw;
+                    }
+                }
             }
             catch (AggregateException ae)
             {
