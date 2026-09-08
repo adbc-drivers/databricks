@@ -204,11 +204,21 @@ namespace AdbcDrivers.Databricks
             // Reyden / Lakehouse-RT pre-check: if this warehouse was previously observed to reject
             // Thrift, skip the doomed Thrift OpenSession and go straight to SEA.
             string? warehouseCacheKey = ReydenFallback.TryGetWarehouseCacheKey(mergedProperties);
+            // Emit the cache key's components as discrete telemetry dimensions rather than the raw
+            // composite key: the composite embeds a literal newline (ReydenFallback.CacheKeySeparator),
+            // which some OpenTelemetry exporters/log sinks mangle or truncate, and separate tags are
+            // easier to query.
+            string? warehouseId = ReydenFallback.TryGetWarehouseId(mergedProperties);
+            string? host = FeatureFlagCache.TryGetHost(mergedProperties);
             if (protocol == "thrift" && ReydenWarehouseCache.IsReyden(warehouseCacheKey))
             {
                 protocol = "rest";
                 Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.skip_thrift",
-                    tags: new ActivityTagsCollection { { "warehouse_cache_key", warehouseCacheKey } }));
+                    tags: new ActivityTagsCollection
+                    {
+                        { "host", host },
+                        { "warehouse_id", warehouseId },
+                    }));
             }
 
             if (protocol == "rest")
@@ -230,7 +240,8 @@ namespace AdbcDrivers.Databricks
                     Activity.Current?.AddEvent(new ActivityEvent("reyden_fallback.thrift_rejected",
                         tags: new ActivityTagsCollection
                         {
-                            { "warehouse_cache_key", warehouseCacheKey },
+                            { "host", host },
+                            { "warehouse_id", warehouseId },
                             { "error", ex.Message },
                         }));
                     try
