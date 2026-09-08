@@ -165,6 +165,32 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.NotEqual(keyA, keyB);
         }
 
+        /// <summary>
+        /// The same warehouse reached with the host in different casing must hash to one cache key,
+        /// matching the host normalization FeatureFlagCache applies (host.ToLowerInvariant()). The
+        /// HostName-without-scheme path preserves the caller's casing, so the key builder must lowercase.
+        /// </summary>
+        [Fact]
+        public void TryGetWarehouseCacheKey_NormalizesHostCasing()
+        {
+            var upper = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "MyHost.Databricks.Com",
+                [DatabricksParameters.WarehouseId] = "abc123",
+            };
+            var lower = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "myhost.databricks.com",
+                [DatabricksParameters.WarehouseId] = "abc123",
+            };
+
+            string? keyUpper = ReydenFallback.TryGetWarehouseCacheKey(upper);
+            string? keyLower = ReydenFallback.TryGetWarehouseCacheKey(lower);
+
+            Assert.NotNull(keyUpper);
+            Assert.Equal(keyLower, keyUpper);
+        }
+
         [Fact]
         public void TryGetWarehouseCacheKey_NullForGeneralClusterPath()
         {

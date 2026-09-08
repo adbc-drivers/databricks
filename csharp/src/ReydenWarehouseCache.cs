@@ -198,8 +198,10 @@ namespace AdbcDrivers.Databricks
 
             // Fall back to an empty host component when the host can't be resolved; the warehouse id
             // still keys the entry, so behavior degrades to the previous (id-only) semantics rather
-            // than dropping the fallback entirely.
-            string host = FeatureFlagCache.TryGetHost(properties) ?? string.Empty;
+            // than dropping the fallback entirely. Lowercase the host so that connects supplying the
+            // same host with different casing hash to one entry — matching the normalization
+            // FeatureFlagCache already applies to its per-host key (host.ToLowerInvariant()).
+            string host = (FeatureFlagCache.TryGetHost(properties) ?? string.Empty).ToLowerInvariant();
             return host + CacheKeySeparator + warehouseId;
         }
     }
