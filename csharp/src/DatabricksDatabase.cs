@@ -259,8 +259,13 @@ namespace AdbcDrivers.Databricks
                         // chains so the failure stays diagnosable outside of tracing — otherwise the
                         // original Thrift rejection is silently discarded and the user sees only the SEA
                         // error with no hint that a protocol downgrade was attempted. The SEA error is
-                        // listed first so Connect()'s AggregateException unwrap surfaces it as the primary
-                        // AdbcException, while the original Thrift rejection is kept as an inner exception.
+                        // listed first because it is the failure of the protocol we ultimately attempted;
+                        // Connect()'s AggregateException unwrap (ApacheUtility.ContainsException) does a
+                        // depth-first search for the first AdbcException, so the SEA error becomes the
+                        // primary only when it is itself an AdbcException. When the SEA fallback fails with
+                        // a non-AdbcException (e.g. HttpRequestException), the DFS instead surfaces the
+                        // Thrift rejection (a HiveServer2Exception) as primary. Either way BOTH causal
+                        // chains are retained as inner exceptions, so the failure stays diagnosable.
                         throw new AggregateException(
                             "Thrift is not supported for this warehouse (Reyden / Lakehouse-RT) and the " +
                             "automatic Statement Execution (SEA) fallback also failed. See inner exceptions " +
