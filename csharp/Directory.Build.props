@@ -52,4 +52,12 @@ limitations under the License.
     </PackageReference>
   </ItemGroup>
 
+  <!-- CVE-2026-62900 (GHSA-23fw-v26w-5fgq): NuGet audit flags the .NET SDK's SourceLink build
+       task (Microsoft.Build.Tasks.Git), a build-time-only dependency with no runtime exposure.
+       Suppress this one advisory so NU1902 stays an error for every other advisory; drop once
+       the SDK bundles the patched 10.0.303+. -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-23fw-v26w-5fgq" />
+  </ItemGroup>
+
 </Project>
