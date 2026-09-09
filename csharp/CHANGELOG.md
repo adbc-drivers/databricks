@@ -20,6 +20,29 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-09-09
+
+### Added
+
+- Transparently fall back to the Statement Execution API (SEA) when a Reyden/Lakehouse-RT warehouse rejects a Thrift `OpenSession` with SQLSTATE `KP001` (#670)
+
+## [1.1.9] - 2026-09-04
+
+### Added
+
+- Make the driver AOT/trim-safe under `net10.0` (#509)
+- Apply server feature flags synchronously on connect (#656)
+
+### Fixed
+
+- Don't filter `GetCrossReference` by the seeded default catalog (#660)
+- Align `GetCrossReference` Thrift and SEA paths on parent identifiers (#645)
+- Default empty/null `TABLE_TYPE` to `TABLE` in `GetTables` (#654)
+
+### Changed
+
+- Update hiveserver2 submodule to downgrade ApacheThrift (#649)
+
 ## [1.1.8] - 2026-08-11
 
 ### Added

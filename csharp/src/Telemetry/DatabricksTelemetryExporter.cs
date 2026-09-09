@@ -64,8 +64,6 @@ namespace AdbcDrivers.Databricks.Telemetry
         private readonly TelemetryConfiguration _config;
         private readonly ResiliencePipeline _retryPipeline;
 
-        private static readonly JsonSerializerOptions s_jsonOptions = TelemetryJsonOptions.Default;
-
         /// <summary>
         /// Gets the host URL for the telemetry endpoint.
         /// </summary>
@@ -197,7 +195,7 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             foreach (var log in logs)
             {
-                var serializedLog = JsonSerializer.Serialize(log, s_jsonOptions);
+                var serializedLog = TelemetryPayloadWriter.SerializeFrontendLog(log);
                 protoLogs.Add(serializedLog);
             }
 
@@ -213,7 +211,7 @@ namespace AdbcDrivers.Databricks.Telemetry
         /// </summary>
         internal string SerializeRequest(TelemetryRequest request)
         {
-            return JsonSerializer.Serialize(request, s_jsonOptions);
+            return JsonSerializer.Serialize(request, TelemetryJsonContext.Default.TelemetryRequest);
         }
 
         /// <summary>

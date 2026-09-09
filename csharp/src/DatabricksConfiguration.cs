@@ -81,15 +81,11 @@ namespace AdbcDrivers.Databricks
             try
             {
                 string json = File.ReadAllText(filePath);
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    ReadCommentHandling = JsonCommentHandling.Skip,
-                    AllowTrailingCommas = true
-                };
 
-                // Deserialize as flat dictionary (free-form JSON)
-                var properties = JsonSerializer.Deserialize<Dictionary<string, string>>(json, options);
+                // Deserialize as flat dictionary (free-form JSON). The source-generated context
+                // (case-insensitive, comments skipped, trailing commas allowed) keeps this
+                // trim- and NativeAOT-safe.
+                var properties = JsonSerializer.Deserialize(json, DatabricksConfigJsonContext.Default.DictionaryStringString);
                 if (properties == null)
                 {
                     throw new InvalidOperationException($"Failed to deserialize configuration from {filePath}");

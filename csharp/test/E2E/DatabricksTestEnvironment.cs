@@ -24,7 +24,9 @@
 using System;
 using System.Collections.Generic;
 using System.Data.SqlTypes;
+using System.Linq;
 using System.Text;
+using System.Text.Json;
 using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.HiveServer2;
@@ -48,6 +50,40 @@ namespace AdbcDrivers.Databricks.Tests
         /// per-run-unique schema. See docs/e2e-test-isolation-guidance.md.
         /// </summary>
         public const string FixtureSchema = "adbc_testing";
+
+        /// <summary>
+        /// Normalizes a serialized MAP for order-insensitive comparison by sorting the
+        /// top-level object's keys. Databricks <c>MAP</c> key order is unspecified — the
+        /// server may return keys in any order — and JDBC preserves that server order
+        /// without sorting, so a MAP must be compared by its content, not by key order.
+        /// Only the map's own keys are reordered; each value's raw JSON is preserved
+        /// verbatim, so nested STRUCT field order (which IS significant) is untouched.
+        /// Non-object JSON (e.g. a top-level array) is returned unchanged.
+        ///
+        /// Normalization is intentionally shallow: a MAP nested inside a value keeps the
+        /// server's key order in its raw JSON and is NOT reordered. Current MAP test data
+        /// only has scalar values, so this is safe today; if a future case nests a MAP
+        /// inside a value, this method must be made recursive to avoid reintroducing the
+        /// key-order flake for that case.
+        /// </summary>
+        internal static string? NormalizeMapJson(string? json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                return json;
+            }
+
+            using JsonDocument doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return json;
+            }
+
+            IEnumerable<string> entries = doc.RootElement.EnumerateObject()
+                .OrderBy(p => p.Name, StringComparer.Ordinal)
+                .Select(p => JsonSerializer.Serialize(p.Name) + ":" + p.Value.GetRawText());
+            return "{" + string.Join(",", entries) + "}";
+        }
 
         public class Factory : Factory<DatabricksTestEnvironment>
         {
@@ -334,7 +370,12 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 new ColumnNetTypeArrowTypeValue("numbers", typeof(string), typeof(StringType), "[1,2,3]"),
                 new ColumnNetTypeArrowTypeValue("person", typeof(string), typeof(StringType), """{"name":"John Doe","age":30}"""),
-                new ColumnNetTypeArrowTypeValue("map", typeof(string), typeof(StringType), """{"age":"29","name":"Jane Doe"}"""), // This is unexpected JSON. Expecting 29 to be a numeric and not string.
+                // MAP key order is unspecified server-side (and JDBC preserves server order
+                // without sorting), so validate the map's content order-insensitively rather
+                // than by exact key order. (The "29" being a quoted string rather than numeric
+                // is a separate, pre-existing quirk of the serialized output.)
+                new ColumnNetTypeArrowTypeValue("map", typeof(string), typeof(StringType), true,
+                    actual => NormalizeMapJson("""{"age":"29","name":"Jane Doe"}""") == NormalizeMapJson(actual as string)),
             });
 
             sampleDataBuilder.Samples.Add(

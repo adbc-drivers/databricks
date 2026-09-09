@@ -135,7 +135,25 @@ namespace AdbcDrivers.Databricks.Tests
         {
             if (!CorrectedMapExpectations.TryGetValue(projection, out string? expected))
                 expected = value;
-            await base.ValidateTestMapData(projection, expected);
+
+            // Databricks MAP key order is unspecified server-side (and JDBC preserves server
+            // order without sorting), so assert the map's content order-insensitively rather
+            // than by exact key order — otherwise the comparison flakes with the server's order.
+            Statement.SqlQuery = $"SELECT {projection};";
+            QueryResult result = await Statement.ExecuteQueryAsync();
+
+            using IArrowArrayStream stream = result.Stream ?? throw new InvalidOperationException("stream is null");
+            Field field = stream.Schema.GetFieldByIndex(0);
+            Assert.IsType<StringType>(field.DataType);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch!.Length);
+
+            string? actual = ((StringArray)batch.Column(0)).GetString(0);
+            Assert.Equal(
+                DatabricksTestEnvironment.NormalizeMapJson(expected),
+                DatabricksTestEnvironment.NormalizeMapJson(actual));
         }
 
         // COMPLEX-001: Simple ARRAY of integers
