@@ -26,5 +26,11 @@ set -ex
 source_dir=${1}/csharp/src
 
 pushd ${source_dir}
-dotnet build AdbcDrivers.Databricks.csproj
+# NU1902 (CVE-2026-62900 / GHSA-23fw-v26w-5fgq): the .NET SDK's SourceLink build task
+# Microsoft.Build.Tasks.Git is flagged by NuGet audit. It's a build-time-only dependency.
+# The main project suppresses it via Directory.Build.props, but the referenced hiveserver2
+# submodule project has its own Directory.Build.props and can't read that suppression, so
+# demote NU1902 to a warning for the whole build here. Remove once the SDK bundles the
+# patched Microsoft.Build.Tasks.Git 10.0.303+.
+dotnet build AdbcDrivers.Databricks.csproj -p:WarningsNotAsErrors=NU1902
 popd
