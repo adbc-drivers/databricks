@@ -27,5 +27,9 @@ set -ex
 source_dir=${1}/csharp/test
 
 pushd ${source_dir}
-dotnet test --filter "FullyQualifiedName~Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit"
+# -p:WarningsNotAsErrors=NU1902: same reason as ci/scripts/csharp_build.sh — the SDK's SourceLink
+# build task (Microsoft.Build.Tasks.Git) is flagged by CVE-2026-62900 and the referenced hiveserver2 /
+# arrow-adbc submodule projects can't read the main repo's NuGetAuditSuppress. Remove once the SDK
+# bundles the patched build task.
+dotnet test --filter "FullyQualifiedName~Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit" -p:WarningsNotAsErrors=NU1902
 popd
