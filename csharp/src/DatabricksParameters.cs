@@ -411,6 +411,12 @@ namespace AdbcDrivers.Databricks
         /// - "thrift": Use Thrift/HiveServer2 protocol (default)
         /// - "rest": Use Statement Execution REST API
         /// Default value is "thrift" if not specified.
+        ///
+        /// Note: "thrift" is best-effort. Some warehouses (Reyden / Lakehouse-RT) do not support
+        /// Thrift; against such a warehouse the driver transparently falls back to the Statement
+        /// Execution (REST) API even when "thrift" is requested explicitly. The fallback is cached
+        /// per warehouse for a bounded TTL and self-heals afterward. This is intentional so a
+        /// connection succeeds rather than hard-failing on the unsupported protocol.
         /// </summary>
         public const string Protocol = "adbc.databricks.protocol";
 
