@@ -33,73 +33,39 @@ namespace AdbcDrivers.Databricks.Tests
     /// </summary>
     public class ReydenFallbackTests
     {
-        // The exact message surfaced by the SQL proxy for a Reyden warehouse (via ThriftErrorMessageHandler).
-        private const string ReydenErrorText =
-            "Thrift server error: BAD_REQUEST: Lakehouse/RT is not supported for Thrift protocol. " +
-            "Please update your Databricks SQL Driver version to the latest version, which supports " +
-            "the Statement Execution API protocol (HTTP 400 Bad Request)";
-
         public ReydenFallbackTests()
         {
             ReydenWarehouseCache.Clear();
         }
 
+        // The Reyden/Lakehouse-RT rejection as the driver surfaces it: a HiveServer2Exception carrying
+        // sqlState KP001 (see HandleThriftResponse/ThrowErrorResponse).
+        private const string ReydenRejectionMessage = "Lakehouse/RT is not supported for Thrift protocol";
+        private static HiveServer2Exception ReydenRejection() =>
+            new HiveServer2Exception(ReydenRejectionMessage).SetSqlState("KP001");
+
         [Fact]
-        public void IsThriftRejection_DetectsDirectMessage()
+        public void IsThriftRejection_DetectsKp001SqlState()
         {
-            Assert.True(ReydenFallback.IsThriftRejection(new HttpRequestException(ReydenErrorText)));
+            var ex = new HiveServer2Exception("rejected").SetSqlState("KP001");
+            Assert.True(ReydenFallback.IsThriftRejection(ex));
         }
 
         [Fact]
         public void IsThriftRejection_WalksInnerExceptionChain()
         {
+            // The KP001 HiveServer2Exception is normally buried under wrapper exceptions.
             var chained = new InvalidOperationException(
                 "An unexpected error occurred while opening the session.",
-                new Exception("Couldn't connect to server", new HttpRequestException(ReydenErrorText)));
+                new Exception("Couldn't connect to server",
+                    new HiveServer2Exception("rejected").SetSqlState("KP001")));
             Assert.True(ReydenFallback.IsThriftRejection(chained));
         }
 
         [Fact]
         public void IsThriftRejection_WalksAggregateException()
         {
-            var aggregate = new AggregateException(
-                new Exception("unrelated"),
-                new HttpRequestException(ReydenErrorText));
-            Assert.True(ReydenFallback.IsThriftRejection(aggregate));
-        }
-
-        [Fact]
-        public void IsThriftRejection_FalseForUnrelatedErrorsAndNull()
-        {
-            Assert.False(ReydenFallback.IsThriftRejection(null));
-            Assert.False(ReydenFallback.IsThriftRejection(
-                new HttpRequestException("Thrift server error: TFetchOrientation ... (HTTP 500)")));
-        }
-
-        [Fact]
-        public void IsThriftRejection_FalseForUnrelatedThriftUnsupportedError()
-        {
-            // An unrelated server error that merely mentions "...not supported for Thrift protocol..."
-            // (e.g. a specific unsupported feature) must NOT be mistaken for the Reyden rejection and
-            // pin an otherwise Thrift-capable warehouse to SEA: the distinctive "Lakehouse/RT" token
-            // is required in addition to the phrase.
-            Assert.False(ReydenFallback.IsThriftRejection(new HttpRequestException(
-                "BAD_REQUEST: FooBar feature is not supported for Thrift protocol (HTTP 400 Bad Request)")));
-        }
-
-        [Fact]
-        public void IsThriftRejection_DetectsKp001SqlStateEvenWithoutMatchingMessage()
-        {
-            // Newer gateway: valid error TOpenSessionResp -> HiveServer2Exception carrying sqlState KP001.
-            // The message need NOT contain the "not supported for Thrift protocol" text; the sqlState is
-            // the stable signal.
-            var ex = new HiveServer2Exception("session could not be opened").SetSqlState("KP001");
-            Assert.True(ReydenFallback.IsThriftRejection(ex));
-        }
-
-        [Fact]
-        public void IsThriftRejection_DetectsKp001SqlStateNestedInAggregate()
-        {
+            // .Wait() wraps the KP001 exception in an AggregateException.
             var ex = new AggregateException(
                 new Exception("unrelated"),
                 new HiveServer2Exception("rejected").SetSqlState("KP001"));
@@ -107,11 +73,12 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         [Fact]
-        public void IsThriftRejection_FalseForOtherSqlState()
+        public void IsThriftRejection_FalseForOtherSqlStateAndNull()
         {
-            // A different sqlState with a non-matching message must NOT be treated as a Reyden rejection.
-            var ex = new HiveServer2Exception("some transient server error").SetSqlState("08000");
-            Assert.False(ReydenFallback.IsThriftRejection(ex));
+            Assert.False(ReydenFallback.IsThriftRejection(null));
+            // A different sqlState must NOT be treated as a Reyden rejection.
+            Assert.False(ReydenFallback.IsThriftRejection(
+                new HiveServer2Exception("some transient server error").SetSqlState("08000")));
         }
 
         [Theory]
@@ -176,7 +143,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
 
             // Simulate the failed Thrift OpenSession surfacing the Reyden rejection.
-            var openSessionError = new AggregateException(new HttpRequestException(ReydenErrorText));
+            var openSessionError = new AggregateException(ReydenRejection());
             Assert.True(ReydenFallback.IsThriftRejection(openSessionError));
             ReydenWarehouseCache.Mark(cacheKey);
 
@@ -277,7 +244,7 @@ namespace AdbcDrivers.Databricks.Tests
                 {
                     thriftAttempts++;
                     // Mirror the real failed-open surface: OpenAsync().Wait() wraps in AggregateException.
-                    throw new AggregateException(new HttpRequestException(ReydenErrorText));
+                    throw new AggregateException(ReydenRejection());
                 },
                 _ => "sea");
 
@@ -302,7 +269,7 @@ namespace AdbcDrivers.Databricks.Tests
             string? cacheKey = ReydenFallback.TryGetWarehouseCacheKey(props);
             Assert.False(ReydenWarehouseCache.IsReyden(cacheKey));
 
-            var thriftRejection = new HttpRequestException(ReydenErrorText);
+            var thriftRejection = ReydenRejection();
             var seaFailure = new HttpRequestException("SEA auth failed");
 
             var thrown = Assert.Throws<AggregateException>(() =>
@@ -313,7 +280,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             // Both the SEA error and the original Thrift rejection are reachable from the chain.
             var innerMessages = thrown.Flatten().InnerExceptions.Select(e => e.Message).ToList();
-            Assert.Contains(ReydenErrorText, innerMessages);
+            Assert.Contains(ReydenRejectionMessage, innerMessages);
             Assert.Contains("SEA auth failed", innerMessages);
             // The warehouse is still marked so future connects skip the doomed Thrift open.
             Assert.True(ReydenWarehouseCache.IsReyden(cacheKey));
@@ -362,7 +329,7 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Throws<AggregateException>(() =>
                 DatabricksDatabase.RouteConnection<string>(
                     props,
-                    _ => throw new AggregateException(new HttpRequestException(ReydenErrorText)),
+                    _ => throw new AggregateException(ReydenRejection()),
                     _ => { seaCalled = true; return "sea"; }));
 
             Assert.False(seaCalled);

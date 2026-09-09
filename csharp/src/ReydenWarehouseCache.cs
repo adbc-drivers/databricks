@@ -75,22 +75,11 @@ namespace AdbcDrivers.Databricks
         // Separator between the host and warehouse-id components of the cache key. A newline can never
         // appear in a host or warehouse id, so it can't be used to forge a collision between keys.
         private const char CacheKeySeparator = '\n';
-        // The Reyden signal surfaced by the SQL proxy in the x-thriftserver-error-message header and
-        // propagated into the thrown exception's message (see ThriftErrorMessageHandler). The full text
-        // is "BAD_REQUEST: Lakehouse/RT is not supported for Thrift protocol. Please update your ...".
-        // Both tokens are required (case-insensitive substrings) so that an unrelated future server
-        // error that merely says "...not supported for Thrift protocol..." for a different reason
-        // (a specific unsupported feature, a version gate, etc.) can't be mistaken for the Reyden
-        // rejection and wrongly pin a Thrift-capable warehouse to SEA for the full cache TTL. The
-        // distinctive "Lakehouse/RT" token is what identifies the Reyden rejection specifically;
-        // matching as substrings still tolerates wrapping/prefix changes around the message.
-        private const string LakehouseRtMarker = "Lakehouse/RT";
-        private const string ThriftNotSupportedMarker = "not supported for Thrift protocol";
 
-        // Preferred, stable signal from the newer SQL gateway: it rejects a Reyden/Lakehouse-RT Thrift
-        // OpenSession with a well-formed error TOpenSessionResp carrying this SQLSTATE (universe:
-        // SqlState.REYDEN_THRIFT_PROTOCOL_UNSUPPORTED) rather than an HTTP 400. The driver surfaces it
-        // on the thrown HiveServer2Exception's SqlState (see HandleThriftResponse/ThrowErrorResponse).
+        // The stable signal the SQL gateway returns for a Reyden/Lakehouse-RT Thrift OpenSession
+        // rejection: a well-formed error TOpenSessionResp carrying this SQLSTATE (universe:
+        // SqlState.REYDEN_THRIFT_PROTOCOL_UNSUPPORTED), surfaced on the thrown HiveServer2Exception's
+        // SqlState (see HandleThriftResponse/ThrowErrorResponse).
         private const string ReydenSqlState = "KP001";
 
         // Path form for a SQL warehouse: /sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}.
@@ -106,19 +95,10 @@ namespace AdbcDrivers.Databricks
         {
             for (Exception? current = exception; current != null; )
             {
-                // Preferred, stable signal: the newer gateway returns a valid error TOpenSessionResp
-                // whose status.sqlState is KP001, surfaced as HiveServer2Exception.SqlState.
+                // The gateway rejects a Reyden/Lakehouse-RT Thrift OpenSession with sqlState KP001,
+                // surfaced on the thrown HiveServer2Exception.SqlState.
                 if (current is HiveServer2Exception hive &&
                     string.Equals(hive.SqlState, ReydenSqlState, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-
-                // Fallback for the older gateway that rejects with an HTTP 400 carrying the text but no
-                // sqlState (surfaced as an HttpRequestException via ThriftErrorMessageHandler).
-                if (current.Message != null &&
-                    current.Message.IndexOf(LakehouseRtMarker, StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    current.Message.IndexOf(ThriftNotSupportedMarker, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }
