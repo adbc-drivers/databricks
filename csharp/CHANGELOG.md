@@ -20,6 +20,12 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-09-09
+
+### Added
+
+- Transparently fall back to the Statement Execution API (SEA) when a Reyden/Lakehouse-RT warehouse rejects a Thrift `OpenSession` with SQLSTATE `KP001` (#670)
+
 ## [1.1.9] - 2026-09-04
 
 ### Added
