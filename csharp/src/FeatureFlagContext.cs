@@ -377,7 +377,7 @@ namespace AdbcDrivers.Databricks
         {
             try
             {
-                var response = JsonSerializer.Deserialize(content, FeatureFlagsJsonContext.Default.FeatureFlagsResponse);
+                var response = JsonSerializer.Deserialize<FeatureFlagsResponse>(content);
 
                 if (response?.Flags != null)
                 {
