@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using AdbcDrivers.Databricks;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 using Xunit;
@@ -84,6 +85,33 @@ namespace AdbcDrivers.Databricks.Tests
             // is required in addition to the phrase.
             Assert.False(ReydenFallback.IsThriftRejection(new HttpRequestException(
                 "BAD_REQUEST: FooBar feature is not supported for Thrift protocol (HTTP 400 Bad Request)")));
+        }
+
+        [Fact]
+        public void IsThriftRejection_DetectsKp001SqlStateEvenWithoutMatchingMessage()
+        {
+            // Newer gateway: valid error TOpenSessionResp -> HiveServer2Exception carrying sqlState KP001.
+            // The message need NOT contain the "not supported for Thrift protocol" text; the sqlState is
+            // the stable signal.
+            var ex = new HiveServer2Exception("session could not be opened").SetSqlState("KP001");
+            Assert.True(ReydenFallback.IsThriftRejection(ex));
+        }
+
+        [Fact]
+        public void IsThriftRejection_DetectsKp001SqlStateNestedInAggregate()
+        {
+            var ex = new AggregateException(
+                new Exception("unrelated"),
+                new HiveServer2Exception("rejected").SetSqlState("KP001"));
+            Assert.True(ReydenFallback.IsThriftRejection(ex));
+        }
+
+        [Fact]
+        public void IsThriftRejection_FalseForOtherSqlState()
+        {
+            // A different sqlState with a non-matching message must NOT be treated as a Reyden rejection.
+            var ex = new HiveServer2Exception("some transient server error").SetSqlState("08000");
+            Assert.False(ReydenFallback.IsThriftRejection(ex));
         }
 
         [Theory]

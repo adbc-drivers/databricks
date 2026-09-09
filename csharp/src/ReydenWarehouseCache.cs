@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 using Microsoft.Extensions.Caching.Memory;
@@ -86,6 +87,12 @@ namespace AdbcDrivers.Databricks
         private const string LakehouseRtMarker = "Lakehouse/RT";
         private const string ThriftNotSupportedMarker = "not supported for Thrift protocol";
 
+        // Preferred, stable signal from the newer SQL gateway: it rejects a Reyden/Lakehouse-RT Thrift
+        // OpenSession with a well-formed error TOpenSessionResp carrying this SQLSTATE (universe:
+        // SqlState.REYDEN_THRIFT_PROTOCOL_UNSUPPORTED) rather than an HTTP 400. The driver surfaces it
+        // on the thrown HiveServer2Exception's SqlState (see HandleThriftResponse/ThrowErrorResponse).
+        private const string ReydenSqlState = "KP001";
+
         // Path form for a SQL warehouse: /sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}.
         // Mirrors the pattern in StatementExecutionConnection so the cache key matches the SEA path.
         private static readonly Regex s_warehousePathPattern =
@@ -99,6 +106,16 @@ namespace AdbcDrivers.Databricks
         {
             for (Exception? current = exception; current != null; )
             {
+                // Preferred, stable signal: the newer gateway returns a valid error TOpenSessionResp
+                // whose status.sqlState is KP001, surfaced as HiveServer2Exception.SqlState.
+                if (current is HiveServer2Exception hive &&
+                    string.Equals(hive.SqlState, ReydenSqlState, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                // Fallback for the older gateway that rejects with an HTTP 400 carrying the text but no
+                // sqlState (surfaced as an HttpRequestException via ThriftErrorMessageHandler).
                 if (current.Message != null &&
                     current.Message.IndexOf(LakehouseRtMarker, StringComparison.OrdinalIgnoreCase) >= 0 &&
                     current.Message.IndexOf(ThriftNotSupportedMarker, StringComparison.OrdinalIgnoreCase) >= 0)
