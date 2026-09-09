@@ -81,6 +81,46 @@ namespace AdbcDrivers.Databricks.Tests
                 new HiveServer2Exception("some transient server error").SetSqlState("08000")));
         }
 
+        [Fact]
+        public void IsThriftRejection_DetectsHttpRequestExceptionWithGatewayText()
+        {
+            // The rejection can arrive as an HTTP 400 whose gateway text is carried in the
+            // x-thriftserver-error-message header; ThriftErrorMessageHandler surfaces that as an
+            // HttpRequestException (no SQLSTATE). The message-text fallback must still detect it.
+            var ex = new HttpRequestException(
+                "Thrift server error: Lakehouse/RT is not supported for Thrift protocol (HTTP 400 Bad Request)");
+            Assert.True(ReydenFallback.IsThriftRejection(ex));
+        }
+
+        [Fact]
+        public void IsThriftRejection_DetectsHiveExceptionWithNullSqlStateByMessage()
+        {
+            // A HiveServer2Exception can arrive with a null SqlState and the rejection only in the
+            // message; the text fallback must still detect it.
+            var ex = new HiveServer2Exception(ReydenRejectionMessage);
+            Assert.Null(ex.SqlState);
+            Assert.True(ReydenFallback.IsThriftRejection(ex));
+        }
+
+        [Fact]
+        public void IsThriftRejection_DetectsGatewayTextBuriedInChain()
+        {
+            // The header-only surface is normally buried under wrapper exceptions.
+            var chained = new InvalidOperationException(
+                "An unexpected error occurred while opening the session.",
+                new HttpRequestException(
+                    "Thrift server error: Lakehouse/RT is not supported for Thrift protocol (HTTP 400 Bad Request)"));
+            Assert.True(ReydenFallback.IsThriftRejection(chained));
+        }
+
+        [Fact]
+        public void IsThriftRejection_FalseForUnrelatedMessage()
+        {
+            // A generic HTTP error without the gateway rejection text must NOT trigger the fallback.
+            Assert.False(ReydenFallback.IsThriftRejection(
+                new HttpRequestException("Thrift server error: internal error (HTTP 500)")));
+        }
+
         [Theory]
         [InlineData("/sql/1.0/warehouses/000000000107b7e3", "000000000107b7e3")]
         [InlineData("/sql/1.0/endpoints/abc123", "abc123")]

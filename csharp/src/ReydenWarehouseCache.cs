@@ -82,6 +82,16 @@ namespace AdbcDrivers.Databricks
         // SqlState (see HandleThriftResponse/ThrowErrorResponse).
         private const string ReydenSqlState = "KP001";
 
+        // Fallback signal when the SQLSTATE isn't populated. The rejection can also arrive as an
+        // HTTP 400 whose gateway text is carried in the x-thriftserver-error-message header; that
+        // path is surfaced by ThriftErrorMessageHandler as an HttpRequestException (NOT a
+        // HiveServer2Exception with SqlState set), and a HiveServer2Exception can likewise arrive
+        // with a null SqlState and the state only in the message. In all those surfaces the only
+        // stable signal is the gateway's error text, so match this phrase in addition to the
+        // SQLSTATE. (Repo learning log: SqlState is frequently null with the state only in the
+        // message text.)
+        private const string ReydenRejectionMessageFragment = "not supported for Thrift protocol";
+
         // Path form for a SQL warehouse: /sql/1.0/warehouses/{id} or /sql/1.0/endpoints/{id}.
         // Mirrors the pattern in StatementExecutionConnection so the cache key matches the SEA path.
         private static readonly Regex s_warehousePathPattern =
@@ -99,6 +109,15 @@ namespace AdbcDrivers.Databricks
                 // surfaced on the thrown HiveServer2Exception.SqlState.
                 if (current is HiveServer2Exception hive &&
                     string.Equals(hive.SqlState, ReydenSqlState, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                // Fallback for surfaces that don't carry the KP001 SQLSTATE (HTTP 400 via
+                // ThriftErrorMessageHandler, or a null-SqlState HiveServer2Exception): match the
+                // gateway's error text on any exception type in the chain.
+                if (current.Message != null &&
+                    current.Message.IndexOf(ReydenRejectionMessageFragment, StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }
