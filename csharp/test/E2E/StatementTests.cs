@@ -1133,20 +1133,134 @@ namespace AdbcDrivers.Databricks.Tests
             // Store SPARK catalog schemas for comparison
             Dictionary<string, Schema> sparkSchemas = new Dictionary<string, Schema>();
 
-            // First run with SPARK catalog to get real schemas
-            await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
-            await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
-            await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
-            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+            // GetColumns is filtered to a single table name to BOUND the scan. Unfiltered,
+            // GetColumns over the "default" schema enumerates the columns of EVERY table in it
+            // (13k+ on the shared workspace) — a columns×tables scan that exceeded the 30-minute CI
+            // job cap on Thrift. GetCatalogs/GetSchemas/GetTables stay unfiltered: they are fast and
+            // their catalog-count assertions rely on the full listing.
+            //
+            // We create a same-named probe table in the "default" schema of TWO catalogs. This is
+            // what lets the SPARK case assert STRICT multi-catalog coverage (foundCatalogs.Count > 1):
+            // the SPARK alias resolves catalog to null (DatabricksConnection.HandleSparkCatalog), so
+            // a filtered GetColumns fans out and must return the probe from BOTH catalogs. Creating
+            // it in only one catalog would force the assertion down to >= 1 and stop actually testing
+            // the fanout — the whole point of this test.
+            //
+            // The two catalogs are `main` and a FRESH throwaway Unity Catalog catalog created here.
+            // We deliberately do NOT use `hive_metastore` as the second catalog: on some identities
+            // (e.g. the CI service principal) the legacy metastore's columns are reported under
+            // catalogName='main' in SHOW COLUMNS, so a hive_metastore probe collapses into `main`
+            // and the fanout yields only one distinct catalog (verified: 4 rows all TABLE_CAT='main').
+            // A newly-created UC catalog is always reported under its own name, so the two catalogs
+            // are guaranteed distinct regardless of the run identity. The non-SPARK "main" case below
+            // also finds the probe in main, exercising the catalog-scoped filtered path with a real row.
+            string probeTable = $"adbc_multicat_getcolumns_probe_{Guid.NewGuid():N}";
+            string probeCatalog2 = $"adbc_multicat_probe_cat_{Guid.NewGuid():N}";
+            // The two catalogs the SPARK (multi-catalog) fanout must surface: `main` and a fresh
+            // throwaway UC catalog. We ALSO create the probe in the session's default catalog so the
+            // EnableMultipleCatalogSupport=false + SPARK case (which resolves catalog to the session
+            // default) finds it there. Resolved at runtime via current_catalog() rather than assuming
+            // hive_metastore, since the default varies by workspace/identity.
+            string sessionDefaultCatalog = "main";
+            using (var curCatStmt = connection.CreateStatement())
+            {
+                curCatStmt.SqlQuery = "SELECT current_catalog()";
+                var curCatResult = curCatStmt.ExecuteQuery();
+                using var reader = curCatResult.Stream;
+                if (reader != null)
+                {
+                    var batch = await reader.ReadNextRecordBatchAsync();
+                    if (batch != null && batch.Length > 0 && batch.Column(0) is StringArray sa && !sa.IsNull(0))
+                        sessionDefaultCatalog = sa.GetString(0);
+                }
+            }
+            // Catalogs to create the probe in (deduped): main, the fresh UC catalog, and the session
+            // default (often main or hive_metastore).
+            var probeCatalogs = new List<string> { "main", probeCatalog2 };
+            if (!probeCatalogs.Contains(sessionDefaultCatalog, StringComparer.OrdinalIgnoreCase))
+                probeCatalogs.Add(sessionDefaultCatalog);
+            try
+            {
+                // Create the throwaway catalog + the probe tables inside the try so the finally's
+                // teardown always covers whatever was created (DROP ... IF EXISTS is harmless on
+                // never-created objects). This test requires DDL to create a catalog and write into
+                // the probe catalogs; on a workspace/identity lacking that, treat it as an
+                // environmental precondition and SKIP with a clear reason rather than a hard red build.
+                try
+                {
+                    using (var createCatStmt = connection.CreateStatement())
+                    {
+                        createCatStmt.SqlQuery = $"CREATE CATALOG IF NOT EXISTS {probeCatalog2}";
+                        await createCatStmt.ExecuteUpdateAsync();
+                    }
+                    using (var createSchemaStmt = connection.CreateStatement())
+                    {
+                        createSchemaStmt.SqlQuery = $"CREATE SCHEMA IF NOT EXISTS {probeCatalog2}.default";
+                        await createSchemaStmt.ExecuteUpdateAsync();
+                    }
+                    foreach (var probeCatalog in probeCatalogs)
+                    {
+                        using var createStmt = connection.CreateStatement();
+                        createStmt.SqlQuery = $"CREATE TABLE IF NOT EXISTS {probeCatalog}.default.{probeTable} (id INT, name STRING)";
+                        await createStmt.ExecuteUpdateAsync();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Skip.If(true, $"Requires DDL to create a catalog and write into the probe catalogs; probe setup failed: {ex.Message}");
+                }
 
-            // Then run with non-SPARK catalog and compare schemas
-            await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "main", sparkSchemas);
-            await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "main", sparkSchemas);
-            await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "main", sparkSchemas);
-            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "main", sparkSchemas);
+                // First run with SPARK catalog to get real schemas
+                await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+                await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+                await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+                await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas, probeTable);
+
+                // Then run with non-SPARK catalog and compare schemas
+                await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "main", sparkSchemas);
+                await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "main", sparkSchemas);
+                await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "main", sparkSchemas);
+                await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "main", sparkSchemas, probeTable);
+            }
+            finally
+            {
+                // Swallow cleanup failures: if the test body threw (e.g. a connection-level timeout),
+                // a teardown throw would REPLACE the original exception and mask the real failure.
+                // Log and continue so the informative original exception propagates. Dropping the
+                // throwaway catalog CASCADE removes its probe table and schema; main's probe is
+                // dropped explicitly.
+                // Drop the probe table from every non-throwaway catalog it was created in (main and,
+                // if different, the session default); the throwaway catalog is dropped CASCADE below,
+                // which removes its own probe table + schema.
+                foreach (var probeCatalog in probeCatalogs)
+                {
+                    if (probeCatalog.Equals(probeCatalog2, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    try
+                    {
+                        using var dropTblStmt = connection.CreateStatement();
+                        dropTblStmt.SqlQuery = $"DROP TABLE IF EXISTS {probeCatalog}.default.{probeTable}";
+                        await dropTblStmt.ExecuteUpdateAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        OutputHelper?.WriteLine($"Cleanup: failed to drop {probeCatalog}.default.{probeTable}: {ex.Message}");
+                    }
+                }
+                try
+                {
+                    using var dropCatStmt = connection.CreateStatement();
+                    dropCatStmt.SqlQuery = $"DROP CATALOG IF EXISTS {probeCatalog2} CASCADE";
+                    await dropCatStmt.ExecuteUpdateAsync();
+                }
+                catch (Exception ex)
+                {
+                    OutputHelper?.WriteLine($"Cleanup: failed to drop catalog {probeCatalog2}: {ex.Message}");
+                }
+            }
         }
 
-        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas)
+        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas, string? tableName = null)
         {
             OutputHelper?.WriteLine($"Testing {queryType} with EnableMultipleCatalogSupport={shouldAllowMultipleCatalogs}, CatalogName={catalogName}");
 
@@ -1155,6 +1269,12 @@ namespace AdbcDrivers.Databricks.Tests
             statement.SetOption(ApacheParameters.CatalogName, catalogName);
             // Use default as schema name, it is the default schema name
             statement.SetOption(ApacheParameters.SchemaName, "default");
+            // Optional table filter — set by the GetColumns callers to bound an otherwise
+            // whole-schema column scan (see caller comment). Unset for the other metadata queries.
+            if (!string.IsNullOrEmpty(tableName))
+            {
+                statement.SetOption(ApacheParameters.TableName, tableName);
+            }
             statement.SqlQuery = queryType;
 
             QueryResult queryResult = await statement.ExecuteQueryAsync();
@@ -1212,8 +1332,9 @@ namespace AdbcDrivers.Databricks.Tests
                 {
                     for (int j = 0; j < batch.ColumnCount; j++)
                     {
-                        if (queryResult.Stream.Schema.FieldsList[j].Name.Equals("TABLE_CATALOG", StringComparison.OrdinalIgnoreCase) ||
-                            queryResult.Stream.Schema.FieldsList[j].Name.Equals("TABLE_CAT", StringComparison.OrdinalIgnoreCase))
+                        string colName = queryResult.Stream.Schema.FieldsList[j].Name;
+                        if (colName.Equals("TABLE_CATALOG", StringComparison.OrdinalIgnoreCase) ||
+                            colName.Equals("TABLE_CAT", StringComparison.OrdinalIgnoreCase))
                         {
                             string? catalog = GetStringValue(batch.Column(j), i);
                             if (!string.IsNullOrEmpty(catalog))
@@ -1255,7 +1376,14 @@ namespace AdbcDrivers.Databricks.Tests
             {
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When EnableMultipleCatalogSupport is false and catalog is SPARK, results should be from default catalog
+                    // When EnableMultipleCatalogSupport is false and catalog is SPARK, results should be from default catalog.
+                    //
+                    // This also holds for the filtered GetColumns case: HandleSparkCatalog maps SPARK -> null,
+                    // so the CatalogName != null empty-result short-circuit does NOT fire and GetColumns delegates
+                    // to the base with catalog=null. With multi-catalog support OFF, null resolves to the session's
+                    // default catalog. The caller creates the probe in the session default catalog too (resolved at
+                    // runtime via current_catalog(), not assumed to be hive_metastore), so the filtered scan returns
+                    // exactly its rows and foundCatalogs.Count == 1 holds.
                     Assert.True(foundCatalogs.Count == 1,
                         $"{queryType} should only return results from the default catalog when EnableMultipleCatalogSupport is false and catalog is SPARK");
                     OutputHelper?.WriteLine($"All results are from default catalog: {defaultCatalog}");
@@ -1273,14 +1401,22 @@ namespace AdbcDrivers.Databricks.Tests
                 // When EnableMultipleCatalogSupport is true
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When catalog is SPARK, we may have results from multiple catalogs
+                    // The SPARK alias resolves catalog to null (DatabricksConnection.HandleSparkCatalog),
+                    // so metadata fans out across catalogs and results MUST span more than one. This
+                    // holds for the filtered GetColumns too: the caller created the probe table in
+                    // BOTH main.default and a fresh throwaway UC catalog, so a correct fanout surfaces
+                    // it from both. Strict >1 is the whole point of this test — a single-catalog result
+                    // here means the SPARK fanout regressed.
                     Assert.True(foundCatalogs.Count > 1,
                         $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
                     OutputHelper?.WriteLine($"Found results from multiple catalogs: {string.Join(", ", foundCatalogs)}");
                 }
                 else
                 {
-                    // When catalog is not SPARK, we should only get results from that specific catalog
+                    // When catalog is not SPARK, results must come only from that specific catalog.
+                    // This covers the filtered GetColumns case too: the probe table also exists in
+                    // main.default, so the filtered query returns its rows scoped to `main` only —
+                    // confirming the per-catalog filter does not leak the fanout across catalogs.
                     Assert.True(foundCatalogs.Count == 1,
                         $"{queryType} should return results from only the specified catalog when EnableMultipleCatalogSupport is true and catalog is not SPARK");
                     Assert.Contains(catalogName, foundCatalogs);
