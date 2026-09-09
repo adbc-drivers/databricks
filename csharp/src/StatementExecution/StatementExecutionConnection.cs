@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -28,6 +29,8 @@ using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
+using Apache.Arrow.Adbc.Telemetry.Traces.Listeners;
+using Apache.Arrow.Adbc.Telemetry.Traces.Listeners.FileListener;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using static Apache.Arrow.Adbc.AdbcConnection;
@@ -92,6 +95,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // Authentication support — assigned by ValidateProperties().
         private string? _identityFederationClientId;
 
+        // adbcfile local-trace listener, mirroring HiveServer2Connection on the Thrift path.
+        private readonly string _traceInstanceId = Guid.NewGuid().ToString("N");
+        private readonly FileActivityListener? _fileActivityListener;
+
         /// <summary>
         /// Creates a new Statement Execution connection with internally managed HTTP client.
         /// The connection will create and manage its own HTTP client with proper tracing and retry handlers.
@@ -134,6 +141,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             _ownsHttpClient = ownsHttpClient;
+
+            TryInitTracerProvider(out _fileActivityListener);
 
             // Parse configuration - check for URI first (same as Thrift protocol)
             properties.TryGetValue(AdbcOptions.Uri, out var uri);
@@ -1211,6 +1220,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 _sessionLock.Dispose();
             });
+
+            _fileActivityListener?.Dispose();
         }
 
         // TracingConnection provides IActivityTracer implementation
@@ -1218,5 +1229,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
+
+        public override IEnumerable<KeyValuePair<string, object?>>? GetActivitySourceTags(IReadOnlyDictionary<string, string> properties)
+        {
+            IEnumerable<KeyValuePair<string, object?>>? tags = base.GetActivitySourceTags(properties);
+            tags ??= [];
+            tags = tags.Concat([new(_traceInstanceId, null)]);
+            return tags;
+        }
+
+        private bool TryInitTracerProvider(out FileActivityListener? fileActivityListener)
+        {
+            _properties.TryGetValue(ListenersOptions.Exporter, out string? exporterOption);
+            // This listener only listens for activity from this specific connection instance.
+            bool shouldListenTo(ActivitySource source) => source.Tags?.Any(t => ReferenceEquals(t.Key, _traceInstanceId)) == true;
+            return FileActivityListener.TryActivateFileListener(AssemblyName, exporterOption, out fileActivityListener, shouldListenTo: shouldListenTo);
+        }
     }
 }
