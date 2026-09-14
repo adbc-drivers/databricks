@@ -80,6 +80,14 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+
+	// Arrow serialization options
+	useArrowNativeGeospatial bool
+
+	// Bulk ingest options
+	bulkVolumePath      string
+	bulkGeometryColumns string // raw "col:srid,col:srid" form; parsed at use
+	bulkBatchRows       int    // 0 means use DefaultBulkBatchRows
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -146,6 +154,13 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 	if d.downloadThreadCount > 0 {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
+	}
+
+	// Arrow-native geospatial serialization (SPARK-54232).
+	// When enabled, geometry/geography columns arrive as Struct<srid: Int32, wkb: Binary>
+	// instead of EWKT strings, enabling native geometry passthrough.
+	if d.useArrowNativeGeospatial {
+		opts = append(opts, dbsql.WithArrowNativeGeospatial(true))
 	}
 
 	// TLS/SSL handling
@@ -251,10 +266,16 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 	}
 
 	conn := &connectionImpl{
-		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
-		conn:               c,
+		ConnectionImplBase:       driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
+		catalog:                  d.catalog,
+		dbSchema:                 d.schema,
+		conn:                     c,
+		useArrowNativeGeospatial: d.useArrowNativeGeospatial,
+		serverHostname:           d.serverHostname,
+		accessToken:              d.accessToken,
+		bulkVolumePath:           d.bulkVolumePath,
+		bulkGeometryColumns:      d.bulkGeometryColumns,
+		bulkBatchRows:            d.bulkBatchRows,
 	}
 
 	return driverbase.NewConnectionBuilder(conn).
@@ -320,6 +341,20 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionArrowNativeGeospatial:
+		if d.useArrowNativeGeospatial {
+			return adbc.OptionValueEnabled, nil
+		}
+		return adbc.OptionValueDisabled, nil
+	case OptionBulkVolumePath:
+		return d.bulkVolumePath, nil
+	case OptionBulkGeometryColumns:
+		return d.bulkGeometryColumns, nil
+	case OptionBulkBatchRows:
+		if d.bulkBatchRows > 0 {
+			return strconv.Itoa(d.bulkBatchRows), nil
+		}
+		return "", nil
 	default:
 		return d.DatabaseImplBase.GetOption(key)
 	}
@@ -486,6 +521,35 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionArrowNativeGeospatial:
+		switch value {
+		case adbc.OptionValueEnabled:
+			d.useArrowNativeGeospatial = true
+		case adbc.OptionValueDisabled, "":
+			d.useArrowNativeGeospatial = false
+		default:
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("invalid value for %s: %s (expected 'true' or 'false')", OptionArrowNativeGeospatial, value),
+			}
+		}
+	case OptionBulkVolumePath:
+		d.bulkVolumePath = value
+	case OptionBulkGeometryColumns:
+		d.bulkGeometryColumns = value
+	case OptionBulkBatchRows:
+		if value == "" {
+			d.bulkBatchRows = 0
+			return nil
+		}
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("invalid value for %s: %s (expected non-negative integer)", OptionBulkBatchRows, value),
+			}
+		}
+		d.bulkBatchRows = n
 	default:
 		return d.DatabaseImplBase.SetOption(key, value)
 	}

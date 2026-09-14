@@ -18,7 +18,9 @@ import (
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -36,6 +38,16 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 		s.boundStream.Release()
 		s.boundStream = nil
 	}()
+
+	// When the connection has a Volume staging path configured, use the
+	// streaming Parquet + COPY INTO path instead of the per-row INSERT loop
+	// below.  Per-row is kept as a fallback so callers without Volume
+	// access still work, but Volume + COPY INTO is materially faster
+	// (~4-9k rows/s vs ~0.7 rows/s) and bounds RSS to one batch.
+	if s.conn.bulkVolumePath != "" {
+		runID := fmt.Sprintf("%d_%d", time.Now().UnixNano(), os.Getpid())
+		return s.executeIngestViaVolumeCopy(ctx, runID)
+	}
 
 	opts := &s.bulkIngestOptions
 

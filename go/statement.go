@@ -133,7 +133,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	}()
 
 	// Use the IPC stream interface (zero-copy)
-	reader, err := newIPCReaderAdapter(ctx, driverRows)
+	reader, err := newIPCReaderAdapter(ctx, driverRows, s.conn.useArrowNativeGeospatial)
 	if err != nil {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
 	}
