@@ -20,6 +20,10 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Removed
+
+- Revert #509: drop `net10.0` support, AOT/trim-safety, and the OpenTelemetry dependency (Power BI cannot take OpenTelemetry at this time) (#672)
+
 ## [1.1.10] - 2026-09-09
 
 ### Added
