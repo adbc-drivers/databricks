@@ -35,12 +35,27 @@ namespace AdbcDrivers.Databricks.Http
         /// This is the base handler used by all HttpClient instances.
         /// </summary>
         /// <param name="properties">Connection properties containing TLS and proxy configuration.</param>
+        /// <param name="enableResponseCompression">
+        /// Whether the handler negotiates response compression (gzip) via Accept-Encoding.
+        /// Defaults to true, preserving behavior for CloudFetch, feature-flag, and Thrift clients.
+        /// The SEA statements client passes false to skip the wasteful gzip of its already-LZ4
+        /// base64-Arrow-in-JSON body (see <see cref="DatabricksParameters.SeaResponseCompressionEnabled"/>).
+        /// </param>
         /// <returns>Configured HttpClientHandler.</returns>
-        public static HttpClientHandler CreateHandler(IReadOnlyDictionary<string, string> properties)
+        public static HttpClientHandler CreateHandler(IReadOnlyDictionary<string, string> properties, bool enableResponseCompression = true)
         {
             var tlsOptions = HiveServer2TlsImpl.GetHttpTlsOptions(properties);
             var proxyConfigurator = HiveServer2ProxyConfigurator.FromProperties(properties);
-            return HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+            var handler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
+            if (!enableResponseCompression)
+            {
+                // No Accept-Encoding => the server/proxy returns the body uncompressed. For the SEA
+                // inline path this avoids gzip-ing base64-of-LZ4-Arrow (double compression), which
+                // costs ~40ms server-side for multi-MB results and nets a larger wire than Thrift's
+                // raw binary. See DatabricksParameters.SeaResponseCompressionEnabled.
+                handler.AutomaticDecompression = System.Net.DecompressionMethods.None;
+            }
+            return handler;
         }
 
         /// <summary>
