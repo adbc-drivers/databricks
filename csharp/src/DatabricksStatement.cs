@@ -58,6 +58,10 @@ namespace AdbcDrivers.Databricks
         // improving query performance by reducing the number of FetchResults calls needed.
         internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
+        // Databricks/Spark DECIMAL precision maxes out at 38; a declared precision above this is
+        // rejected by the server. Arrow Decimal256 allows precision up to 76, so bound parameters
+        // must clamp to this ceiling (see BuildDecimalTypeName).
+        private const int DatabricksMaxDecimalPrecision = 38;
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -609,13 +613,24 @@ namespace AdbcDrivers.Databricks
         /// changing the query. Executing the same query repeatedly keeps the binding,
         /// so prepared-statement-style reuse and post-failure retries resend the bound
         /// parameters without re-binding.
+        /// <para>
+        /// The binding is only dropped when moving <em>off</em> an already-set query, i.e.
+        /// the previous <see cref="SqlQuery"/> was non-null and differs from the new value.
+        /// The initial <c>null</c> → query assignment keeps any binding already made, so a
+        /// caller that calls <see cref="Bind"/> before assigning <see cref="SqlQuery"/> is
+        /// supported and its binding is not silently discarded.
+        /// </para>
         /// </summary>
         public override string? SqlQuery
         {
             get => base.SqlQuery;
             set
             {
-                if (!string.Equals(base.SqlQuery, value, StringComparison.Ordinal))
+                // Drop the binding only when replacing an existing query with a different
+                // one. Do NOT clear on the initial null -> query transition: a caller may
+                // Bind before setting SqlQuery, and clearing there would silently discard
+                // that binding and ship an unbound placeholder to the server (Issue #648).
+                if (base.SqlQuery != null && !string.Equals(base.SqlQuery, value, StringComparison.Ordinal))
                 {
                     _boundParameters = null;
                 }
@@ -787,13 +802,20 @@ namespace AdbcDrivers.Databricks
         /// type. A bare <c>DECIMAL</c> resolves to <c>DECIMAL(10,0)</c> in Databricks/Spark, so the
         /// precision and scale must be declared explicitly to avoid silent rounding or overflow.
         /// Guards against precision &lt; scale (which the server rejects), mirroring the JDBC
-        /// driver's <c>getDecimalTypeString</c>.
+        /// driver's <c>getDecimalTypeString</c>. Caps precision at Databricks'/Spark's maximum
+        /// DECIMAL precision of 38: Arrow <see cref="Decimal256Type"/> permits precision up to 76,
+        /// so a wide-declared Decimal256 (e.g. <c>Decimal256(50,4)</c>) holding a small value would
+        /// otherwise emit <c>DECIMAL(50,4)</c>, a type the server rejects even though the value fits.
         /// </summary>
         private static string BuildDecimalTypeName(int precision, int scale)
         {
             if (precision < scale)
             {
                 precision = scale;
+            }
+            if (precision > DatabricksMaxDecimalPrecision)
+            {
+                precision = DatabricksMaxDecimalPrecision;
             }
             return "DECIMAL(" + precision.ToString(CultureInfo.InvariantCulture)
                 + "," + scale.ToString(CultureInfo.InvariantCulture) + ")";

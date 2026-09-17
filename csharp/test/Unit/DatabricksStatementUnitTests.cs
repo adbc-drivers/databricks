@@ -306,11 +306,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("DECIMAL(38,10)", dec128Param.Type);
             Assert.Equal("123.4500000000", dec128Param.Value.StringValue);
 
-            // Decimal256(50,4): precision above 38 would be truncated by a bare DECIMAL.
+            // Decimal256(50,4): Arrow permits precision up to 76, but Databricks/Spark DECIMAL
+            // caps precision at 38. A wide-declared Decimal256 holding a small value must clamp
+            // to DECIMAL(38,4) so the server accepts it rather than rejecting DECIMAL(50,4).
             var dec256Type = new Decimal256Type(50, 4);
             var dec256Column = new Decimal256Array.Builder(dec256Type).Append(9.9999m).Build();
             var dec256Param = BuildSingleParameter(dec256Type, dec256Column);
-            Assert.Equal("DECIMAL(50,4)", dec256Param.Type);
+            Assert.Equal("DECIMAL(38,4)", dec256Param.Type);
             Assert.Equal("9.9999", dec256Param.Value.StringValue);
         }
 
@@ -521,6 +523,35 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
             InvokeSetStatementProperties(statement, request);
             Assert.True(request.Parameters == null || request.Parameters.Count == 0);
+        }
+
+        /// <summary>
+        /// Binding before assigning SqlQuery is supported: the initial null -> query
+        /// transition must NOT drop a binding already made, otherwise a caller that calls
+        /// Bind(...) before setting SqlQuery would silently ship an unbound placeholder
+        /// (reviewer finding on Issue #648).
+        /// </summary>
+        [Fact]
+        public void Bind_BeforeSqlQueryAssigned_BindingIsKept()
+        {
+            using var statement = CreateStatement();
+            var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+
+            // Bind first, then assign the query (SqlQuery goes from null to the query text).
+            statement.Bind(batch, schema);
+            Assert.NotNull(GetBoundParameters(statement));
+
+            statement.SqlQuery = "SELECT :p1 AS v";
+            Assert.NotNull(GetBoundParameters(statement));
+
+            // The binding survives the initial assignment and is forwarded on execution.
+            var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, request);
+            Assert.NotNull(request.Parameters);
+            var parameter = Assert.Single(request.Parameters);
+            Assert.Equal("p1", parameter.Name);
+            Assert.Equal("value", parameter.Value.StringValue);
         }
 
         /// <summary>
