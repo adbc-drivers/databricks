@@ -659,6 +659,14 @@ namespace AdbcDrivers.Databricks
             // string now, so a caller that disposes the batch between Bind and a
             // (re)execution can no longer cause stale reads or an
             // ObjectDisposedException in SetStatementProperties.
+            //
+            // Clear first so the failure is atomic: if BuildSparkParameters throws
+            // (multi-row, zero-row, or schema/column-count mismatch), the statement
+            // is left with NO binding rather than the previous successful one. A
+            // caller that binds a valid batch A, then re-binds an invalid batch B
+            // (which throws), then executes must not silently ship A's parameters —
+            // the binding it believes is in effect (B) was never installed.
+            _boundParameters = null;
             _boundParameters = BuildSparkParameters(batch, schema);
         }
 

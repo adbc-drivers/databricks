@@ -703,5 +703,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.Throws<ArgumentException>(() => statement.Bind(batch, bindSchema));
         }
+
+        /// <summary>
+        /// A failed re-Bind must leave no binding in effect. Binding a valid batch A
+        /// (succeeds) and then re-binding an invalid batch B (throws) must clear the
+        /// binding rather than silently retaining A: a subsequent execution must not
+        /// ship A's parameters, which the caller believes were replaced by B (reviewer
+        /// finding on Issue #648 — the Bind failure is atomic).
+        /// </summary>
+        [Fact]
+        public void Bind_FailedReBind_ClearsPreviousBinding()
+        {
+            using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
+            var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+
+            // Bind a valid single-row batch: this succeeds and installs the binding.
+            var validBatch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+            statement.Bind(validBatch, schema);
+            Assert.NotNull(GetBoundParameters(statement));
+
+            // Re-Bind an invalid multi-row batch: BuildSparkParameters throws.
+            var invalidBatch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("a", "b") }, 2);
+            Assert.Throws<NotSupportedException>(() => statement.Bind(invalidBatch, schema));
+
+            // The failed re-Bind must have left NO binding, not the previous one.
+            Assert.Null(GetBoundParameters(statement));
+
+            // A subsequent execution ships no parameters rather than the stale batch A.
+            var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, request);
+            Assert.True(request.Parameters == null || request.Parameters.Count == 0);
+        }
     }
 }
