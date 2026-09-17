@@ -644,7 +644,7 @@ namespace AdbcDrivers.Databricks
             // string now, so a caller that disposes the batch between Bind and a
             // (re)execution can no longer cause stale reads or an
             // ObjectDisposedException in SetStatementProperties.
-            _boundParameters = BuildSparkParameters(batch);
+            _boundParameters = BuildSparkParameters(batch, schema);
         }
 
         /// <summary>
@@ -653,7 +653,7 @@ namespace AdbcDrivers.Databricks
         /// whose declared SQL type lets the server cast the string-encoded value,
         /// mirroring the JDBC driver's parameter mapping.
         /// </summary>
-        private static List<TSparkParameter> BuildSparkParameters(RecordBatch batch)
+        private static List<TSparkParameter> BuildSparkParameters(RecordBatch batch, Schema schema)
         {
             // Databricks named parameters are a single row whose fields map to the
             // ":name" placeholders. Reject any other shape explicitly rather than
@@ -667,8 +667,23 @@ namespace AdbcDrivers.Databricks
                     "Bind exactly one row whose fields correspond to the \":name\" placeholders in the SQL query.");
             }
 
+            // Take the ":name" placeholder names from the schema passed to Bind, which
+            // the ADBC contract treats as the authoritative description of the batch's
+            // structure. A caller may build the RecordBatch from bare arrays whose own
+            // batch.Schema carries empty/default field names while supplying the intended
+            // names via the schema argument; sourcing names from batch.Schema would then
+            // bind against empty placeholder names and silently fail to resolve on the
+            // server. Reject a schema that disagrees on column count rather than pairing
+            // mismatched names and value arrays.
+            if (schema.FieldsList.Count != batch.ColumnCount)
+            {
+                throw new ArgumentException(
+                    $"The bind schema describes {schema.FieldsList.Count} field(s) but the bound batch has {batch.ColumnCount} column(s). " +
+                    "The schema and batch must describe the same set of named parameters.",
+                    nameof(schema));
+            }
+
             var parameters = new List<TSparkParameter>(batch.ColumnCount);
-            Schema schema = batch.Schema;
             for (int i = 0; i < batch.ColumnCount; i++)
             {
                 Field field = schema.GetFieldByIndex(i);

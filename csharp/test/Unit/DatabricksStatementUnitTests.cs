@@ -185,7 +185,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.NotNull(method);
             try
             {
-                return method!.Invoke(null, new object[] { batch });
+                return method!.Invoke(null, new object[] { batch, batch.Schema });
             }
             catch (TargetInvocationException ex) when (ex.InnerException != null)
             {
@@ -553,6 +553,55 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("p1", parameter.Name);
             Assert.Equal("STRING", parameter.Type);
             Assert.Equal("value", parameter.Value.StringValue);
+        }
+
+        /// <summary>
+        /// The ADBC Bind(batch, schema) contract treats the passed-in schema as the
+        /// authoritative structure of the batch. A caller may build the RecordBatch from
+        /// bare arrays whose own batch.Schema has empty/default field names while supplying
+        /// the intended ":name" placeholder names via the schema argument. The placeholder
+        /// names must be taken from that schema argument, not from batch.Schema (reviewer
+        /// finding on Issue #648).
+        /// </summary>
+        [Fact]
+        public void Bind_PlaceholderNamesComeFromSuppliedSchemaNotBatchSchema()
+        {
+            using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
+
+            // The batch carries an empty field name; the intended name lives on the
+            // schema passed to Bind.
+            var batchSchema = new Schema(new[] { new Field("", StringType.Default, true) }, null);
+            var batch = new RecordBatch(batchSchema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+            var bindSchema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+
+            statement.Bind(batch, bindSchema);
+
+            var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, request);
+            var parameter = Assert.Single(request.Parameters);
+            Assert.Equal("p1", parameter.Name);
+            Assert.Equal("value", parameter.Value.StringValue);
+        }
+
+        /// <summary>
+        /// A schema whose field count disagrees with the batch's column count cannot be
+        /// paired name-to-value, so Bind rejects it rather than binding mismatched names
+        /// and values (reviewer finding on Issue #648).
+        /// </summary>
+        [Fact]
+        public void Bind_SchemaColumnCountMismatch_Throws()
+        {
+            using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
+
+            var batchSchema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+            var batch = new RecordBatch(batchSchema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+            var bindSchema = new Schema(
+                new[] { new Field("p1", StringType.Default, true), new Field("p2", StringType.Default, true) },
+                null);
+
+            Assert.Throws<ArgumentException>(() => statement.Bind(batch, bindSchema));
         }
     }
 }
