@@ -339,6 +339,53 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
+        /// When an Arrow Decimal256 declares a precision/scale beyond the server's DECIMAL(38,*)
+        /// ceiling, the declared type is clamped but the value literal still carries the original
+        /// scale/magnitude. FitDecimalValueToClampedType must reconcile the two: drop only
+        /// insignificant trailing fractional zeros, and reject a value that cannot be represented
+        /// in the clamped type rather than shipping a literal the server would silently round or
+        /// overflow (Issue #648 review follow-up). Exercised directly because a scale above 38 is
+        /// not representable by a System.Decimal value.
+        /// </summary>
+        [Theory]
+        // Trailing zeros beyond the clamped scale of 38 are insignificant and trimmed away.
+        [InlineData("0.50000000000000000000000000000000000000000", 38, 38, "0.50000000000000000000000000000000000000")]
+        [InlineData("-0.50000000000000000000000000000000000000000", 38, 38, "-0.50000000000000000000000000000000000000")]
+        // Value already within the clamped scale is unchanged.
+        [InlineData("9.9999", 38, 4, "9.9999")]
+        // Integer-only value that fits the clamped integer range.
+        [InlineData("123", 38, 4, "123")]
+        public void FitDecimalValueToClampedType_TrimsInsignificantDigits(string rawValue, int precision, int scale, string expected)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("FitDecimalValueToClampedType",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var result = (string?)method!.Invoke(null, new object[] { rawValue, precision, scale });
+            Assert.Equal(expected, result);
+        }
+
+        /// <summary>
+        /// A value that genuinely cannot be represented in the clamped DECIMAL(38,*) type must be
+        /// rejected rather than silently rounded/overflowed by the server: a significant fractional
+        /// digit beyond the clamped scale (silent-rounding case) or more integer digits than
+        /// precision - scale allows (overflow case).
+        /// </summary>
+        [Theory]
+        // A significant (non-zero) fractional digit beyond scale 38 would be silently rounded away.
+        [InlineData("0.500000000000000000000000000000000000005", 38, 38)]
+        // DECIMAL(38,38) permits zero integer digits, so a value >= 1 overflows the integer range.
+        [InlineData("1.5", 38, 38)]
+        public void FitDecimalValueToClampedType_UnrepresentableValue_Throws(string rawValue, int precision, int scale)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("FitDecimalValueToClampedType",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var ex = Assert.Throws<TargetInvocationException>(
+                () => method!.Invoke(null, new object[] { rawValue, precision, scale }));
+            Assert.IsType<NotSupportedException>(ex.InnerException);
+        }
+
+        /// <summary>
         /// Builds a single-row, single-column parameter batch from the supplied Arrow array
         /// and returns the one TSparkParameter produced by BuildSparkParameters, so per-type
         /// mapping/encoding assertions stay terse.

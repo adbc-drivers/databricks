@@ -784,12 +784,12 @@ namespace AdbcDrivers.Databricks
                     // getDecimalTypeString.
                     {
                         var t = (Decimal128Type)a.Data.DataType;
-                        return (BuildDecimalTypeName(t.Precision, t.Scale), a.GetString(index));
+                        return ConvertDecimalValue(t.Precision, t.Scale, a.GetString(index));
                     }
                 case Decimal256Array a:
                     {
                         var t = (Decimal256Type)a.Data.DataType;
-                        return (BuildDecimalTypeName(t.Precision, t.Scale), a.GetString(index));
+                        return ConvertDecimalValue(t.Precision, t.Scale, a.GetString(index));
                     }
                 default:
                     throw new NotSupportedException(
@@ -812,10 +812,20 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private static string BuildDecimalTypeName(int precision, int scale)
         {
-            // Clamp both precision and scale to the server ceiling first, then enforce
-            // precision >= scale last. Clamping scale before this final check is what keeps a
-            // high-scale Decimal256 (scale > 38) from surviving the precision clamp as an
-            // invalid DECIMAL(38,scale) with precision < scale.
+            (int clampedPrecision, int clampedScale) = ClampDecimal(precision, scale);
+            return "DECIMAL(" + clampedPrecision.ToString(CultureInfo.InvariantCulture)
+                + "," + clampedScale.ToString(CultureInfo.InvariantCulture) + ")";
+        }
+
+        /// <summary>
+        /// Clamps an Arrow decimal type's precision and scale to the DECIMAL type Databricks/Spark
+        /// accepts. Clamps both precision and scale to the server ceiling first, then enforces
+        /// <c>precision &gt;= scale</c> last. Clamping scale before this final check is what keeps a
+        /// high-scale Decimal256 (scale &gt; 38) from surviving the precision clamp as an invalid
+        /// <c>DECIMAL(38,scale)</c> with precision &lt; scale.
+        /// </summary>
+        private static (int Precision, int Scale) ClampDecimal(int precision, int scale)
+        {
             if (precision > DatabricksMaxDecimalPrecision)
             {
                 precision = DatabricksMaxDecimalPrecision;
@@ -828,8 +838,87 @@ namespace AdbcDrivers.Databricks
             {
                 precision = scale;
             }
-            return "DECIMAL(" + precision.ToString(CultureInfo.InvariantCulture)
-                + "," + scale.ToString(CultureInfo.InvariantCulture) + ")";
+            return (precision, scale);
+        }
+
+        /// <summary>
+        /// Produces the DECIMAL type name and the string-encoded value for a bound Arrow decimal
+        /// parameter, reconciling the two when the Arrow type's precision/scale exceed the server
+        /// ceiling. When the declared type fits (the common case, and every <see cref="Decimal128Type"/>
+        /// since its precision maxes at 38) the value already matches the type by construction and is
+        /// shipped verbatim. When the type is clamped to <c>DECIMAL(38,…)</c>, the value literal still
+        /// carries the original (wider) scale/magnitude, so <see cref="FitDecimalValueToClampedType"/>
+        /// reconciles it against the clamped type — dropping only insignificant trailing fractional
+        /// zeros and rejecting a value that genuinely cannot be represented, rather than shipping a
+        /// literal the server may silently round or reject (Issue #648 review follow-up).
+        /// </summary>
+        private static (string? SqlType, string? StringValue) ConvertDecimalValue(int precision, int scale, string? rawValue)
+        {
+            (int clampedPrecision, int clampedScale) = ClampDecimal(precision, scale);
+            string typeName = "DECIMAL(" + clampedPrecision.ToString(CultureInfo.InvariantCulture)
+                + "," + clampedScale.ToString(CultureInfo.InvariantCulture) + ")";
+
+            // No clamping: the Arrow value already fits its declared type, so ship it unchanged and
+            // avoid re-formatting the well-exercised common path.
+            if (clampedPrecision == precision && clampedScale == scale)
+            {
+                return (typeName, rawValue);
+            }
+
+            return (typeName, FitDecimalValueToClampedType(rawValue, clampedPrecision, clampedScale));
+        }
+
+        /// <summary>
+        /// Reconciles a decimal value literal with a clamped <c>DECIMAL(precision,scale)</c> type.
+        /// Fractional digits beyond <paramref name="scale"/> are dropped only when they are all
+        /// zero; a non-zero digit there means the value cannot be represented without silent
+        /// rounding, so the bind is rejected. Likewise a magnitude with more integer digits than
+        /// <c>precision - scale</c> overflows the clamped type and is rejected.
+        /// </summary>
+        private static string? FitDecimalValueToClampedType(string? rawValue, int precision, int scale)
+        {
+            if (string.IsNullOrEmpty(rawValue))
+            {
+                return rawValue;
+            }
+
+            string value = rawValue!;
+            bool negative = value[0] == '-';
+            string magnitude = (negative || value[0] == '+') ? value.Substring(1) : value;
+
+            int dot = magnitude.IndexOf('.');
+            string intPart = dot < 0 ? magnitude : magnitude.Substring(0, dot);
+            string fracPart = dot < 0 ? string.Empty : magnitude.Substring(dot + 1);
+
+            // Any fractional digit beyond the clamped scale must be zero; a non-zero digit there
+            // means the value would be silently rounded when cast to DECIMAL(precision,scale).
+            if (fracPart.Length > scale)
+            {
+                for (int i = scale; i < fracPart.Length; i++)
+                {
+                    if (fracPart[i] != '0')
+                    {
+                        throw new NotSupportedException(
+                            $"Decimal parameter value '{rawValue}' has more than {scale} significant fractional digit(s) " +
+                            $"and cannot be represented as DECIMAL({precision},{scale}), the maximum DECIMAL precision Databricks/Spark supports.");
+                    }
+                }
+                fracPart = fracPart.Substring(0, scale);
+            }
+
+            // The clamped type holds at most (precision - scale) integer digits; leading zeros do
+            // not count. A larger magnitude overflows it.
+            string significantInt = intPart.TrimStart('0');
+            int allowedIntegerDigits = precision - scale;
+            if (significantInt.Length > allowedIntegerDigits)
+            {
+                throw new NotSupportedException(
+                    $"Decimal parameter value '{rawValue}' has {significantInt.Length} integer digit(s), which overflows " +
+                    $"DECIMAL({precision},{scale}), the maximum DECIMAL precision Databricks/Spark supports.");
+            }
+
+            string result = fracPart.Length > 0 ? intPart + "." + fracPart : intPart;
+            return negative ? "-" + result : result;
         }
 
         // Cast the Client to IAsync for CloudFetch compatibility
