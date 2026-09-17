@@ -700,11 +700,13 @@ namespace AdbcDrivers.Databricks
                     // UInt64 range explicitly.
                     return ("DECIMAL(20,0)", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
                 case FloatArray a:
-                    // Use the round-trip ("R") format specifier so the string encoding is
-                    // lossless on all target frameworks. On net472/netstandard2.0 the default
-                    // ("G") format emits only G7/G15 digits and would silently truncate the
-                    // value before the server casts it back to FLOAT/DOUBLE.
-                    return ("FLOAT", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
+                    // Use "G9" (not "R") for Single: Microsoft documents that Single.ToString("R")
+                    // can fail to round-trip on 64-bit runtimes (net472/netstandard2.0), and "G9" is
+                    // the shortest specifier guaranteed to round-trip a float on every target
+                    // framework. ("R"/"G17" are the round-trip specifiers for Double, not Single.)
+                    // The default ("G") format emits only ~7 significant digits and would silently
+                    // truncate the value before the server casts it back to FLOAT.
+                    return ("FLOAT", a.GetValue(index)!.Value.ToString("G9", CultureInfo.InvariantCulture));
                 case DoubleArray a:
                     return ("DOUBLE", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
                 case Decimal128Array a:

@@ -361,9 +361,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Floating-point values must be encoded with the round-trip ("R") format so no
-        /// precision is lost before the server casts the string back to FLOAT/DOUBLE
-        /// (the default "G" format truncates on net472/netstandard2.0).
+        /// Floating-point values must be encoded losslessly so no precision is lost before
+        /// the server casts the string back to FLOAT/DOUBLE (the default "G" format truncates
+        /// on net472/netstandard2.0). Double uses "R" and Single uses "G9" — Single.ToString("R")
+        /// can fail to round-trip on 64-bit runtimes, so the assertions verify an actual
+        /// parse-back round-trip rather than comparing against the same format specifier.
         /// </summary>
         [Fact]
         public void BuildSparkParameters_FloatingPoint_UsesRoundTripEncoding()
@@ -373,12 +375,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             const double doubleValue = 1.5;
             var doubleParam = BuildSingleParameter(DoubleType.Default, new DoubleArray.Builder().Append(doubleValue).Build());
             Assert.Equal("DOUBLE", doubleParam.Type);
-            Assert.Equal(doubleValue.ToString("R", invariant), doubleParam.Value.StringValue);
+            Assert.Equal(doubleValue, double.Parse(doubleParam.Value.StringValue, invariant));
 
             const float floatValue = 0.1f;
             var floatParam = BuildSingleParameter(FloatType.Default, new FloatArray.Builder().Append(floatValue).Build());
             Assert.Equal("FLOAT", floatParam.Type);
-            Assert.Equal(floatValue.ToString("R", invariant), floatParam.Value.StringValue);
+            Assert.Equal("0.100000001", floatParam.Value.StringValue);
+            Assert.Equal(floatValue, float.Parse(floatParam.Value.StringValue, invariant));
         }
 
         /// <summary>
