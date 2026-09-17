@@ -71,8 +71,10 @@ namespace AdbcDrivers.Databricks
         // SetStatementProperties can forward named parameters to the server as
         // TSparkParameter entries (Issue #648). A single-row batch whose fields
         // are the named parameters (e.g. field "p1" for the ":p1" placeholder).
-        // Consumed and cleared on each execution (see SetStatementProperties) so a
-        // binding does not leak onto a later query when the statement is reused.
+        // The binding persists across repeated executions of the same query and is
+        // cleared only when SqlQuery is reassigned (see the SqlQuery override), so a
+        // binding never leaks onto a later, unrelated query when the statement is
+        // reused, yet re-execution and post-failure retry keep working without re-Bind.
         private RecordBatch? _boundParameters;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
@@ -550,14 +552,16 @@ namespace AdbcDrivers.Databricks
             // mapToSparkParameterListItem: Type = SQL type name, Value = string form).
             if (_boundParameters != null)
             {
-                // Consume the bound batch exactly once. A DatabricksStatement can be
-                // reused (assign a new SqlQuery and ExecuteQuery again), so clear the
-                // captured batch after forwarding it — otherwise a batch bound for one
-                // query would silently re-ship as TSparkParameter entries on every
-                // subsequent execution (even a follow-up query with no ":name"
-                // placeholders). Callers re-Bind before each execution.
+                // Forward the bound batch WITHOUT clearing it. The binding persists
+                // until the query is replaced (see the SqlQuery override, which clears
+                // _boundParameters when the query text changes) — matching the usual
+                // ADBC/JDBC contract where a binding survives until it is replaced.
+                // This keeps prepared-statement-style reuse (Bind once, ExecuteQuery in
+                // a loop over the same query) and post-failure retries (re-ExecuteQuery
+                // without re-Bind) working, while a batch bound for one query still can
+                // never leak onto a later, unrelated query because reassigning SqlQuery
+                // drops the binding.
                 RecordBatch bound = _boundParameters;
-                _boundParameters = null;
                 if (bound.ColumnCount > 0)
                 {
                     var parameters = BuildSparkParameters(bound);
@@ -601,9 +605,34 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
+        /// Gets or sets the SQL query to execute. Reassigning the query text drops any
+        /// previously bound parameter batch (Issue #648): a binding is associated with
+        /// the query it was made against, so a batch bound for one query must not leak
+        /// onto a later, unrelated query when the statement is reused. Re-Bind after
+        /// changing the query. Executing the same query repeatedly keeps the binding,
+        /// so prepared-statement-style reuse and post-failure retries resend the bound
+        /// parameters without re-binding.
+        /// </summary>
+        public override string? SqlQuery
+        {
+            get => base.SqlQuery;
+            set
+            {
+                if (!string.Equals(base.SqlQuery, value, StringComparison.Ordinal))
+                {
+                    _boundParameters = null;
+                }
+                base.SqlQuery = value;
+            }
+        }
+
+        /// <summary>
         /// Captures the bound parameter batch so that named parameters can be forwarded
         /// to the server on execution (Issue #648). The batch is expected to be a single
         /// row whose fields correspond to the ":name" placeholders in the SQL query.
+        /// The binding persists across repeated executions of the current query and is
+        /// dropped when <see cref="SqlQuery"/> is reassigned, so callers only need to
+        /// re-Bind after changing the query — not before every execution.
         /// </summary>
         public override void Bind(RecordBatch batch, Schema schema)
         {

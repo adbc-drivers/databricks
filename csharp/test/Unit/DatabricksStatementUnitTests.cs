@@ -432,7 +432,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Reads the private _boundParameters field so the consume-once lifecycle can be asserted.
+        /// Reads the private _boundParameters field so the binding lifecycle can be asserted.
         /// </summary>
         private static RecordBatch? GetBoundParameters(DatabricksStatement statement)
         {
@@ -464,33 +464,62 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// A bound parameter batch must be consumed exactly once: after it is forwarded onto
-        /// one execution, it is cleared so a reused statement (new SqlQuery + ExecuteQuery)
-        /// does not silently re-ship stale parameters onto a follow-up query that never bound
-        /// its own (reviewer finding on Issue #648).
+        /// A bound parameter batch persists across repeated executions of the same query, so
+        /// prepared-statement-style reuse (Bind once, ExecuteQuery in a loop) and post-failure
+        /// retries (re-ExecuteQuery without re-Bind) both resend the parameters — matching the
+        /// usual ADBC/JDBC contract where a binding survives until it is replaced (Issue #648).
         /// </summary>
         [Fact]
-        public void Bind_ParametersAreConsumedOnceAndNotReshippedOnReuse()
+        public void Bind_ParametersPersistAcrossRepeatedExecutionsOfSameQuery()
         {
             using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
             var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
             var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
 
             statement.Bind(batch, schema);
             Assert.NotNull(GetBoundParameters(statement));
 
-            // First execution forwards the bound parameters and clears the captured batch.
+            // First execution forwards the bound parameters and keeps the captured batch.
             var firstRequest = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
             InvokeSetStatementProperties(statement, firstRequest);
-            Assert.Null(GetBoundParameters(statement));
+            Assert.NotNull(GetBoundParameters(statement));
             Assert.NotNull(firstRequest.Parameters);
             var firstParam = Assert.Single(firstRequest.Parameters);
             Assert.Equal("p1", firstParam.Name);
 
-            // A subsequent execution with no new Bind must not re-ship the stale parameters.
+            // A subsequent execution of the SAME query (no re-Bind) re-ships the parameters.
             var secondRequest = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
             InvokeSetStatementProperties(statement, secondRequest);
-            Assert.True(secondRequest.Parameters == null || secondRequest.Parameters.Count == 0);
+            Assert.NotNull(secondRequest.Parameters);
+            var secondParam = Assert.Single(secondRequest.Parameters);
+            Assert.Equal("p1", secondParam.Name);
+        }
+
+        /// <summary>
+        /// Reassigning SqlQuery drops the binding: a batch bound for one query must not leak
+        /// onto a later, unrelated query when the statement is reused, so a follow-up query
+        /// that never bound its own parameters ships none (reviewer finding on Issue #648).
+        /// </summary>
+        [Fact]
+        public void Bind_ParametersAreDroppedWhenSqlQueryIsReassigned()
+        {
+            using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
+            var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+
+            statement.Bind(batch, schema);
+            Assert.NotNull(GetBoundParameters(statement));
+
+            // Reassigning the query text drops the binding (binding follows the query).
+            statement.SqlQuery = "SELECT 1 AS v";
+            Assert.Null(GetBoundParameters(statement));
+
+            // The follow-up query with no Bind of its own must ship no parameters.
+            var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, request);
+            Assert.True(request.Parameters == null || request.Parameters.Count == 0);
         }
     }
 }
