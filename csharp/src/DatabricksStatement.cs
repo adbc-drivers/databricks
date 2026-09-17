@@ -802,20 +802,31 @@ namespace AdbcDrivers.Databricks
         /// type. A bare <c>DECIMAL</c> resolves to <c>DECIMAL(10,0)</c> in Databricks/Spark, so the
         /// precision and scale must be declared explicitly to avoid silent rounding or overflow.
         /// Guards against precision &lt; scale (which the server rejects), mirroring the JDBC
-        /// driver's <c>getDecimalTypeString</c>. Caps precision at Databricks'/Spark's maximum
-        /// DECIMAL precision of 38: Arrow <see cref="Decimal256Type"/> permits precision up to 76,
-        /// so a wide-declared Decimal256 (e.g. <c>Decimal256(50,4)</c>) holding a small value would
-        /// otherwise emit <c>DECIMAL(50,4)</c>, a type the server rejects even though the value fits.
+        /// driver's <c>getDecimalTypeString</c>. Caps both precision and scale at Databricks'/Spark's
+        /// maximum DECIMAL precision of 38: Arrow <see cref="Decimal256Type"/> permits precision (and
+        /// scale) up to 76, so a wide-declared Decimal256 (e.g. <c>Decimal256(50,4)</c>) holding a small
+        /// value would otherwise emit <c>DECIMAL(50,4)</c>, a type the server rejects even though the
+        /// value fits. Scale is clamped before the final <c>precision &lt; scale</c> re-check so a
+        /// high-scale type such as <c>Decimal256(50,40)</c> cannot emit <c>DECIMAL(38,40)</c>
+        /// (precision &lt; scale) after the precision clamp.
         /// </summary>
         private static string BuildDecimalTypeName(int precision, int scale)
         {
-            if (precision < scale)
-            {
-                precision = scale;
-            }
+            // Clamp both precision and scale to the server ceiling first, then enforce
+            // precision >= scale last. Clamping scale before this final check is what keeps a
+            // high-scale Decimal256 (scale > 38) from surviving the precision clamp as an
+            // invalid DECIMAL(38,scale) with precision < scale.
             if (precision > DatabricksMaxDecimalPrecision)
             {
                 precision = DatabricksMaxDecimalPrecision;
+            }
+            if (scale > DatabricksMaxDecimalPrecision)
+            {
+                scale = DatabricksMaxDecimalPrecision;
+            }
+            if (precision < scale)
+            {
+                precision = scale;
             }
             return "DECIMAL(" + precision.ToString(CultureInfo.InvariantCulture)
                 + "," + scale.ToString(CultureInfo.InvariantCulture) + ")";

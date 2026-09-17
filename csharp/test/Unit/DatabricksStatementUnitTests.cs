@@ -317,6 +317,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
+        /// Clamping precision to the server's max of 38 must not leave scale above it: a
+        /// high-scale Arrow Decimal256 (Arrow permits scale up to 76) such as
+        /// Decimal256(50,40) would otherwise emit DECIMAL(38,40) — precision &lt; scale, which
+        /// the server rejects. Scale is clamped to 38 before the final precision &gt;= scale
+        /// re-check, so the result is a valid DECIMAL(38,38). Exercises BuildDecimalTypeName
+        /// directly because a scale of 40 is not representable by a System.Decimal value.
+        /// </summary>
+        [Theory]
+        [InlineData(50, 40, "DECIMAL(38,38)")] // precision and scale both clamped, then precision == scale
+        [InlineData(50, 4, "DECIMAL(38,4)")]   // only precision clamped
+        [InlineData(38, 10, "DECIMAL(38,10)")] // in range, unchanged
+        [InlineData(5, 10, "DECIMAL(10,10)")]  // precision < scale bumped up
+        public void BuildDecimalTypeName_ClampsPrecisionAndScale(int precision, int scale, string expected)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("BuildDecimalTypeName",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            var result = (string)method!.Invoke(null, new object[] { precision, scale })!;
+            Assert.Equal(expected, result);
+        }
+
+        /// <summary>
         /// Builds a single-row, single-column parameter batch from the supplied Arrow array
         /// and returns the one TSparkParameter produced by BuildSparkParameters, so per-type
         /// mapping/encoding assertions stay terse.
