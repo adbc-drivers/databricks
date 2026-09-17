@@ -16,7 +16,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
+using Apache.Arrow;
+using Apache.Arrow.Types;
 using AdbcDrivers.HiveServer2.Spark;
 using AdbcDrivers.Databricks;
 using Xunit;
@@ -169,6 +172,235 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         public void GetMetadataOperationType_IsCaseInsensitive(string command)
         {
             Assert.NotNull(DatabricksStatement.GetMetadataOperationType(command));
+        }
+
+        /// <summary>
+        /// Invokes the private static DatabricksStatement.BuildSparkParameters via reflection,
+        /// unwrapping the reflection exception wrapper so callers observe the real exception.
+        /// </summary>
+        private static object? InvokeBuildSparkParameters(RecordBatch batch)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("BuildSparkParameters",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(method);
+            try
+            {
+                return method!.Invoke(null, new object[] { batch });
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException != null)
+            {
+                throw ex.InnerException;
+            }
+        }
+
+        private static StringArray SingleStringColumn(params string[] values)
+        {
+            var builder = new StringArray.Builder();
+            foreach (var value in values)
+            {
+                builder.Append(value);
+            }
+            return builder.Build();
+        }
+
+        /// <summary>
+        /// A zero-row parameter batch must be rejected with a clear error rather than
+        /// indexing past the end of a zero-length Arrow array.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_EmptyBatch_Throws()
+        {
+            var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn() }, 0);
+
+            Assert.Throws<NotSupportedException>(() => InvokeBuildSparkParameters(batch));
+        }
+
+        /// <summary>
+        /// A multi-row parameter batch must be rejected explicitly rather than silently
+        /// dropping rows 1..N.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_MultiRowBatch_Throws()
+        {
+            var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("a", "b") }, 2);
+
+            Assert.Throws<NotSupportedException>(() => InvokeBuildSparkParameters(batch));
+        }
+
+        /// <summary>
+        /// A single-row parameter batch is the supported shape and maps each column to a
+        /// named TSparkParameter.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_SingleRowBatch_Succeeds()
+        {
+            var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+
+            var result = InvokeBuildSparkParameters(batch);
+
+            Assert.NotNull(result);
+            var parameters = (System.Collections.IList)result!;
+            Assert.Single(parameters);
+        }
+
+        /// <summary>
+        /// A null-valued parameter must be forwarded with a declared VOID type and no value
+        /// so the server binds SQL NULL rather than treating it as an unbound placeholder,
+        /// mirroring the JDBC driver (inferDatabricksType(null) => VOID; the type is always set).
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_NullValue_SetsVoidTypeAndNoValue()
+        {
+            var schema = new Schema(new[] { new Field("p", StringType.Default, true) }, null);
+            var nullColumn = new StringArray.Builder().AppendNull().Build();
+            var batch = new RecordBatch(schema, new IArrowArray[] { nullColumn }, 1);
+
+            var result = InvokeBuildSparkParameters(batch);
+
+            Assert.NotNull(result);
+            var parameters = (System.Collections.IList)result!;
+            var parameter = Assert.Single(parameters.Cast<Apache.Hive.Service.Rpc.Thrift.TSparkParameter>().ToList());
+            Assert.Equal("p", parameter.Name);
+            Assert.Equal("VOID", parameter.Type);
+            Assert.Null(parameter.Value);
+        }
+
+        /// <summary>
+        /// A UInt64 value above Int64.MaxValue must map to DECIMAL (not signed BIGINT) so
+        /// the full 20-digit ulong range survives the server-side cast without overflow.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_UInt64AboveInt64Max_MapsToDecimal()
+        {
+            const ulong value = ulong.MaxValue; // 18446744073709551615, > Int64.MaxValue
+            var schema = new Schema(new[] { new Field("p", UInt64Type.Default, true) }, null);
+            var column = new UInt64Array.Builder().Append(value).Build();
+            var batch = new RecordBatch(schema, new IArrowArray[] { column }, 1);
+
+            var result = InvokeBuildSparkParameters(batch);
+
+            Assert.NotNull(result);
+            var parameters = (System.Collections.IList)result!;
+            var parameter = Assert.Single(parameters.Cast<Apache.Hive.Service.Rpc.Thrift.TSparkParameter>().ToList());
+            Assert.Equal("DECIMAL", parameter.Type);
+            Assert.Equal(value.ToString(System.Globalization.CultureInfo.InvariantCulture), parameter.Value.StringValue);
+        }
+
+        /// <summary>
+        /// Builds a single-row, single-column parameter batch from the supplied Arrow array
+        /// and returns the one TSparkParameter produced by BuildSparkParameters, so per-type
+        /// mapping/encoding assertions stay terse.
+        /// </summary>
+        private static Apache.Hive.Service.Rpc.Thrift.TSparkParameter BuildSingleParameter(IArrowType type, IArrowArray column)
+        {
+            var schema = new Schema(new[] { new Field("p", type, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { column }, 1);
+
+            var result = InvokeBuildSparkParameters(batch);
+
+            Assert.NotNull(result);
+            var parameters = (System.Collections.IList)result!;
+            return Assert.Single(parameters.Cast<Apache.Hive.Service.Rpc.Thrift.TSparkParameter>().ToList());
+        }
+
+        /// <summary>
+        /// Locks in the Arrow-to-Databricks scalar type mapping and invariant string value
+        /// encoding (the Type + Value.StringValue that reach TExecuteStatementReq.Parameters)
+        /// so the named-parameter path has a CI-runnable regression gate independent of the
+        /// live-warehouse E2E tests. Mirrors the JDBC driver's SQL-type-name + string-form mapping.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_ScalarTypes_MapTypeAndEncodeValue()
+        {
+            void AssertMapping(IArrowType type, IArrowArray column, string expectedType, string expectedValue)
+            {
+                var parameter = BuildSingleParameter(type, column);
+                Assert.Equal("p", parameter.Name);
+                Assert.Equal(expectedType, parameter.Type);
+                Assert.Equal(expectedValue, parameter.Value.StringValue);
+            }
+
+            AssertMapping(StringType.Default, new StringArray.Builder().Append("hello world").Build(), "STRING", "hello world");
+            AssertMapping(BooleanType.Default, new BooleanArray.Builder().Append(true).Build(), "BOOLEAN", "true");
+            AssertMapping(BooleanType.Default, new BooleanArray.Builder().Append(false).Build(), "BOOLEAN", "false");
+            AssertMapping(Int8Type.Default, new Int8Array.Builder().Append((sbyte)-7).Build(), "TINYINT", "-7");
+            AssertMapping(Int16Type.Default, new Int16Array.Builder().Append((short)1234).Build(), "SMALLINT", "1234");
+            AssertMapping(Int32Type.Default, new Int32Array.Builder().Append(100000).Build(), "INT", "100000");
+            AssertMapping(Int64Type.Default, new Int64Array.Builder().Append(9000000000L).Build(), "BIGINT", "9000000000");
+            AssertMapping(UInt8Type.Default, new UInt8Array.Builder().Append((byte)200).Build(), "SMALLINT", "200");
+            AssertMapping(UInt16Type.Default, new UInt16Array.Builder().Append((ushort)60000).Build(), "INT", "60000");
+            AssertMapping(UInt32Type.Default, new UInt32Array.Builder().Append(4000000000U).Build(), "BIGINT", "4000000000");
+        }
+
+        /// <summary>
+        /// Floating-point values must be encoded with the round-trip ("R") format so no
+        /// precision is lost before the server casts the string back to FLOAT/DOUBLE
+        /// (the default "G" format truncates on net472/netstandard2.0).
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_FloatingPoint_UsesRoundTripEncoding()
+        {
+            var invariant = System.Globalization.CultureInfo.InvariantCulture;
+
+            const double doubleValue = 1.5;
+            var doubleParam = BuildSingleParameter(DoubleType.Default, new DoubleArray.Builder().Append(doubleValue).Build());
+            Assert.Equal("DOUBLE", doubleParam.Type);
+            Assert.Equal(doubleValue.ToString("R", invariant), doubleParam.Value.StringValue);
+
+            const float floatValue = 0.1f;
+            var floatParam = BuildSingleParameter(FloatType.Default, new FloatArray.Builder().Append(floatValue).Build());
+            Assert.Equal("FLOAT", floatParam.Type);
+            Assert.Equal(floatValue.ToString("R", invariant), floatParam.Value.StringValue);
+        }
+
+        /// <summary>
+        /// Every column in a multi-column single-row batch becomes a named TSparkParameter,
+        /// preserving both field name and per-column type mapping (the shape the E2E
+        /// TypedNamedParameters test round-trips against a live warehouse).
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_MultipleColumns_MapsEachNamedParameter()
+        {
+            var schema = new Schema(
+                new[]
+                {
+                    new Field("n", Int64Type.Default, true),
+                    new Field("d", DoubleType.Default, true),
+                    new Field("b", BooleanType.Default, true),
+                },
+                null);
+            var batch = new RecordBatch(
+                schema,
+                new IArrowArray[]
+                {
+                    new Int64Array.Builder().Append(41L).Build(),
+                    new DoubleArray.Builder().Append(1.5).Build(),
+                    new BooleanArray.Builder().Append(true).Build(),
+                },
+                1);
+
+            var result = InvokeBuildSparkParameters(batch);
+
+            Assert.NotNull(result);
+            var parameters = ((System.Collections.IList)result!)
+                .Cast<Apache.Hive.Service.Rpc.Thrift.TSparkParameter>()
+                .ToList();
+            Assert.Equal(3, parameters.Count);
+
+            Assert.Equal("n", parameters[0].Name);
+            Assert.Equal("BIGINT", parameters[0].Type);
+            Assert.Equal("41", parameters[0].Value.StringValue);
+
+            Assert.Equal("d", parameters[1].Name);
+            Assert.Equal("DOUBLE", parameters[1].Type);
+            Assert.Equal((1.5).ToString("R", System.Globalization.CultureInfo.InvariantCulture), parameters[1].Value.StringValue);
+
+            Assert.Equal("b", parameters[2].Name);
+            Assert.Equal("BOOLEAN", parameters[2].Type);
+            Assert.Equal("true", parameters[2].Value.StringValue);
         }
     }
 }

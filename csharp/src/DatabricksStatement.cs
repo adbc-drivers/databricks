@@ -609,6 +609,18 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         private static List<TSparkParameter> BuildSparkParameters(RecordBatch batch)
         {
+            // Databricks named parameters are a single row whose fields map to the
+            // ":name" placeholders. Reject any other shape explicitly rather than
+            // indexing row 0 blindly: an empty batch (RowCount == 0) would index past
+            // the end of a zero-length Arrow array, and a multi-row batch would have
+            // rows 1..N silently dropped.
+            if (batch.Length != 1)
+            {
+                throw new NotSupportedException(
+                    $"Binding named parameters requires a single-row batch, but the bound batch has {batch.Length} row(s). " +
+                    "Bind exactly one row whose fields correspond to the \":name\" placeholders in the SQL query.");
+            }
+
             var parameters = new List<TSparkParameter>(batch.ColumnCount);
             Schema schema = batch.Schema;
             for (int i = 0; i < batch.ColumnCount; i++)
@@ -633,14 +645,17 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Extracts the scalar value at <paramref name="index"/> from an Arrow array,
         /// returning the Databricks SQL type name and the invariant string encoding of
-        /// the value. A null value yields (null, null) so the server receives a null
-        /// parameter value.
+        /// the value. A null value yields ("VOID", null): the declared VOID type tells the
+        /// server the parameter is bound to SQL NULL, mirroring the JDBC driver
+        /// (mapToSparkParameterListItem always sets a type; inferDatabricksType(null) => VOID).
+        /// A TSparkParameter carrying no type at all would risk being treated as an unbound
+        /// placeholder rather than a NULL binding.
         /// </summary>
         private static (string? SqlType, string? StringValue) ConvertParameterValue(IArrowArray array, int index)
         {
             if (array.IsNull(index))
             {
-                return (null, null);
+                return ("VOID", null);
             }
 
             switch (array)
@@ -666,11 +681,18 @@ namespace AdbcDrivers.Databricks
                 case UInt32Array a:
                     return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
                 case UInt64Array a:
-                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                    // A ulong can exceed Int64.MaxValue (up to 18446744073709551615), which
+                    // overflows a signed BIGINT. Map to DECIMAL — the default DECIMAL(38,0)
+                    // holds the full 20-digit UInt64 range losslessly.
+                    return ("DECIMAL", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
                 case FloatArray a:
-                    return ("FLOAT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                    // Use the round-trip ("R") format specifier so the string encoding is
+                    // lossless on all target frameworks. On net472/netstandard2.0 the default
+                    // ("G") format emits only G7/G15 digits and would silently truncate the
+                    // value before the server casts it back to FLOAT/DOUBLE.
+                    return ("FLOAT", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
                 case DoubleArray a:
-                    return ("DOUBLE", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                    return ("DOUBLE", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
                 case Decimal128Array a:
                     return ("DECIMAL", a.GetString(index));
                 case Decimal256Array a:
