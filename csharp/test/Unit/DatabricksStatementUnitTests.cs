@@ -269,7 +269,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// A UInt64 value above Int64.MaxValue must map to DECIMAL (not signed BIGINT) so
+        /// A UInt64 value above Int64.MaxValue must map to DECIMAL(20,0) (not signed BIGINT, and
+        /// not a bare DECIMAL — which resolves to DECIMAL(10,0) in Spark and would overflow) so
         /// the full 20-digit ulong range survives the server-side cast without overflow.
         /// </summary>
         [Fact]
@@ -285,8 +286,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.NotNull(result);
             var parameters = (System.Collections.IList)result!;
             var parameter = Assert.Single(parameters.Cast<Apache.Hive.Service.Rpc.Thrift.TSparkParameter>().ToList());
-            Assert.Equal("DECIMAL", parameter.Type);
+            Assert.Equal("DECIMAL(20,0)", parameter.Type);
             Assert.Equal(value.ToString(System.Globalization.CultureInfo.InvariantCulture), parameter.Value.StringValue);
+        }
+
+        /// <summary>
+        /// Decimal128/Decimal256 parameters must carry the fully-qualified DECIMAL(precision,scale)
+        /// type derived from the Arrow decimal type — a bare DECIMAL means DECIMAL(10,0) in Spark,
+        /// which silently rounds a fractional value and overflows values with >10 integer digits.
+        /// Mirrors the JDBC driver's getDecimalTypeString.
+        /// </summary>
+        [Fact]
+        public void BuildSparkParameters_Decimal_EmitsPrecisionAndScale()
+        {
+            // Decimal128(38,10): a value with a fractional scale that a bare DECIMAL(10,0) would round.
+            var dec128Type = new Decimal128Type(38, 10);
+            var dec128Column = new Decimal128Array.Builder(dec128Type).Append(123.45m).Build();
+            var dec128Param = BuildSingleParameter(dec128Type, dec128Column);
+            Assert.Equal("DECIMAL(38,10)", dec128Param.Type);
+            Assert.Equal("123.4500000000", dec128Param.Value.StringValue);
+
+            // Decimal256(50,4): precision above 38 would be truncated by a bare DECIMAL.
+            var dec256Type = new Decimal256Type(50, 4);
+            var dec256Column = new Decimal256Array.Builder(dec256Type).Append(9.9999m).Build();
+            var dec256Param = BuildSingleParameter(dec256Type, dec256Column);
+            Assert.Equal("DECIMAL(50,4)", dec256Param.Type);
+            Assert.Equal("9.9999", dec256Param.Value.StringValue);
         }
 
         /// <summary>
@@ -401,6 +426,68 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("b", parameters[2].Name);
             Assert.Equal("BOOLEAN", parameters[2].Type);
             Assert.Equal("true", parameters[2].Value.StringValue);
+        }
+
+        /// <summary>
+        /// Reads the private _boundParameters field so the consume-once lifecycle can be asserted.
+        /// </summary>
+        private static RecordBatch? GetBoundParameters(DatabricksStatement statement)
+        {
+            var field = typeof(DatabricksStatement).GetField("_boundParameters",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(field);
+            return (RecordBatch?)field!.GetValue(statement);
+        }
+
+        /// <summary>
+        /// Invokes the protected DatabricksStatement.SetStatementProperties via reflection,
+        /// unwrapping the reflection exception wrapper so callers observe the real exception.
+        /// </summary>
+        private static void InvokeSetStatementProperties(
+            DatabricksStatement statement,
+            Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq request)
+        {
+            var method = typeof(DatabricksStatement).GetMethod("SetStatementProperties",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(method);
+            try
+            {
+                method!.Invoke(statement, new object[] { request });
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException != null)
+            {
+                throw ex.InnerException;
+            }
+        }
+
+        /// <summary>
+        /// A bound parameter batch must be consumed exactly once: after it is forwarded onto
+        /// one execution, it is cleared so a reused statement (new SqlQuery + ExecuteQuery)
+        /// does not silently re-ship stale parameters onto a follow-up query that never bound
+        /// its own (reviewer finding on Issue #648).
+        /// </summary>
+        [Fact]
+        public void Bind_ParametersAreConsumedOnceAndNotReshippedOnReuse()
+        {
+            using var statement = CreateStatement();
+            var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+
+            statement.Bind(batch, schema);
+            Assert.NotNull(GetBoundParameters(statement));
+
+            // First execution forwards the bound parameters and clears the captured batch.
+            var firstRequest = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, firstRequest);
+            Assert.Null(GetBoundParameters(statement));
+            Assert.NotNull(firstRequest.Parameters);
+            var firstParam = Assert.Single(firstRequest.Parameters);
+            Assert.Equal("p1", firstParam.Name);
+
+            // A subsequent execution with no new Bind must not re-ship the stale parameters.
+            var secondRequest = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, secondRequest);
+            Assert.True(secondRequest.Parameters == null || secondRequest.Parameters.Count == 0);
         }
     }
 }

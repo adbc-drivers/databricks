@@ -71,6 +71,8 @@ namespace AdbcDrivers.Databricks
         // SetStatementProperties can forward named parameters to the server as
         // TSparkParameter entries (Issue #648). A single-row batch whose fields
         // are the named parameters (e.g. field "p1" for the ":p1" placeholder).
+        // Consumed and cleared on each execution (see SetStatementProperties) so a
+        // binding does not leak onto a later query when the statement is reused.
         private RecordBatch? _boundParameters;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
@@ -546,13 +548,24 @@ namespace AdbcDrivers.Databricks
             // TSparkParameter whose Name matches the placeholder and whose declared
             // Type lets the server cast the string value (mirrors the JDBC driver's
             // mapToSparkParameterListItem: Type = SQL type name, Value = string form).
-            if (_boundParameters != null && _boundParameters.ColumnCount > 0)
+            if (_boundParameters != null)
             {
-                var parameters = BuildSparkParameters(_boundParameters);
-                if (parameters.Count > 0)
+                // Consume the bound batch exactly once. A DatabricksStatement can be
+                // reused (assign a new SqlQuery and ExecuteQuery again), so clear the
+                // captured batch after forwarding it — otherwise a batch bound for one
+                // query would silently re-ship as TSparkParameter entries on every
+                // subsequent execution (even a follow-up query with no ":name"
+                // placeholders). Callers re-Bind before each execution.
+                RecordBatch bound = _boundParameters;
+                _boundParameters = null;
+                if (bound.ColumnCount > 0)
                 {
-                    statement.Parameters = parameters;
-                    Activity.Current?.SetTag("statement.parameters.count", parameters.Count);
+                    var parameters = BuildSparkParameters(bound);
+                    if (parameters.Count > 0)
+                    {
+                        statement.Parameters = parameters;
+                        Activity.Current?.SetTag("statement.parameters.count", parameters.Count);
+                    }
                 }
             }
 
@@ -682,9 +695,10 @@ namespace AdbcDrivers.Databricks
                     return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
                 case UInt64Array a:
                     // A ulong can exceed Int64.MaxValue (up to 18446744073709551615), which
-                    // overflows a signed BIGINT. Map to DECIMAL — the default DECIMAL(38,0)
-                    // holds the full 20-digit UInt64 range losslessly.
-                    return ("DECIMAL", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                    // overflows a signed BIGINT. Map to DECIMAL(20,0): a bare "DECIMAL" means
+                    // DECIMAL(10,0) in Spark and would overflow, so declare the full 20-digit
+                    // UInt64 range explicitly.
+                    return ("DECIMAL(20,0)", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
                 case FloatArray a:
                     // Use the round-trip ("R") format specifier so the string encoding is
                     // lossless on all target frameworks. On net472/netstandard2.0 the default
@@ -694,13 +708,40 @@ namespace AdbcDrivers.Databricks
                 case DoubleArray a:
                     return ("DOUBLE", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
                 case Decimal128Array a:
-                    return ("DECIMAL", a.GetString(index));
+                    // Emit DECIMAL(p,s) from the Arrow type's declared precision/scale — a bare
+                    // "DECIMAL" means DECIMAL(10,0) in Spark, which truncates the fractional part
+                    // and overflows values with >10 integer digits. Mirrors the JDBC driver's
+                    // getDecimalTypeString.
+                    {
+                        var t = (Decimal128Type)a.Data.DataType;
+                        return (BuildDecimalTypeName(t.Precision, t.Scale), a.GetString(index));
+                    }
                 case Decimal256Array a:
-                    return ("DECIMAL", a.GetString(index));
+                    {
+                        var t = (Decimal256Type)a.Data.DataType;
+                        return (BuildDecimalTypeName(t.Precision, t.Scale), a.GetString(index));
+                    }
                 default:
                     throw new NotSupportedException(
                         $"Binding named parameters of Arrow type '{array.Data.DataType.TypeId}' is not supported.");
             }
+        }
+
+        /// <summary>
+        /// Builds a fully-qualified <c>DECIMAL(precision,scale)</c> type name from an Arrow decimal
+        /// type. A bare <c>DECIMAL</c> resolves to <c>DECIMAL(10,0)</c> in Databricks/Spark, so the
+        /// precision and scale must be declared explicitly to avoid silent rounding or overflow.
+        /// Guards against precision &lt; scale (which the server rejects), mirroring the JDBC
+        /// driver's <c>getDecimalTypeString</c>.
+        /// </summary>
+        private static string BuildDecimalTypeName(int precision, int scale)
+        {
+            if (precision < scale)
+            {
+                precision = scale;
+            }
+            return "DECIMAL(" + precision.ToString(CultureInfo.InvariantCulture)
+                + "," + scale.ToString(CultureInfo.InvariantCulture) + ")";
         }
 
         // Cast the Client to IAsync for CloudFetch compatibility
