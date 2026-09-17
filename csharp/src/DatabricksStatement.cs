@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -57,6 +58,10 @@ namespace AdbcDrivers.Databricks
         // improving query performance by reducing the number of FetchResults calls needed.
         internal const long DatabricksBatchSizeDefault = 2000000;
         private const string QueryTagsKey = "query_tags";
+        // Databricks/Spark DECIMAL precision maxes out at 38; a declared precision above this is
+        // rejected by the server. Arrow Decimal256 allows precision up to 76, so bound parameters
+        // must clamp to this ceiling (see BuildDecimalTypeName).
+        private const int DatabricksMaxDecimalPrecision = 38;
         private bool useCloudFetch;
         private bool canDecompressLz4;
         private long maxBytesPerFile;
@@ -66,6 +71,18 @@ namespace AdbcDrivers.Databricks
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
+        // Captures the named parameters materialized from the most recently bound
+        // batch (via Bind) so that SetStatementProperties can forward them to the
+        // server (Issue #648). The batch is converted to string-encoded
+        // TSparkParameter entries eagerly at Bind time, so the statement holds NO
+        // reference to the caller's RecordBatch or its backing Arrow buffers after
+        // Bind returns: the caller may dispose the batch immediately, and every
+        // reused execution still ships correct values. The binding persists across
+        // repeated executions of the same query and is cleared only when SqlQuery is
+        // reassigned (see the SqlQuery override), so a binding never leaks onto a
+        // later, unrelated query when the statement is reused, yet re-execution and
+        // post-failure retry keep working without re-Bind.
+        private List<TSparkParameter>? _boundParameters;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
@@ -535,6 +552,28 @@ namespace AdbcDrivers.Databricks
 
             Connection.TrySetGetDirectResults(statement);
 
+            // Forward bound named parameters to the server (Issue #648). Databricks
+            // supports ":name" placeholders in SQL; each bound column becomes a
+            // TSparkParameter whose Name matches the placeholder and whose declared
+            // Type lets the server cast the string value (mirrors the JDBC driver's
+            // mapToSparkParameterListItem: Type = SQL type name, Value = string form).
+            if (_boundParameters != null && _boundParameters.Count > 0)
+            {
+                // Forward the bound parameters WITHOUT clearing them. The binding
+                // persists until the query is replaced (see the SqlQuery override,
+                // which clears _boundParameters when the query text changes) —
+                // matching the usual ADBC/JDBC contract where a binding survives until
+                // it is replaced. This keeps prepared-statement-style reuse (Bind once,
+                // ExecuteQuery in a loop over the same query) and post-failure retries
+                // (re-ExecuteQuery without re-Bind) working, while a batch bound for one
+                // query still can never leak onto a later, unrelated query because
+                // reassigning SqlQuery drops the binding. The parameters were
+                // materialized at Bind time, so nothing here touches the caller's
+                // (possibly already disposed) RecordBatch.
+                statement.Parameters = _boundParameters;
+                Activity.Current?.SetTag("statement.parameters.count", _boundParameters.Count);
+            }
+
             // Set configuration overlay if any parameters were provided
             if (confOverlay != null && confOverlay.Count > 0)
             {
@@ -564,6 +603,330 @@ namespace AdbcDrivers.Databricks
             }
 
             Activity.Current?.AddEvent("statement.set_properties.complete");
+        }
+
+        /// <summary>
+        /// Gets or sets the SQL query to execute. Reassigning the query text drops any
+        /// previously bound parameter batch (Issue #648): a binding is associated with
+        /// the query it was made against, so a batch bound for one query must not leak
+        /// onto a later, unrelated query when the statement is reused. Re-Bind after
+        /// changing the query. Executing the same query repeatedly keeps the binding,
+        /// so prepared-statement-style reuse and post-failure retries resend the bound
+        /// parameters without re-binding.
+        /// <para>
+        /// The binding is only dropped when moving <em>off</em> an already-set query, i.e.
+        /// the previous <see cref="SqlQuery"/> was non-null and differs from the new value.
+        /// The initial <c>null</c> → query assignment keeps any binding already made, so a
+        /// caller that calls <see cref="Bind"/> before assigning <see cref="SqlQuery"/> is
+        /// supported and its binding is not silently discarded.
+        /// </para>
+        /// </summary>
+        public override string? SqlQuery
+        {
+            get => base.SqlQuery;
+            set
+            {
+                // Drop the binding only when replacing an existing query with a different
+                // one. Do NOT clear on the initial null -> query transition: a caller may
+                // Bind before setting SqlQuery, and clearing there would silently discard
+                // that binding and ship an unbound placeholder to the server (Issue #648).
+                if (base.SqlQuery != null && !string.Equals(base.SqlQuery, value, StringComparison.Ordinal))
+                {
+                    _boundParameters = null;
+                }
+                base.SqlQuery = value;
+            }
+        }
+
+        /// <summary>
+        /// Binds named parameters for the current query (Issue #648). The batch is
+        /// expected to be a single row whose fields correspond to the ":name"
+        /// placeholders in the SQL query. The values are copied into string-encoded
+        /// <see cref="TSparkParameter"/> entries immediately, so the statement retains
+        /// no reference to <paramref name="batch"/> or its backing Arrow buffers once
+        /// this method returns — the caller is free to dispose the batch right away,
+        /// even though the binding is reused by later executions. The binding persists
+        /// across repeated executions of the current query and is dropped when
+        /// <see cref="SqlQuery"/> is reassigned, so callers only need to re-Bind after
+        /// changing the query — not before every execution.
+        /// </summary>
+        public override void Bind(RecordBatch batch, Schema schema)
+        {
+            // NOTE: do not call base.Bind — the base AdbcStatement.Bind throws
+            // "Statement does not support Bind". This override adds Databricks
+            // named-parameter support. Materialize the parameters here rather than
+            // holding the RecordBatch: BuildSparkParameters reads every value into a
+            // string now, so a caller that disposes the batch between Bind and a
+            // (re)execution can no longer cause stale reads or an
+            // ObjectDisposedException in SetStatementProperties.
+            //
+            // Clear first so the failure is atomic: if BuildSparkParameters throws
+            // (multi-row, zero-row, or schema/column-count mismatch), the statement
+            // is left with NO binding rather than the previous successful one. A
+            // caller that binds a valid batch A, then re-binds an invalid batch B
+            // (which throws), then executes must not silently ship A's parameters —
+            // the binding it believes is in effect (B) was never installed.
+            _boundParameters = null;
+            _boundParameters = BuildSparkParameters(batch, schema);
+        }
+
+        /// <summary>
+        /// Translates the bound single-row parameter batch into a list of
+        /// <see cref="TSparkParameter"/> entries. Each field becomes a named parameter
+        /// whose declared SQL type lets the server cast the string-encoded value,
+        /// mirroring the JDBC driver's parameter mapping.
+        /// </summary>
+        private static List<TSparkParameter> BuildSparkParameters(RecordBatch batch, Schema schema)
+        {
+            // Databricks named parameters are a single row whose fields map to the
+            // ":name" placeholders. Reject any other shape explicitly rather than
+            // indexing row 0 blindly: an empty batch (RowCount == 0) would index past
+            // the end of a zero-length Arrow array, and a multi-row batch would have
+            // rows 1..N silently dropped.
+            if (batch.Length != 1)
+            {
+                throw new NotSupportedException(
+                    $"Binding named parameters requires a single-row batch, but the bound batch has {batch.Length} row(s). " +
+                    "Bind exactly one row whose fields correspond to the \":name\" placeholders in the SQL query.");
+            }
+
+            // Take the ":name" placeholder names from the schema passed to Bind, which
+            // the ADBC contract treats as the authoritative description of the batch's
+            // structure. A caller may build the RecordBatch from bare arrays whose own
+            // batch.Schema carries empty/default field names while supplying the intended
+            // names via the schema argument; sourcing names from batch.Schema would then
+            // bind against empty placeholder names and silently fail to resolve on the
+            // server. Reject a schema that disagrees on column count rather than pairing
+            // mismatched names and value arrays.
+            if (schema.FieldsList.Count != batch.ColumnCount)
+            {
+                throw new ArgumentException(
+                    $"The bind schema describes {schema.FieldsList.Count} field(s) but the bound batch has {batch.ColumnCount} column(s). " +
+                    "The schema and batch must describe the same set of named parameters.",
+                    nameof(schema));
+            }
+
+            var parameters = new List<TSparkParameter>(batch.ColumnCount);
+            for (int i = 0; i < batch.ColumnCount; i++)
+            {
+                Field field = schema.GetFieldByIndex(i);
+                IArrowArray array = batch.Column(i);
+                var parameter = new TSparkParameter { Name = field.Name };
+                (string? sqlType, string? stringValue) = ConvertParameterValue(array, 0);
+                if (sqlType != null)
+                {
+                    parameter.Type = sqlType;
+                }
+                if (stringValue != null)
+                {
+                    parameter.Value = new TSparkParameterValue { StringValue = stringValue };
+                }
+                parameters.Add(parameter);
+            }
+            return parameters;
+        }
+
+        /// <summary>
+        /// Extracts the scalar value at <paramref name="index"/> from an Arrow array,
+        /// returning the Databricks SQL type name and the invariant string encoding of
+        /// the value. A null value yields ("VOID", null): the declared VOID type tells the
+        /// server the parameter is bound to SQL NULL, mirroring the JDBC driver
+        /// (mapToSparkParameterListItem always sets a type; inferDatabricksType(null) => VOID).
+        /// A TSparkParameter carrying no type at all would risk being treated as an unbound
+        /// placeholder rather than a NULL binding.
+        /// </summary>
+        private static (string? SqlType, string? StringValue) ConvertParameterValue(IArrowArray array, int index)
+        {
+            if (array.IsNull(index))
+            {
+                return ("VOID", null);
+            }
+
+            switch (array)
+            {
+                case StringArray a:
+                    return ("STRING", a.GetString(index));
+                case LargeStringArray a:
+                    return ("STRING", a.GetString(index));
+                case BooleanArray a:
+                    return ("BOOLEAN", a.GetValue(index) == true ? "true" : "false");
+                case Int8Array a:
+                    return ("TINYINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int16Array a:
+                    return ("SMALLINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int32Array a:
+                    return ("INT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int64Array a:
+                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt8Array a:
+                    return ("SMALLINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt16Array a:
+                    return ("INT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt32Array a:
+                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt64Array a:
+                    // A ulong can exceed Int64.MaxValue (up to 18446744073709551615), which
+                    // overflows a signed BIGINT. Map to DECIMAL(20,0): a bare "DECIMAL" means
+                    // DECIMAL(10,0) in Spark and would overflow, so declare the full 20-digit
+                    // UInt64 range explicitly.
+                    return ("DECIMAL(20,0)", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case FloatArray a:
+                    // Use "G9" (not "R") for Single: Microsoft documents that Single.ToString("R")
+                    // can fail to round-trip on 64-bit runtimes (net472/netstandard2.0), and "G9" is
+                    // the shortest specifier guaranteed to round-trip a float on every target
+                    // framework. ("R"/"G17" are the round-trip specifiers for Double, not Single.)
+                    // The default ("G") format emits only ~7 significant digits and would silently
+                    // truncate the value before the server casts it back to FLOAT.
+                    return ("FLOAT", a.GetValue(index)!.Value.ToString("G9", CultureInfo.InvariantCulture));
+                case DoubleArray a:
+                    // Use "G17" (not "R") for Double: Microsoft documents that Double.ToString("R")
+                    // can fail to round-trip when compiled for x64 (/platform:x64 or /platform:anycpu),
+                    // which applies on net472/netstandard2.0, and recommends "G17" as the specifier
+                    // guaranteed to round-trip a double. This mirrors the "G9" choice on the FloatArray
+                    // branch above, which avoids the identical "R" round-trip failure for Single.
+                    return ("DOUBLE", a.GetValue(index)!.Value.ToString("G17", CultureInfo.InvariantCulture));
+                case Decimal128Array a:
+                    // Emit DECIMAL(p,s) from the Arrow type's declared precision/scale — a bare
+                    // "DECIMAL" means DECIMAL(10,0) in Spark, which truncates the fractional part
+                    // and overflows values with >10 integer digits. Mirrors the JDBC driver's
+                    // getDecimalTypeString.
+                    {
+                        var t = (Decimal128Type)a.Data.DataType;
+                        return ConvertDecimalValue(t.Precision, t.Scale, a.GetString(index));
+                    }
+                case Decimal256Array a:
+                    {
+                        var t = (Decimal256Type)a.Data.DataType;
+                        return ConvertDecimalValue(t.Precision, t.Scale, a.GetString(index));
+                    }
+                default:
+                    throw new NotSupportedException(
+                        $"Binding named parameters of Arrow type '{array.Data.DataType.TypeId}' is not supported.");
+            }
+        }
+
+        /// <summary>
+        /// Builds a fully-qualified <c>DECIMAL(precision,scale)</c> type name from an Arrow decimal
+        /// type. A bare <c>DECIMAL</c> resolves to <c>DECIMAL(10,0)</c> in Databricks/Spark, so the
+        /// precision and scale must be declared explicitly to avoid silent rounding or overflow.
+        /// Guards against precision &lt; scale (which the server rejects), mirroring the JDBC
+        /// driver's <c>getDecimalTypeString</c>. Caps both precision and scale at Databricks'/Spark's
+        /// maximum DECIMAL precision of 38: Arrow <see cref="Decimal256Type"/> permits precision (and
+        /// scale) up to 76, so a wide-declared Decimal256 (e.g. <c>Decimal256(50,4)</c>) holding a small
+        /// value would otherwise emit <c>DECIMAL(50,4)</c>, a type the server rejects even though the
+        /// value fits. Scale is clamped before the final <c>precision &lt; scale</c> re-check so a
+        /// high-scale type such as <c>Decimal256(50,40)</c> cannot emit <c>DECIMAL(38,40)</c>
+        /// (precision &lt; scale) after the precision clamp.
+        /// </summary>
+        private static string BuildDecimalTypeName(int precision, int scale)
+        {
+            (int clampedPrecision, int clampedScale) = ClampDecimal(precision, scale);
+            return "DECIMAL(" + clampedPrecision.ToString(CultureInfo.InvariantCulture)
+                + "," + clampedScale.ToString(CultureInfo.InvariantCulture) + ")";
+        }
+
+        /// <summary>
+        /// Clamps an Arrow decimal type's precision and scale to the DECIMAL type Databricks/Spark
+        /// accepts. Clamps both precision and scale to the server ceiling first, then enforces
+        /// <c>precision &gt;= scale</c> last. Clamping scale before this final check is what keeps a
+        /// high-scale Decimal256 (scale &gt; 38) from surviving the precision clamp as an invalid
+        /// <c>DECIMAL(38,scale)</c> with precision &lt; scale.
+        /// </summary>
+        private static (int Precision, int Scale) ClampDecimal(int precision, int scale)
+        {
+            if (precision > DatabricksMaxDecimalPrecision)
+            {
+                precision = DatabricksMaxDecimalPrecision;
+            }
+            if (scale > DatabricksMaxDecimalPrecision)
+            {
+                scale = DatabricksMaxDecimalPrecision;
+            }
+            if (precision < scale)
+            {
+                precision = scale;
+            }
+            return (precision, scale);
+        }
+
+        /// <summary>
+        /// Produces the DECIMAL type name and the string-encoded value for a bound Arrow decimal
+        /// parameter, reconciling the two when the Arrow type's precision/scale exceed the server
+        /// ceiling. When the declared type fits (the common case, and every <see cref="Decimal128Type"/>
+        /// since its precision maxes at 38) the value already matches the type by construction and is
+        /// shipped verbatim. When the type is clamped to <c>DECIMAL(38,…)</c>, the value literal still
+        /// carries the original (wider) scale/magnitude, so <see cref="FitDecimalValueToClampedType"/>
+        /// reconciles it against the clamped type — dropping only insignificant trailing fractional
+        /// zeros and rejecting a value that genuinely cannot be represented, rather than shipping a
+        /// literal the server may silently round or reject (Issue #648 review follow-up).
+        /// </summary>
+        private static (string? SqlType, string? StringValue) ConvertDecimalValue(int precision, int scale, string? rawValue)
+        {
+            (int clampedPrecision, int clampedScale) = ClampDecimal(precision, scale);
+            string typeName = "DECIMAL(" + clampedPrecision.ToString(CultureInfo.InvariantCulture)
+                + "," + clampedScale.ToString(CultureInfo.InvariantCulture) + ")";
+
+            // No clamping: the Arrow value already fits its declared type, so ship it unchanged and
+            // avoid re-formatting the well-exercised common path.
+            if (clampedPrecision == precision && clampedScale == scale)
+            {
+                return (typeName, rawValue);
+            }
+
+            return (typeName, FitDecimalValueToClampedType(rawValue, clampedPrecision, clampedScale));
+        }
+
+        /// <summary>
+        /// Reconciles a decimal value literal with a clamped <c>DECIMAL(precision,scale)</c> type.
+        /// Fractional digits beyond <paramref name="scale"/> are dropped only when they are all
+        /// zero; a non-zero digit there means the value cannot be represented without silent
+        /// rounding, so the bind is rejected. Likewise a magnitude with more integer digits than
+        /// <c>precision - scale</c> overflows the clamped type and is rejected.
+        /// </summary>
+        private static string? FitDecimalValueToClampedType(string? rawValue, int precision, int scale)
+        {
+            if (string.IsNullOrEmpty(rawValue))
+            {
+                return rawValue;
+            }
+
+            string value = rawValue!;
+            bool negative = value[0] == '-';
+            string magnitude = (negative || value[0] == '+') ? value.Substring(1) : value;
+
+            int dot = magnitude.IndexOf('.');
+            string intPart = dot < 0 ? magnitude : magnitude.Substring(0, dot);
+            string fracPart = dot < 0 ? string.Empty : magnitude.Substring(dot + 1);
+
+            // Any fractional digit beyond the clamped scale must be zero; a non-zero digit there
+            // means the value would be silently rounded when cast to DECIMAL(precision,scale).
+            if (fracPart.Length > scale)
+            {
+                for (int i = scale; i < fracPart.Length; i++)
+                {
+                    if (fracPart[i] != '0')
+                    {
+                        throw new NotSupportedException(
+                            $"Decimal parameter value '{rawValue}' has more than {scale} significant fractional digit(s) " +
+                            $"and cannot be represented as DECIMAL({precision},{scale}), the maximum DECIMAL precision Databricks/Spark supports.");
+                    }
+                }
+                fracPart = fracPart.Substring(0, scale);
+            }
+
+            // The clamped type holds at most (precision - scale) integer digits; leading zeros do
+            // not count. A larger magnitude overflows it.
+            string significantInt = intPart.TrimStart('0');
+            int allowedIntegerDigits = precision - scale;
+            if (significantInt.Length > allowedIntegerDigits)
+            {
+                throw new NotSupportedException(
+                    $"Decimal parameter value '{rawValue}' has {significantInt.Length} integer digit(s), which overflows " +
+                    $"DECIMAL({precision},{scale}), the maximum DECIMAL precision Databricks/Spark supports.");
+            }
+
+            string result = fracPart.Length > 0 ? intPart + "." + fracPart : intPart;
+            return negative ? "-" + result : result;
         }
 
         // Cast the Client to IAsync for CloudFetch compatibility
