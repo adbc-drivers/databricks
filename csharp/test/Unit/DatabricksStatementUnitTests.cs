@@ -363,9 +363,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         /// <summary>
         /// Floating-point values must be encoded losslessly so no precision is lost before
         /// the server casts the string back to FLOAT/DOUBLE (the default "G" format truncates
-        /// on net472/netstandard2.0). Double uses "R" and Single uses "G9" — Single.ToString("R")
-        /// can fail to round-trip on 64-bit runtimes, so the assertions verify an actual
-        /// parse-back round-trip rather than comparing against the same format specifier.
+        /// on net472/netstandard2.0). Double uses "G17" and Single uses "G9" — both ".ToString("R")"
+        /// can fail to round-trip when compiled for x64 (net472/netstandard2.0), so the assertions
+        /// verify an actual parse-back round-trip rather than comparing against a format specifier.
         /// </summary>
         [Fact]
         public void BuildSparkParameters_FloatingPoint_UsesRoundTripEncoding()

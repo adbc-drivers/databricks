@@ -737,7 +737,12 @@ namespace AdbcDrivers.Databricks
                     // truncate the value before the server casts it back to FLOAT.
                     return ("FLOAT", a.GetValue(index)!.Value.ToString("G9", CultureInfo.InvariantCulture));
                 case DoubleArray a:
-                    return ("DOUBLE", a.GetValue(index)!.Value.ToString("R", CultureInfo.InvariantCulture));
+                    // Use "G17" (not "R") for Double: Microsoft documents that Double.ToString("R")
+                    // can fail to round-trip when compiled for x64 (/platform:x64 or /platform:anycpu),
+                    // which applies on net472/netstandard2.0, and recommends "G17" as the specifier
+                    // guaranteed to round-trip a double. This mirrors the "G9" choice on the FloatArray
+                    // branch above, which avoids the identical "R" round-trip failure for Single.
+                    return ("DOUBLE", a.GetValue(index)!.Value.ToString("G17", CultureInfo.InvariantCulture));
                 case Decimal128Array a:
                     // Emit DECIMAL(p,s) from the Arrow type's declared precision/scale — a bare
                     // "DECIMAL" means DECIMAL(10,0) in Spark, which truncates the fractional part
