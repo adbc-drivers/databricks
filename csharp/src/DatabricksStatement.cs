@@ -67,15 +67,18 @@ namespace AdbcDrivers.Databricks
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
-        // Captures the most recently bound parameter batch (via Bind) so that
-        // SetStatementProperties can forward named parameters to the server as
-        // TSparkParameter entries (Issue #648). A single-row batch whose fields
-        // are the named parameters (e.g. field "p1" for the ":p1" placeholder).
-        // The binding persists across repeated executions of the same query and is
-        // cleared only when SqlQuery is reassigned (see the SqlQuery override), so a
-        // binding never leaks onto a later, unrelated query when the statement is
-        // reused, yet re-execution and post-failure retry keep working without re-Bind.
-        private RecordBatch? _boundParameters;
+        // Captures the named parameters materialized from the most recently bound
+        // batch (via Bind) so that SetStatementProperties can forward them to the
+        // server (Issue #648). The batch is converted to string-encoded
+        // TSparkParameter entries eagerly at Bind time, so the statement holds NO
+        // reference to the caller's RecordBatch or its backing Arrow buffers after
+        // Bind returns: the caller may dispose the batch immediately, and every
+        // reused execution still ships correct values. The binding persists across
+        // repeated executions of the same query and is cleared only when SqlQuery is
+        // reassigned (see the SqlQuery override), so a binding never leaks onto a
+        // later, unrelated query when the statement is reused, yet re-execution and
+        // post-failure retry keep working without re-Bind.
+        private List<TSparkParameter>? _boundParameters;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
@@ -550,27 +553,21 @@ namespace AdbcDrivers.Databricks
             // TSparkParameter whose Name matches the placeholder and whose declared
             // Type lets the server cast the string value (mirrors the JDBC driver's
             // mapToSparkParameterListItem: Type = SQL type name, Value = string form).
-            if (_boundParameters != null)
+            if (_boundParameters != null && _boundParameters.Count > 0)
             {
-                // Forward the bound batch WITHOUT clearing it. The binding persists
-                // until the query is replaced (see the SqlQuery override, which clears
-                // _boundParameters when the query text changes) — matching the usual
-                // ADBC/JDBC contract where a binding survives until it is replaced.
-                // This keeps prepared-statement-style reuse (Bind once, ExecuteQuery in
-                // a loop over the same query) and post-failure retries (re-ExecuteQuery
-                // without re-Bind) working, while a batch bound for one query still can
-                // never leak onto a later, unrelated query because reassigning SqlQuery
-                // drops the binding.
-                RecordBatch bound = _boundParameters;
-                if (bound.ColumnCount > 0)
-                {
-                    var parameters = BuildSparkParameters(bound);
-                    if (parameters.Count > 0)
-                    {
-                        statement.Parameters = parameters;
-                        Activity.Current?.SetTag("statement.parameters.count", parameters.Count);
-                    }
-                }
+                // Forward the bound parameters WITHOUT clearing them. The binding
+                // persists until the query is replaced (see the SqlQuery override,
+                // which clears _boundParameters when the query text changes) —
+                // matching the usual ADBC/JDBC contract where a binding survives until
+                // it is replaced. This keeps prepared-statement-style reuse (Bind once,
+                // ExecuteQuery in a loop over the same query) and post-failure retries
+                // (re-ExecuteQuery without re-Bind) working, while a batch bound for one
+                // query still can never leak onto a later, unrelated query because
+                // reassigning SqlQuery drops the binding. The parameters were
+                // materialized at Bind time, so nothing here touches the caller's
+                // (possibly already disposed) RecordBatch.
+                statement.Parameters = _boundParameters;
+                Activity.Current?.SetTag("statement.parameters.count", _boundParameters.Count);
             }
 
             // Set configuration overlay if any parameters were provided
@@ -627,20 +624,27 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// Captures the bound parameter batch so that named parameters can be forwarded
-        /// to the server on execution (Issue #648). The batch is expected to be a single
-        /// row whose fields correspond to the ":name" placeholders in the SQL query.
-        /// The binding persists across repeated executions of the current query and is
-        /// dropped when <see cref="SqlQuery"/> is reassigned, so callers only need to
-        /// re-Bind after changing the query — not before every execution.
+        /// Binds named parameters for the current query (Issue #648). The batch is
+        /// expected to be a single row whose fields correspond to the ":name"
+        /// placeholders in the SQL query. The values are copied into string-encoded
+        /// <see cref="TSparkParameter"/> entries immediately, so the statement retains
+        /// no reference to <paramref name="batch"/> or its backing Arrow buffers once
+        /// this method returns — the caller is free to dispose the batch right away,
+        /// even though the binding is reused by later executions. The binding persists
+        /// across repeated executions of the current query and is dropped when
+        /// <see cref="SqlQuery"/> is reassigned, so callers only need to re-Bind after
+        /// changing the query — not before every execution.
         /// </summary>
         public override void Bind(RecordBatch batch, Schema schema)
         {
             // NOTE: do not call base.Bind — the base AdbcStatement.Bind throws
             // "Statement does not support Bind". This override adds Databricks
-            // named-parameter support by capturing the bound batch here and
-            // forwarding it as TSparkParameter entries in SetStatementProperties.
-            _boundParameters = batch;
+            // named-parameter support. Materialize the parameters here rather than
+            // holding the RecordBatch: BuildSparkParameters reads every value into a
+            // string now, so a caller that disposes the batch between Bind and a
+            // (re)execution can no longer cause stale reads or an
+            // ObjectDisposedException in SetStatementProperties.
+            _boundParameters = BuildSparkParameters(batch);
         }
 
         /// <summary>

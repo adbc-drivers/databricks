@@ -432,14 +432,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         /// <summary>
-        /// Reads the private _boundParameters field so the binding lifecycle can be asserted.
+        /// Reads the private _boundParameters field (now the materialized TSparkParameter
+        /// list) so the binding lifecycle can be asserted.
         /// </summary>
-        private static RecordBatch? GetBoundParameters(DatabricksStatement statement)
+        private static object? GetBoundParameters(DatabricksStatement statement)
         {
             var field = typeof(DatabricksStatement).GetField("_boundParameters",
                 BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.NotNull(field);
-            return (RecordBatch?)field!.GetValue(statement);
+            return field!.GetValue(statement);
         }
 
         /// <summary>
@@ -520,6 +521,38 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
             InvokeSetStatementProperties(statement, request);
             Assert.True(request.Parameters == null || request.Parameters.Count == 0);
+        }
+
+        /// <summary>
+        /// The bound parameters are materialized (copied to string form) at Bind time, so
+        /// the statement retains no reference to the caller's RecordBatch or its backing
+        /// Arrow buffers. Disposing the bound batch immediately after Bind must not affect
+        /// later executions: they still ship the correct values and never touch disposed
+        /// Arrow arrays (reviewer finding on Issue #648 — ownership/lifetime contract).
+        /// </summary>
+        [Fact]
+        public void Bind_ParametersSurviveDisposalOfBoundBatch()
+        {
+            using var statement = CreateStatement();
+            statement.SqlQuery = "SELECT :p1 AS v";
+            var schema = new Schema(new[] { new Field("p1", StringType.Default, true) }, null);
+            var batch = new RecordBatch(schema, new IArrowArray[] { SingleStringColumn("value") }, 1);
+
+            statement.Bind(batch, schema);
+
+            // The caller disposes the batch (and its Arrow buffers) right after Bind —
+            // exactly the prepared-statement reuse pattern the binding is designed for.
+            batch.Dispose();
+
+            // A later execution must still forward the captured value without reading the
+            // now-disposed Arrow arrays (no ObjectDisposedException / stale data).
+            var request = new Apache.Hive.Service.Rpc.Thrift.TExecuteStatementReq();
+            InvokeSetStatementProperties(statement, request);
+            Assert.NotNull(request.Parameters);
+            var parameter = Assert.Single(request.Parameters);
+            Assert.Equal("p1", parameter.Name);
+            Assert.Equal("STRING", parameter.Type);
+            Assert.Equal("value", parameter.Value.StringValue);
         }
     }
 }
