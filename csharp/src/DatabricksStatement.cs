@@ -24,6 +24,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,6 +67,11 @@ namespace AdbcDrivers.Databricks
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
         private Dictionary<string, string>? confOverlay;
+        // Captures the most recently bound parameter batch (via Bind) so that
+        // SetStatementProperties can forward named parameters to the server as
+        // TSparkParameter entries (Issue #648). A single-row batch whose fields
+        // are the named parameters (e.g. field "p1" for the ":p1" placeholder).
+        private RecordBatch? _boundParameters;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
@@ -535,6 +541,21 @@ namespace AdbcDrivers.Databricks
 
             Connection.TrySetGetDirectResults(statement);
 
+            // Forward bound named parameters to the server (Issue #648). Databricks
+            // supports ":name" placeholders in SQL; each bound column becomes a
+            // TSparkParameter whose Name matches the placeholder and whose declared
+            // Type lets the server cast the string value (mirrors the JDBC driver's
+            // mapToSparkParameterListItem: Type = SQL type name, Value = string form).
+            if (_boundParameters != null && _boundParameters.ColumnCount > 0)
+            {
+                var parameters = BuildSparkParameters(_boundParameters);
+                if (parameters.Count > 0)
+                {
+                    statement.Parameters = parameters;
+                    Activity.Current?.SetTag("statement.parameters.count", parameters.Count);
+                }
+            }
+
             // Set configuration overlay if any parameters were provided
             if (confOverlay != null && confOverlay.Count > 0)
             {
@@ -564,6 +585,100 @@ namespace AdbcDrivers.Databricks
             }
 
             Activity.Current?.AddEvent("statement.set_properties.complete");
+        }
+
+        /// <summary>
+        /// Captures the bound parameter batch so that named parameters can be forwarded
+        /// to the server on execution (Issue #648). The batch is expected to be a single
+        /// row whose fields correspond to the ":name" placeholders in the SQL query.
+        /// </summary>
+        public override void Bind(RecordBatch batch, Schema schema)
+        {
+            // NOTE: do not call base.Bind — the base AdbcStatement.Bind throws
+            // "Statement does not support Bind". This override adds Databricks
+            // named-parameter support by capturing the bound batch here and
+            // forwarding it as TSparkParameter entries in SetStatementProperties.
+            _boundParameters = batch;
+        }
+
+        /// <summary>
+        /// Translates the bound single-row parameter batch into a list of
+        /// <see cref="TSparkParameter"/> entries. Each field becomes a named parameter
+        /// whose declared SQL type lets the server cast the string-encoded value,
+        /// mirroring the JDBC driver's parameter mapping.
+        /// </summary>
+        private static List<TSparkParameter> BuildSparkParameters(RecordBatch batch)
+        {
+            var parameters = new List<TSparkParameter>(batch.ColumnCount);
+            Schema schema = batch.Schema;
+            for (int i = 0; i < batch.ColumnCount; i++)
+            {
+                Field field = schema.GetFieldByIndex(i);
+                IArrowArray array = batch.Column(i);
+                var parameter = new TSparkParameter { Name = field.Name };
+                (string? sqlType, string? stringValue) = ConvertParameterValue(array, 0);
+                if (sqlType != null)
+                {
+                    parameter.Type = sqlType;
+                }
+                if (stringValue != null)
+                {
+                    parameter.Value = new TSparkParameterValue { StringValue = stringValue };
+                }
+                parameters.Add(parameter);
+            }
+            return parameters;
+        }
+
+        /// <summary>
+        /// Extracts the scalar value at <paramref name="index"/> from an Arrow array,
+        /// returning the Databricks SQL type name and the invariant string encoding of
+        /// the value. A null value yields (null, null) so the server receives a null
+        /// parameter value.
+        /// </summary>
+        private static (string? SqlType, string? StringValue) ConvertParameterValue(IArrowArray array, int index)
+        {
+            if (array.IsNull(index))
+            {
+                return (null, null);
+            }
+
+            switch (array)
+            {
+                case StringArray a:
+                    return ("STRING", a.GetString(index));
+                case LargeStringArray a:
+                    return ("STRING", a.GetString(index));
+                case BooleanArray a:
+                    return ("BOOLEAN", a.GetValue(index) == true ? "true" : "false");
+                case Int8Array a:
+                    return ("TINYINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int16Array a:
+                    return ("SMALLINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int32Array a:
+                    return ("INT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Int64Array a:
+                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt8Array a:
+                    return ("SMALLINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt16Array a:
+                    return ("INT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt32Array a:
+                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case UInt64Array a:
+                    return ("BIGINT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case FloatArray a:
+                    return ("FLOAT", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case DoubleArray a:
+                    return ("DOUBLE", a.GetValue(index)!.Value.ToString(CultureInfo.InvariantCulture));
+                case Decimal128Array a:
+                    return ("DECIMAL", a.GetString(index));
+                case Decimal256Array a:
+                    return ("DECIMAL", a.GetString(index));
+                default:
+                    throw new NotSupportedException(
+                        $"Binding named parameters of Arrow type '{array.Data.DataType.TypeId}' is not supported.");
+            }
         }
 
         // Cast the Client to IAsync for CloudFetch compatibility
