@@ -75,34 +75,19 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         protected override void ResetState()
         {
             _currentChunkIndex = 0;
-            // Observe/drop any leftover prefetch from a prior run so a restart never awaits a stale batch.
-            ObservePrefetch();
         }
 
         /// <inheritdoc />
         protected override void OnFetchLoopCompleted()
         {
-            // Guaranteed to run when the fetch loop stops, including the cancellation-between-iterations
-            // path where the loop exits via its while-condition (so FetchNextBatchAsync's catch never
-            // runs). Observe the abandoned look-ahead prefetch here so a fault is never left unobserved.
-            ObservePrefetch();
-        }
-
-        /// <summary>
-        /// Clears the pending look-ahead prefetch, attaching a fault observer so an abandoned fetch that
-        /// Faults (e.g. a transient network error racing cancellation) is observed rather than surfacing
-        /// as an unobserved <see cref="TaskScheduler.UnobservedTaskException"/>. A Canceled prefetch does
-        /// not run the continuation and needs no observation.
-        /// </summary>
-        private void ObservePrefetch()
-        {
-            Task<ResultData>? pending = _prefetchTask;
+            // Runs whenever the fetch loop stops (completion, error, or the cancellation-between-
+            // iterations exit that FetchNextBatchAsync's catch never sees). Observe an abandoned
+            // look-ahead prefetch so a fault — e.g. a transient network error that races cancellation
+            // and Faults the task instead of Canceling it — is not left as an unobserved task
+            // exception. A Canceled task doesn't run the continuation, so it needs no observation.
+            var pending = _prefetchTask;
             _prefetchTask = null;
-            pending?.ContinueWith(
-                static t => { _ = t.Exception; },
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            pending?.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
         }
 
         /// <inheritdoc />
@@ -381,7 +366,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 if (disposing)
                 {
-                    ObservePrefetch();
                     _fetchLock?.Dispose();
                 }
                 _disposed = true;
