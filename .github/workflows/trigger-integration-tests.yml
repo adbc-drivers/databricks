@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Check if integration-test label exists
         id: check-label
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const labels = context.payload.pull_request.labels.map(l => l.name);
@@ -39,7 +39,7 @@ jobs:
 
       - name: Remove integration-test label
         if: steps.check-label.outputs.result == 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             try {
@@ -60,7 +60,7 @@ jobs:
 
       - name: Comment on PR about label removal
         if: steps.check-label.outputs.result == 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -104,7 +104,7 @@ jobs:
       checks: write
     steps:
       - name: Skip C# Integration Tests
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ github.token }}
           script: |
@@ -123,7 +123,7 @@ jobs:
             });
 
       - name: Skip Rust Integration Tests
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ github.token }}
           script: |
@@ -156,7 +156,7 @@ jobs:
     steps:
       - name: Detect changed driver paths
         id: changed
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const { data: files } = await github.rest.pulls.listFiles({
@@ -181,7 +181,7 @@ jobs:
 
       - name: Generate GitHub App Token (internal repo)
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -190,7 +190,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -199,7 +199,7 @@ jobs:
 
       - name: Sanitize PR title
         id: sanitize
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           result-encoding: string
           script: |
@@ -212,7 +212,7 @@ jobs:
       # backend selection now (design: unified replay PR gate).
       - name: Dispatch C# tests to internal repo
         if: steps.changed.outputs.csharp == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -229,7 +229,7 @@ jobs:
 
       - name: Dispatch Rust tests to internal repo
         if: steps.changed.outputs.rust == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -246,7 +246,7 @@ jobs:
 
       - name: Pass Integration Tests check (C# not needed)
         if: steps.changed.outputs.csharp != 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -266,7 +266,7 @@ jobs:
 
       - name: Pass Rust Integration Tests check (Rust not needed)
         if: steps.changed.outputs.rust != 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -285,7 +285,7 @@ jobs:
             });
 
       - name: Comment on PR
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             await github.rest.issues.createComment({
@@ -303,7 +303,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, peco-driver]
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
@@ -324,7 +324,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -333,7 +333,7 @@ jobs:
 
       - name: Auto-pass (no C# changes)
         if: steps.changed.outputs.changed != 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -359,7 +359,7 @@ jobs:
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -368,7 +368,7 @@ jobs:
 
       - name: Dispatch C# tests
         if: steps.changed.outputs.changed == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -385,7 +385,7 @@ jobs:
 
       - name: Fail check on dispatch error
         if: failure() && steps.changed.outputs.changed == 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -401,7 +401,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, peco-driver]
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
@@ -417,7 +417,7 @@ jobs:
 
       - name: Generate GitHub App Token (public repo)
         id: adbc-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -426,7 +426,7 @@ jobs:
 
       - name: Auto-pass (no Rust changes)
         if: steps.changed.outputs.changed != 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -452,7 +452,7 @@ jobs:
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.changed == 'true'
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -461,7 +461,7 @@ jobs:
 
       - name: Dispatch Rust tests
         if: steps.changed.outputs.changed == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
@@ -478,7 +478,7 @@ jobs:
 
       - name: Fail check on dispatch error
         if: failure() && steps.changed.outputs.changed == 'true'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ steps.adbc-token.outputs.token }}
           script: |
@@ -505,7 +505,7 @@ jobs:
     steps:
       - name: Check if C# files changed
         id: changed
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             const { data: files } = await github.rest.pulls.listFiles({
@@ -521,7 +521,7 @@ jobs:
       - name: Generate GitHub App Token (internal repo)
         if: steps.changed.outputs.csharp == 'true'
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.INTEGRATION_TEST_APP_ID }}
           private-key: ${{ secrets.INTEGRATION_TEST_PRIVATE_KEY }}
@@ -530,7 +530,7 @@ jobs:
 
       - name: Dispatch csharp-coverage
         if: steps.changed.outputs.csharp == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3.0.0
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697  # v4.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
           repository: databricks/databricks-driver-test
