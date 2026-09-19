@@ -612,7 +612,7 @@ namespace AdbcDrivers.Databricks.Tests
             testConfig.Catalog = string.Empty;
             testConfig.DbSchema = string.Empty;
 
-            var connection = NewConnection(testConfig);
+            using var connection = NewConnection(testConfig);
             var statement = connection.CreateStatement();
             statement.SqlQuery = "SELECT current_catalog()";
 
