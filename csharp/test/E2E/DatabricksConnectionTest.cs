@@ -510,9 +510,11 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(TestConfiguration.DbSchema, defaultNamespace.SchemaName);
         }
 
-        // Test that the catalog and schema are set correctly in the dbr session and the statement
-        // note - this test assumes not legacy dbr and hive_metastore is the default catalog
-        // also assumes there is a main catalog and hive_metastore.information_schema schema
+        // Test that the catalog and schema are set correctly in the dbr session and the statement.
+        // The warehouse's default catalog (what current_catalog() returns when the driver pins no
+        // specific catalog) is read live via GetWarehouseDefaultCatalogAsync rather than assumed:
+        // it is a workspace-side setting that has changed over time (historically hive_metastore,
+        // now main). Assumes there is a "main" catalog and a hive_metastore.information_schema schema.
         [SkippableTheory]
         [InlineData(null, null, "true", "hive_metastore", "default")]
         [InlineData("main", null, "true", "main", "default")]
@@ -566,9 +568,16 @@ namespace AdbcDrivers.Databricks.Tests
             var catalogFromRuntime = ((StringArray)batch.Column(0)).GetString(0);
             var schemaFromRuntime = ((StringArray)batch.Column(1)).GetString(0);
 
-            // Assert runtime results
-            // if !enableMultipleCatalogSupport, then the runtime catalog should be hive_metastore
-            var expectedRuntimeCatalog = enableMultipleCatalogSupport == "true" ? expectedCatalogInStatement : "hive_metastore";
+            // Assert runtime results.
+            // current_catalog() reflects the warehouse's default catalog, EXCEPT when a real UC
+            // catalog is explicitly pinned (multi-catalog ON + an existing catalog like "main").
+            // "SPARK"/null pin nothing real, so the session falls back to the warehouse default.
+            // That default is a workspace-side value (historically hive_metastore, now main), so we
+            // discover it live instead of asserting a literal. This is distinct from the statement's
+            // nominal catalog (dbStatement.CatalogName, asserted below), which stays driver-side.
+            string defaultCatalog = await GetWarehouseDefaultCatalogAsync();
+            bool pinsRealCatalog = enableMultipleCatalogSupport == "true" && inputCatalog == "main";
+            var expectedRuntimeCatalog = pinsRealCatalog ? inputCatalog : defaultCatalog;
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
@@ -588,6 +597,28 @@ namespace AdbcDrivers.Databricks.Tests
                     $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
                     $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
             }
+        }
+
+        /// <summary>
+        /// Discovers the warehouse's default catalog — the value <c>current_catalog()</c> returns
+        /// when the driver pins no specific catalog (no catalog configured, multiple-catalog support
+        /// off). Historically <c>hive_metastore</c>, but this is a workspace/warehouse-side default
+        /// that can change (e.g. to <c>main</c>), so the test reads it live instead of hard-coding it.
+        /// </summary>
+        private async Task<string> GetWarehouseDefaultCatalogAsync()
+        {
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.EnableMultipleCatalogSupport = "false";
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+
+            var connection = NewConnection(testConfig);
+            var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT current_catalog()";
+
+            var result = await statement.ExecuteQueryAsync();
+            var batch = await result.Stream!.ReadNextRecordBatchAsync();
+            return ((StringArray)batch.Column(0)).GetString(0);
         }
 
         /// <summary>
