@@ -511,24 +511,26 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         // Test that the catalog and schema are set correctly in the dbr session and the statement.
-        // The warehouse's default catalog (what current_catalog() returns when the driver pins no
-        // specific catalog) is read live via GetWarehouseDefaultCatalogAsync rather than assumed:
-        // it is a workspace-side setting that has changed over time (historically hive_metastore,
-        // now main). Assumes there is a "main" catalog and a hive_metastore.information_schema schema.
+        // The default catalog (what current_catalog() returns when the driver pins no specific
+        // catalog) is read live via GetWarehouseDefaultCatalogAsync rather than assumed: it is a
+        // workspace-side setting that has changed over time (historically hive_metastore, now main)
+        // and depends on the multiple-catalog mode, so no literal is hard-coded. Expectations are
+        // derived from that discovered default. Assumes there is a "main" catalog and a
+        // hive_metastore.information_schema schema.
         [SkippableTheory]
-        [InlineData(null, null, "true", "hive_metastore", "default")]
-        [InlineData("main", null, "true", "main", "default")]
-        [InlineData(null, "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData("main", "information_schema", "true", "main", "information_schema")]
-        [InlineData("SPARK", null, "true", "hive_metastore", "default")]
-        [InlineData("SPARK", "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData(null, null, "false", null, "default")]
-        [InlineData("main", null, "false", null, "default")]
-        [InlineData(null, "information_schema", "false", null, "information_schema")]
-        [InlineData("main", "information_schema", "false", null, "information_schema")]
-        [InlineData("SPARK", null, "false", null, "default")]
-        [InlineData("SPARK", "information_schema", "false", null, "information_schema")]
-        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedCatalogInStatement, string? expectedRuntimeSchema)
+        [InlineData(null, null, "true", "default")]
+        [InlineData("main", null, "true", "default")]
+        [InlineData(null, "information_schema", "true", "information_schema")]
+        [InlineData("main", "information_schema", "true", "information_schema")]
+        [InlineData("SPARK", null, "true", "default")]
+        [InlineData("SPARK", "information_schema", "true", "information_schema")]
+        [InlineData(null, null, "false", "default")]
+        [InlineData("main", null, "false", "default")]
+        [InlineData(null, "information_schema", "false", "information_schema")]
+        [InlineData("main", "information_schema", "false", "information_schema")]
+        [InlineData("SPARK", null, "false", "default")]
+        [InlineData("SPARK", "information_schema", "false", "information_schema")]
+        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedRuntimeSchema)
         {
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
@@ -575,18 +577,20 @@ namespace AdbcDrivers.Databricks.Tests
             // The default is a workspace-side value that also depends on the multiple-catalog mode:
             // on Thrift, legacy mode (off) yields hive_metastore while UC mode (on) yields the
             // workspace default (historically hive_metastore, now main). So we discover it live, in
-            // the SAME mode as the case, instead of asserting a literal. This is distinct from the
-            // statement's nominal catalog (dbStatement.CatalogName, asserted below), which is driver-side.
+            // the SAME mode as the case, instead of asserting a literal.
             string defaultCatalog = await GetWarehouseDefaultCatalogAsync(enableMultipleCatalogSupport);
             bool pinsRealCatalog = enableMultipleCatalogSupport == "true" && inputCatalog == "main";
             var expectedRuntimeCatalog = pinsRealCatalog ? inputCatalog : defaultCatalog;
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName.
+            // With multiple-catalog support ON the driver tracks the effective session catalog (the
+            // pinned real catalog, else the discovered default); with it OFF it pins no catalog.
             if (statement is DatabricksStatement dbStatement)
             {
-                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                string? expectedStatementCatalog = enableMultipleCatalogSupport == "true" ? expectedRuntimeCatalog : null;
+                Assert.Equal(expectedStatementCatalog, dbStatement.CatalogName);
                 Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
                 OutputHelper?.WriteLine(
