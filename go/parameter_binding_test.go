@@ -274,10 +274,10 @@ func TestExecuteUpdateRunsOncePerParameterRow(t *testing.T) {
 	sql.Register(driverName, parameterCaptureDriver{conn: capture})
 	database, err := sql.Open(driverName, "")
 	require.NoError(t, err)
-	defer database.Close()
+	defer func() { require.NoError(t, database.Close()) }()
 	sqlConn, err := database.Conn(context.Background())
 	require.NoError(t, err)
-	defer sqlConn.Close()
+	defer func() { require.NoError(t, sqlConn.Close()) }()
 
 	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
 	statement := &statementImpl{
