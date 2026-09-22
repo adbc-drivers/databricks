@@ -35,8 +35,6 @@ import (
 
 func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 	timestampType := &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}
-	decimal128Type := &arrow.Decimal128Type{Precision: 10, Scale: 2}
-	decimal256Type := &arrow.Decimal256Type{Precision: 38, Scale: 3}
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "null", Type: arrow.Null, Nullable: true},
 		{Name: "bool", Type: arrow.FixedWidthTypes.Boolean},
@@ -47,7 +45,6 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{Name: "u8", Type: arrow.PrimitiveTypes.Uint8},
 		{Name: "u16", Type: arrow.PrimitiveTypes.Uint16},
 		{Name: "u32", Type: arrow.PrimitiveTypes.Uint32},
-		{Name: "u64", Type: arrow.PrimitiveTypes.Uint64},
 		{Name: "f32", Type: arrow.PrimitiveTypes.Float32},
 		{Name: "f64", Type: arrow.PrimitiveTypes.Float64},
 		{Name: "str", Type: arrow.BinaryTypes.String},
@@ -56,8 +53,6 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{Name: "date32", Type: arrow.FixedWidthTypes.Date32},
 		{Name: "date64", Type: arrow.FixedWidthTypes.Date64},
 		{Name: "timestamp", Type: timestampType},
-		{Name: "decimal128", Type: decimal128Type},
-		{Name: "decimal256", Type: decimal256Type},
 	}, nil)
 
 	record, _, err := array.RecordFromJSON(memory.DefaultAllocator, schema, strings.NewReader(`[
@@ -71,7 +66,6 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 			"u8": 8,
 			"u16": 16,
 			"u32": 32,
-			"u64": 64,
 			"f32": 1.25,
 			"f64": 2.5,
 			"str": "string",
@@ -79,9 +73,7 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 			"str_view": "view",
 			"date32": "2026-09-22",
 			"date64": "2026-09-23",
-			"timestamp": "2026-09-22T12:34:56.123456Z",
-			"decimal128": "123.45",
-			"decimal256": "987.654"
+			"timestamp": "2026-09-22T12:34:56.123456Z"
 		}
 	]`), array.WithUseNumber())
 	require.NoError(t, err)
@@ -111,7 +103,6 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{"u8", dbsql.SqlSmallInt, "8"},
 		{"u16", dbsql.SqlInteger, "16"},
 		{"u32", dbsql.SqlBigInt, "32"},
-		{"u64", dbsql.SqlDecimal, "64"},
 		{"f32", dbsql.SqlFloat, "1.25"},
 		{"f64", dbsql.SqlDouble, "2.5"},
 		{"str", dbsql.SqlString, "string"},
@@ -120,8 +111,6 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{"date32", dbsql.SqlDate, "2026-09-22"},
 		{"date64", dbsql.SqlDate, "2026-09-23"},
 		{"timestamp", dbsql.SqlTimestamp, "2026-09-22T12:34:56.123456Z"},
-		{"decimal128", dbsql.SqlDecimal, "123.45"},
-		{"decimal256", dbsql.SqlDecimal, "987.654"},
 	}
 	require.Len(t, args, len(expected))
 	for i, want := range expected {
@@ -189,8 +178,23 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			status: adbc.StatusNotImplemented,
 		},
 		{
-			name:   "decimal over maximum precision",
-			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal256Type{Precision: 39, Scale: 0}}},
+			name:   "uint64",
+			fields: []arrow.Field{{Name: "uint64", Type: arrow.PrimitiveTypes.Uint64}},
+			status: adbc.StatusNotImplemented,
+		},
+		{
+			name:   "decimal128",
+			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal128Type{Precision: 10, Scale: 2}}},
+			status: adbc.StatusNotImplemented,
+		},
+		{
+			name:   "decimal256",
+			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal256Type{Precision: 38, Scale: 3}}},
+			status: adbc.StatusNotImplemented,
+		},
+		{
+			name:   "timestamp without timezone",
+			fields: []arrow.Field{{Name: "timestamp", Type: &arrow.TimestampType{Unit: arrow.Microsecond}}},
 			status: adbc.StatusNotImplemented,
 		},
 	}
@@ -204,6 +208,26 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			requireADBCStatus(t, err, test.status)
 		})
 	}
+}
+
+func TestParameterRowIteratorRejectsTypedNull(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32, Nullable: true}}, nil)
+	record, _, err := array.RecordFromJSON(
+		memory.DefaultAllocator,
+		schema,
+		strings.NewReader(`[{"value": null}]`),
+	)
+	require.NoError(t, err)
+	defer record.Release()
+
+	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
+	require.NoError(t, err)
+	iterator, err := newParameterRowIterator(stream)
+	require.NoError(t, err)
+	defer iterator.Release()
+
+	_, _, err = iterator.Next()
+	requireADBCStatus(t, err, adbc.StatusNotImplemented)
 }
 
 func TestParameterizedQueryReaderConcatenatesResultsLazily(t *testing.T) {
