@@ -124,6 +124,9 @@ Named parameters use non-empty Arrow field names, while positional parameters
 require all field names to be empty. Mixing named and positional fields is not
 supported.
 
+Each execution attempt consumes the bound parameter data, including when the
+execution fails. Bind the parameter data again before retrying.
+
 The driver supports Arrow null, Boolean, signed integers, unsigned 8/16/32-bit
 integers, floating-point values, strings, dates, and timestamps with a timezone.
 Typed nulls, `UINT64`, decimals, timezone-less timestamps, binary values,
