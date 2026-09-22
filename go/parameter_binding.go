@@ -304,7 +304,7 @@ func (r *parameterizedQueryReader) Schema() *arrow.Schema {
 }
 
 func (r *parameterizedQueryReader) Next() bool {
-	if r.closed || r.err != nil {
+	if r.closed || r.err != nil || r.iterator == nil {
 		return false
 	}
 
