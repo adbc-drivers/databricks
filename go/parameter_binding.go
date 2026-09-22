@@ -28,10 +28,11 @@ import (
 )
 
 type parameterRowIterator struct {
-	stream array.RecordReader
-	batch  arrow.RecordBatch
-	row    int
-	named  bool
+	stream              array.RecordReader
+	batch               arrow.RecordBatch
+	row                 int
+	named               bool
+	timestampConverters []func(arrow.Timestamp) time.Time
 }
 
 // newParameterRowIterator takes ownership of stream.
@@ -48,12 +49,13 @@ func newParameterRowIterator(stream array.RecordReader) (*parameterRowIterator, 
 	}
 
 	fields := schema.Fields()
+	it.timestampConverters = make([]func(arrow.Timestamp) time.Time, len(fields))
 	if len(fields) > 0 {
 		it.named = fields[0].Name != ""
 	}
 
 	seenNames := make(map[string]struct{}, len(fields))
-	for _, field := range fields {
+	for i, field := range fields {
 		if (field.Name != "") != it.named {
 			it.Release()
 			return nil, adbc.Error{
@@ -74,6 +76,17 @@ func newParameterRowIterator(stream array.RecordReader) (*parameterRowIterator, 
 		if err := validateParameterType(field.Type); err != nil {
 			it.Release()
 			return nil, err
+		}
+		if field.Type.ID() == arrow.TIMESTAMP {
+			converter, err := field.Type.(*arrow.TimestampType).GetToTimeFunc()
+			if err != nil {
+				it.Release()
+				return nil, adbc.Error{
+					Code: adbc.StatusInvalidArgument,
+					Msg:  fmt.Sprintf("invalid timestamp parameter type %s: %v", field.Type, err),
+				}
+			}
+			it.timestampConverters[i] = converter
 		}
 	}
 
@@ -122,7 +135,8 @@ func (it *parameterRowIterator) Next() ([]driver.NamedValue, bool, error) {
 				if it.named {
 					name = it.batch.Schema().Field(col).Name
 				}
-				parameter, err := arrowValueToParameter(it.batch.Column(col), row, name)
+				parameter, err := arrowValueToParameter(
+					it.batch.Column(col), row, name, it.timestampConverters[col])
 				if err != nil {
 					it.Release()
 					return nil, false, err
@@ -161,7 +175,12 @@ func (it *parameterRowIterator) Release() {
 	}
 }
 
-func arrowValueToParameter(values arrow.Array, row int, name string) (dbsql.Parameter, error) {
+func arrowValueToParameter(
+	values arrow.Array,
+	row int,
+	name string,
+	timestampConverter func(arrow.Timestamp) time.Time,
+) (dbsql.Parameter, error) {
 	parameter := dbsql.Parameter{Name: name}
 	if values.IsNull(row) {
 		if values.DataType().ID() != arrow.NULL {
@@ -223,16 +242,8 @@ func arrowValueToParameter(values arrow.Array, row int, name string) (dbsql.Para
 		parameter.Type = dbsql.SqlDate
 		parameter.Value = values.(*array.Date64).Value(row).ToTime().Format(time.DateOnly)
 	case arrow.TIMESTAMP:
-		dataType := values.DataType().(*arrow.TimestampType)
-		toTime, err := dataType.GetToTimeFunc()
-		if err != nil {
-			return parameter, adbc.Error{
-				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("invalid timestamp parameter type %s: %v", dataType, err),
-			}
-		}
 		parameter.Type = dbsql.SqlTimestamp
-		parameter.Value = toTime(values.(*array.Timestamp).Value(row)).Format(time.RFC3339Nano)
+		parameter.Value = timestampConverter(values.(*array.Timestamp).Value(row)).Format(time.RFC3339Nano)
 	default:
 		return parameter, adbc.Error{
 			Code: adbc.StatusNotImplemented,

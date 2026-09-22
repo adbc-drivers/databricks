@@ -126,6 +126,7 @@ supported.
 
 Each execution attempt consumes the bound parameter data, including when the
 execution fails. Bind the parameter data again before retrying.
+Bound parameter data must contain at least one row.
 
 The driver supports Arrow null, Boolean, signed integers, unsigned 8/16/32-bit
 integers, floating-point values, strings, dates, and timestamps with a timezone.

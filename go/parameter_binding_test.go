@@ -197,6 +197,14 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			fields: []arrow.Field{{Name: "timestamp", Type: &arrow.TimestampType{Unit: arrow.Microsecond}}},
 			status: adbc.StatusNotImplemented,
 		},
+		{
+			name: "timestamp with invalid timezone",
+			fields: []arrow.Field{{
+				Name: "timestamp",
+				Type: &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "invalid/timezone"},
+			}},
+			status: adbc.StatusInvalidArgument,
+		},
 	}
 
 	for _, test := range tests {
