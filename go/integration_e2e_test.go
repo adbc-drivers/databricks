@@ -31,6 +31,8 @@ import (
 
 	"github.com/adbc-drivers/databricks/go"
 	"github.com/adbc-drivers/driverbase-go/validation"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	_ "github.com/databricks/databricks-sql-go"
 	"github.com/stretchr/testify/require"
@@ -63,6 +65,42 @@ func (suite *E2ETests) TestSimpleQuery() {
 	suite.Require().Equal(int64(1), record.NumRows(), "Expected 1 row")
 
 	suite.T().Logf("✅ Query result: %d columns, %d rows", record.NumCols(), record.NumRows())
+}
+
+func (suite *E2ETests) TestNamedParameters() {
+	ctx := context.Background()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "number", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "text", Type: arrow.BinaryTypes.String},
+	}, nil)
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	builder.Field(0).(*array.Int64Builder).AppendValues([]int64{10, 20}, nil)
+	builder.Field(1).(*array.StringBuilder).AppendValues([]string{"first", "second"}, nil)
+	record := builder.NewRecordBatch()
+	builder.Release()
+	defer record.Release()
+
+	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT :number AS number, :text AS text"))
+	suite.Require().NoError(suite.stmt.Bind(ctx, record))
+	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
+	suite.Require().NoError(err)
+	defer reader.Release()
+	suite.EqualValues(-1, rowsAffected)
+
+	var numbers []int64
+	var texts []string
+	for reader.Next() {
+		batch := reader.RecordBatch()
+		numberColumn := batch.Column(0).(*array.Int64)
+		textColumn := batch.Column(1).(*array.String)
+		for row := range int(batch.NumRows()) {
+			numbers = append(numbers, numberColumn.Value(row))
+			texts = append(texts, textColumn.Value(row))
+		}
+	}
+	suite.Require().NoError(reader.Err())
+	suite.Equal([]int64{10, 20}, numbers)
+	suite.Equal([]string{"first", "second"}, texts)
 }
 
 // TestE2E_MetadataOperations tests metadata retrieval operations
