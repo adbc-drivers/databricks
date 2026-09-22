@@ -89,18 +89,13 @@ func validateParameterType(dataType arrow.DataType) error {
 	case arrow.NULL,
 		arrow.BOOL,
 		arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
-		arrow.UINT8, arrow.UINT16, arrow.UINT32, arrow.UINT64,
+		arrow.UINT8, arrow.UINT16, arrow.UINT32,
 		arrow.FLOAT32, arrow.FLOAT64,
 		arrow.STRING, arrow.LARGE_STRING, arrow.STRING_VIEW,
-		arrow.DATE32, arrow.DATE64,
-		arrow.TIMESTAMP:
+		arrow.DATE32, arrow.DATE64:
 		return nil
-	case arrow.DECIMAL128:
-		if dataType.(*arrow.Decimal128Type).Precision <= 38 {
-			return nil
-		}
-	case arrow.DECIMAL256:
-		if dataType.(*arrow.Decimal256Type).Precision <= 38 {
+	case arrow.TIMESTAMP:
+		if dataType.(*arrow.TimestampType).TimeZone != "" {
 			return nil
 		}
 	}
@@ -169,6 +164,12 @@ func (it *parameterRowIterator) Release() {
 func arrowValueToParameter(values arrow.Array, row int, name string) (dbsql.Parameter, error) {
 	parameter := dbsql.Parameter{Name: name}
 	if values.IsNull(row) {
+		if values.DataType().ID() != arrow.NULL {
+			return parameter, adbc.Error{
+				Code: adbc.StatusNotImplemented,
+				Msg:  fmt.Sprintf("typed null parameter %q with type %s is not supported", name, values.DataType()),
+			}
+		}
 		parameter.Type = dbsql.SqlVoid
 		return parameter, nil
 	}
@@ -200,9 +201,6 @@ func arrowValueToParameter(values arrow.Array, row int, name string) (dbsql.Para
 	case arrow.UINT32:
 		parameter.Type = dbsql.SqlBigInt
 		parameter.Value = strconv.FormatUint(uint64(values.(*array.Uint32).Value(row)), 10)
-	case arrow.UINT64:
-		parameter.Type = dbsql.SqlDecimal
-		parameter.Value = strconv.FormatUint(values.(*array.Uint64).Value(row), 10)
 	case arrow.FLOAT32:
 		parameter.Type = dbsql.SqlFloat
 		parameter.Value = strconv.FormatFloat(float64(values.(*array.Float32).Value(row)), 'g', -1, 32)
@@ -235,14 +233,6 @@ func arrowValueToParameter(values arrow.Array, row int, name string) (dbsql.Para
 		}
 		parameter.Type = dbsql.SqlTimestamp
 		parameter.Value = toTime(values.(*array.Timestamp).Value(row)).Format(time.RFC3339Nano)
-	case arrow.DECIMAL128:
-		dataType := values.DataType().(*arrow.Decimal128Type)
-		parameter.Type = dbsql.SqlDecimal
-		parameter.Value = values.(*array.Decimal128).Value(row).ToString(dataType.Scale)
-	case arrow.DECIMAL256:
-		dataType := values.DataType().(*arrow.Decimal256Type)
-		parameter.Type = dbsql.SqlDecimal
-		parameter.Value = values.(*array.Decimal256).Value(row).ToString(dataType.Scale)
 	default:
 		return parameter, adbc.Error{
 			Code: adbc.StatusNotImplemented,
