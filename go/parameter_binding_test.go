@@ -231,6 +231,7 @@ func TestParameterizedQueryReaderConcatenatesResultsLazily(t *testing.T) {
 	}
 	require.NoError(t, reader.Err())
 	require.Equal(t, []int32{1, 2, 3}, values)
+	require.False(t, reader.Next())
 }
 
 func TestParameterizedQueryReaderRejectsSchemaChanges(t *testing.T) {
