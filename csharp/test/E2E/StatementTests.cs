@@ -37,7 +37,7 @@ using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
 {
-    // TODO: PECO-3011 - CanSetOptionBatchSize/PollTime/QueryTimeout inherited from base class not validated in SEA's StatementExecutionStatement
+    // TODO: PECO-3011 - CanSetOptionBatchSize/PollTime inherited from base class not validated in SEA's StatementExecutionStatement
     public class StatementTests : StatementTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public StatementTests(ITestOutputHelper? outputHelper)
@@ -50,13 +50,6 @@ namespace AdbcDrivers.Databricks.Tests
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce poll time validation");
             base.ValidateCanSetOptionPollTime(value, throws);
-        }
-
-        // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
-        protected override void ValidateCanSetOptionQueryTimeout(string value, bool throws = false)
-        {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce query timeout validation");
-            base.ValidateCanSetOptionQueryTimeout(value, throws);
         }
 
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option

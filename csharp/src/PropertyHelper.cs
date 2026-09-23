@@ -119,6 +119,46 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
+        /// Gets a non-negative integer property value with strict validation.
+        /// Returns the default value if the property is not found.
+        /// Throws an exception if the property exists but is not a non-negative integer.
+        /// </summary>
+        /// <param name="properties">The properties dictionary.</param>
+        /// <param name="key">The property key.</param>
+        /// <param name="defaultValue">The default value if the property is not found.</param>
+        /// <returns>The parsed integer value or the default value.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown if the property exists but is not a non-negative integer.</exception>
+        public static int GetNonNegativeIntPropertyWithValidation(IReadOnlyDictionary<string, string> properties, string key, int defaultValue)
+        {
+            if (properties == null) throw new ArgumentNullException(nameof(properties));
+            if (key == null) throw new ArgumentNullException(nameof(key));
+
+            return properties.TryGetValue(key, out string? value)
+                ? GetNonNegativeIntPropertyWithValidation(key, value)
+                : defaultValue;
+        }
+
+        /// <summary>
+        /// Parses a non-negative integer property value with strict validation.
+        /// </summary>
+        /// <param name="key">The property key.</param>
+        /// <param name="value">The property value.</param>
+        /// <returns>The parsed integer value.</returns>
+        /// <exception cref="ArgumentOutOfRangeException">Thrown if the value is not a non-negative integer.</exception>
+        public static int GetNonNegativeIntPropertyWithValidation(string key, string? value)
+        {
+            if (!string.IsNullOrEmpty(value) && int.TryParse(value, out int result) && result >= 0)
+            {
+                return result;
+            }
+
+            throw new ArgumentOutOfRangeException(
+                key,
+                value,
+                $"The value '{value}' for option '{key}' is invalid. Must be a numeric value of 0 (infinite) or greater.");
+        }
+
+        /// <summary>
         /// Gets a positive integer property value with strict validation.
         /// Returns the default value if the property is not found.
         /// Throws an exception if the property exists but cannot be parsed or is not positive.
