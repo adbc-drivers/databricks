@@ -20,18 +20,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Package databricks is an ADBC Driver Implementation for Databricks
+// Package databricks implements a context-aware ADBC driver for Databricks
 // SQL using databricks-sql-go as the underlying SQL driver.
-//
-// It can be used to register a driver for database/sql by importing
-// github.com/apache/arrow-adbc/go/adbc/sqldriver and running:
-//
-//	sql.Register("databricks", sqldriver.Driver{databricks.Driver{}})
-//
-// You can then open a databricks connection with the database/sql
-// standard package by using:
-//
-//	db, err := sql.Open("databricks", "token=<token>&hostname=<hostname>&port=<port>&httpPath=<path>")
 package databricks
 
 import (
@@ -82,7 +72,7 @@ type driverImpl struct {
 }
 
 // NewDriver creates a new Databricks driver using the given Arrow allocator.
-func NewDriver(alloc memory.Allocator) adbc.Driver {
+func NewDriver(alloc memory.Allocator) driverbase.DriverWithContext {
 	info := driverbase.DefaultDriverInfo("Databricks")
 
 	if err := info.RegisterInfoCode(adbc.InfoDriverName, "ADBC Driver Foundry Driver for Databricks"); err != nil {
@@ -94,12 +84,8 @@ func NewDriver(alloc memory.Allocator) adbc.Driver {
 	})
 }
 
-func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return d.NewDatabaseWithContext(context.Background(), opts)
-}
-
-func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
+func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
+	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase, driverbase.TracingOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +96,7 @@ func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string
 		sslMode:          DefaultSSLMode,
 	}
 
-	if err := db.SetOptions(opts); err != nil {
+	if err := db.SetOptions(ctx, opts); err != nil {
 		return nil, err
 	}
 

@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/adbc-drivers/databricks/go"
-	"github.com/adbc-drivers/driverbase-go/validation"
+	"github.com/adbc-drivers/driverbase-go/testutil"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	_ "github.com/databricks/databricks-sql-go"
 	"github.com/stretchr/testify/require"
@@ -49,7 +49,7 @@ func TestE2E(t *testing.T) {
 
 func (suite *E2ETests) TestSimpleQuery() {
 	ctx := context.Background()
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT 1 as test_column"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(ctx, "SELECT 1 as test_column"))
 	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
 	suite.Require().NoError(err)
 	defer reader.Release()
@@ -89,11 +89,11 @@ func (suite *E2ETests) TestMetadataOperations() {
 	// Test basic metadata queries
 	suite.T().Run("ShowCatalogs", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(ctx)
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, ctx)
 
-		err = stmt.SetSqlQuery("SHOW CATALOGS")
+		err = stmt.SetSqlQuery(ctx, "SHOW CATALOGS")
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -112,12 +112,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowSchemas", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(ctx)
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, ctx)
 
 		query := fmt.Sprintf("SHOW SCHEMAS IN %s", catalog)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(ctx, query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -136,12 +136,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowTables", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(ctx)
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, ctx)
 
 		query := fmt.Sprintf("SHOW TABLES IN %s.%s", catalog, schema)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(ctx, query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -181,28 +181,27 @@ func (suite *E2ETests) TestConnectionOptions() {
 	for _, tt := range tests {
 		suite.T().Run(tt.name, func(t *testing.T) {
 			driver := databricks.NewDriver(memory.DefaultAllocator)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
 
 			opts := map[string]string{}
 			maps.Copy(opts, suite.Quirks.DatabaseOptions())
 			maps.Copy(opts, tt.options)
 
-			db, err := driver.NewDatabase(opts)
+			db, err := driver.NewDatabaseWithContext(ctx, opts)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), db)
-
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
+			defer testutil.CheckedCloseWithContext(suite.T(), db, ctx)
 
 			conn, err := db.Open(ctx)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), conn)
+			defer testutil.CheckedCloseWithContext(suite.T(), conn, ctx)
 
 			// Execute a simple query to verify the connection works
-			stmt, err := conn.NewStatement()
+			stmt, err := conn.NewStatement(ctx)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), stmt)
+			defer testutil.CheckedCloseWithContext(suite.T(), stmt, ctx)
 
-			err = stmt.SetSqlQuery("SELECT 1")
+			err = stmt.SetSqlQuery(ctx, "SELECT 1")
 			require.NoError(t, err)
 
 			reader, _, err := stmt.ExecuteQuery(ctx)

@@ -43,7 +43,7 @@ type statementImpl struct {
 	bulkIngestOptions driverbase.BulkIngestOptions
 }
 
-func (s *statementImpl) Close() error {
+func (s *statementImpl) Close(ctx context.Context) error {
 	if s.conn == nil {
 		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "statement already closed")
 	}
@@ -61,7 +61,7 @@ func (s *statementImpl) Close() error {
 	return nil
 }
 
-func (s *statementImpl) SetOption(key, val string) error {
+func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {
@@ -71,7 +71,7 @@ func (s *statementImpl) SetOption(key, val string) error {
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported statement option: %s=%s", key, val)
 }
 
-func (s *statementImpl) SetSqlQuery(query string) error {
+func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 	s.query = query
 	// Reset prepared statement if query changes
 	if s.prepared != nil {
@@ -197,13 +197,13 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 	return nil
 }
 
-func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
+func (s *statementImpl) GetParameterSchema(ctx context.Context) (*arrow.Schema, error) {
 	// This would require parsing the SQL query to determine parameter types
 	// For now, return nil to indicate unknown schema
 	return nil, s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "parameter schema detection not implemented")
 }
 
-func (s *statementImpl) SetSubstraitPlan(plan []byte) error {
+func (s *statementImpl) SetSubstraitPlan(ctx context.Context, plan []byte) error {
 	// Databricks SQL doesn't support Substrait plans
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "Substrait plans not supported")
 }

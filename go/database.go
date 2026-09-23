@@ -223,7 +223,7 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	// Re-initialize the connection pool and settings if anything
 	// has changed, or we have not initialized yet
 	if d.needsRefresh || d.db == nil {
@@ -266,15 +266,18 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		Connection(), nil
 }
 
-func (d *databaseImpl) Close() error {
+func (d *databaseImpl) Close(ctx context.Context) error {
 	defer func() {
 		d.needsRefresh = true
 		d.db = nil
 	}()
+	if d.db == nil {
+		return nil
+	}
 	return d.db.Close()
 }
 
-func (d *databaseImpl) GetOption(key string) (string, error) {
+func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyURI:
 		return d.uri, nil
@@ -321,11 +324,11 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
 	default:
-		return d.DatabaseImplBase.GetOption(key)
+		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
-func (d *databaseImpl) SetOptions(options map[string]string) error {
+func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -348,7 +351,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	}
 
 	for k, v := range options {
-		err := d.SetOption(k, v)
+		err := d.SetOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -356,7 +359,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	return nil
 }
 
-func (d *databaseImpl) SetOption(key, value string) error {
+func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
@@ -487,7 +490,7 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
 	default:
-		return d.DatabaseImplBase.SetOption(key, value)
+		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
 }
