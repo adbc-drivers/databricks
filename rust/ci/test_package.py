@@ -17,6 +17,8 @@ import pytest
 
 
 def test_package() -> None:
-    with pytest.raises(adbc_driver_manager.dbapi.Error):
-        with adbc_driver_manager.dbapi.connect(driver="databricks"):
-            pass
+    with (
+        pytest.raises(adbc_driver_manager.dbapi.Error),
+        adbc_driver_manager.dbapi.connect(driver="databricks"),
+    ):
+        pass
