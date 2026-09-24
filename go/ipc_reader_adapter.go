@@ -45,13 +45,150 @@ type ipcReaderAdapter struct {
 	currentReader *ipc.Reader
 	currentRecord arrow.RecordBatch
 	schema        *arrow.Schema
+	rawSchema     *arrow.Schema // original schema before geoarrow transform
 	closed        bool
 	refCount      int64
 	err           error
+
+	// geoarrow conversion: indices of geometry struct columns to flatten
+	geoColumnIndices []int
+
+	// bufferedRecord is a record pre-read during construction so SRID could be
+	// extracted and baked into the reader's schema before Schema() is first
+	// exposed to consumers. Emitted by the first Next() call, then cleared.
+	bufferedRecord arrow.RecordBatch
+}
+
+// isGeometryStruct checks if a field is a Databricks geometry struct:
+// Struct<srid: Int32, wkb: Binary>
+func isGeometryStruct(field arrow.Field) bool {
+	st, ok := field.Type.(*arrow.StructType)
+	if !ok || st.NumFields() != 2 {
+		return false
+	}
+	f0 := st.Field(0)
+	f1 := st.Field(1)
+	return f0.Name == "srid" && f0.Type.ID() == arrow.INT32 &&
+		f1.Name == "wkb" && f1.Type.ID() == arrow.BINARY
+}
+
+// detectGeometryColumns finds geometry Struct columns in the schema.
+func detectGeometryColumns(schema *arrow.Schema) []int {
+	var indices []int
+	for i, f := range schema.Fields() {
+		if isGeometryStruct(f) {
+			indices = append(indices, i)
+		}
+	}
+	return indices
+}
+
+// buildGeoArrowSchemaWithoutCRS creates a geoarrow.wkb schema without CRS
+// metadata. Used eagerly so the schema is available before the first Next().
+func buildGeoArrowSchemaWithoutCRS(schema *arrow.Schema, geoIndices []int) *arrow.Schema {
+	fields := schema.Fields()
+	newFields := make([]arrow.Field, len(fields))
+	copy(newFields, fields)
+
+	for _, idx := range geoIndices {
+		f := fields[idx]
+		newFields[idx] = arrow.Field{
+			Name:     f.Name,
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: f.Nullable,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name":     "geoarrow.wkb",
+				"ARROW:extension:metadata": "",
+			}),
+		}
+	}
+
+	meta := schema.Metadata()
+	return arrow.NewSchema(newFields, &meta)
+}
+
+// buildGeoArrowSchema creates a new schema with geometry Struct fields replaced
+// by Binary fields with geoarrow.wkb extension metadata. The SRID from the
+// first record batch is used to populate the CRS in the extension metadata.
+func buildGeoArrowSchema(schema *arrow.Schema, geoIndices []int, rec arrow.RecordBatch) *arrow.Schema {
+	fields := schema.Fields()
+	newFields := make([]arrow.Field, len(fields))
+	copy(newFields, fields)
+
+	for _, idx := range geoIndices {
+		f := fields[idx]
+
+		// Read SRID from first non-null row of this geometry column
+		srid := 0
+		structArr := rec.Column(idx).(*array.Struct)
+		sridArr := structArr.Field(0)
+		for row := 0; row < sridArr.Len(); row++ {
+			if !sridArr.IsNull(row) {
+				srid = int(sridArr.(*array.Int32).Value(row))
+				break
+			}
+		}
+
+		// Build geoarrow.wkb extension metadata with CRS from SRID
+		extMeta := ""
+		if srid != 0 {
+			extMeta = fmt.Sprintf(`{"crs":"EPSG:%d"}`, srid)
+		}
+
+		newFields[idx] = arrow.Field{
+			Name:     f.Name,
+			Type:     arrow.BinaryTypes.Binary,
+			Nullable: f.Nullable,
+			Metadata: arrow.MetadataFrom(map[string]string{
+				"ARROW:extension:name":     "geoarrow.wkb",
+				"ARROW:extension:metadata": extMeta,
+			}),
+		}
+	}
+
+	meta := schema.Metadata()
+	return arrow.NewSchema(newFields, &meta)
+}
+
+// transformRecordForGeoArrow extracts the wkb child from geometry struct
+// columns and builds a new record with flat Binary columns.
+func transformRecordForGeoArrow(rec arrow.RecordBatch, schema *arrow.Schema, geoIndices []int) arrow.RecordBatch {
+	if len(geoIndices) == 0 {
+		return rec
+	}
+
+	geoSet := make(map[int]bool, len(geoIndices))
+	for _, idx := range geoIndices {
+		geoSet[idx] = true
+	}
+
+	cols := make([]arrow.Array, rec.NumCols())
+	for i := 0; i < int(rec.NumCols()); i++ {
+		if geoSet[i] {
+			// Extract the "wkb" field (index 1) from the struct array
+			structArr := rec.Column(i).(*array.Struct)
+			wkbArr := structArr.Field(1)
+			wkbArr.Retain()
+			cols[i] = wkbArr
+		} else {
+			col := rec.Column(i)
+			col.Retain()
+			cols[i] = col
+		}
+	}
+
+	newRec := array.NewRecord(schema, cols, rec.NumRows())
+
+	// Release our references to the columns
+	for _, col := range cols {
+		col.Release()
+	}
+
+	return newRec
 }
 
 // newIPCReaderAdapter creates a RecordReader using direct IPC stream access
-func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordReader, error) {
+func newIPCReaderAdapter(ctx context.Context, rows driver.Rows, useArrowNativeGeospatial bool) (array.RecordReader, error) {
 	ipcRows, ok := rows.(dbsqlrows.Rows)
 	if !ok {
 		return nil, adbc.Error{
@@ -127,7 +264,61 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 		}
 	}
 
+	// When Arrow-native geospatial is enabled, detect geometry Struct columns
+	// and build a geoarrow.wkb schema. Consumers such as DuckDB's adbc_scanner
+	// read Schema() upfront to bind output columns, so the CRS must be baked
+	// in *before* that first call — we cannot mutate the schema on the first
+	// Next() (consumers have already cached it).
+	//
+	// To discover the SRID we pre-read the first record batch here, extract
+	// its srid field, build the finalized geoarrow.wkb schema with CRS, and
+	// buffer the record for the first Next() call. If the result set is empty
+	// we fall back to a CRS-less schema (no rows means no SRID to read).
+	if useArrowNativeGeospatial {
+		adapter.geoColumnIndices = detectGeometryColumns(adapter.schema)
+		if len(adapter.geoColumnIndices) > 0 {
+			adapter.rawSchema = adapter.schema
+
+			rec, err := adapter.readFirstRecordForSchema()
+			if err != nil {
+				return nil, adbc.Error{
+					Code: adbc.StatusInternal,
+					Msg:  fmt.Sprintf("failed to pre-read first record for geoarrow schema: %v", err),
+				}
+			}
+
+			if rec != nil {
+				adapter.schema = buildGeoArrowSchema(adapter.rawSchema, adapter.geoColumnIndices, rec)
+				adapter.bufferedRecord = transformRecordForGeoArrow(rec, adapter.schema, adapter.geoColumnIndices)
+				rec.Release()
+			} else {
+				adapter.schema = buildGeoArrowSchemaWithoutCRS(adapter.rawSchema, adapter.geoColumnIndices)
+			}
+		}
+	}
+
 	return adapter, nil
+}
+
+// readFirstRecordForSchema pulls the first available record batch across IPC
+// streams without emitting it. Used to extract SRID for the geoarrow schema
+// before Schema() is exposed to consumers. Returns (nil, nil) on EOF. The
+// caller owns the returned record and must Release it.
+func (r *ipcReaderAdapter) readFirstRecordForSchema() (arrow.RecordBatch, error) {
+	for {
+		if r.currentReader != nil && r.currentReader.Next() {
+			rec := r.currentReader.RecordBatch()
+			rec.Retain()
+			return rec, nil
+		}
+		err := r.loadNextReader()
+		if err == io.EOF {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func (r *ipcReaderAdapter) loadNextReader() error {
@@ -165,6 +356,16 @@ func (r *ipcReaderAdapter) Schema() *arrow.Schema {
 	return r.schema
 }
 
+// handleGeoRecord transforms a record to flatten geometry struct columns into
+// the flat geoarrow.wkb layout declared by r.schema. The schema itself is
+// finalized eagerly in the constructor, so no schema mutation happens here.
+func (r *ipcReaderAdapter) handleGeoRecord(rec arrow.RecordBatch) arrow.RecordBatch {
+	if len(r.geoColumnIndices) == 0 {
+		return rec
+	}
+	return transformRecordForGeoArrow(rec, r.schema, r.geoColumnIndices)
+}
+
 func (r *ipcReaderAdapter) Next() bool {
 	if r.closed || r.err != nil {
 		return false
@@ -176,9 +377,18 @@ func (r *ipcReaderAdapter) Next() bool {
 		r.currentRecord = nil
 	}
 
+	// Emit the record buffered by the constructor (used to extract SRID for
+	// the geoarrow schema) before pulling anything new from the IPC stream.
+	if r.bufferedRecord != nil {
+		r.currentRecord = r.bufferedRecord
+		r.bufferedRecord = nil
+		return true
+	}
+
 	// Try to get next record from current reader
 	if r.currentReader != nil && r.currentReader.Next() {
-		r.currentRecord = r.currentReader.RecordBatch()
+		rec := r.currentReader.RecordBatch()
+		r.currentRecord = r.handleGeoRecord(rec)
 		r.currentRecord.Retain()
 		return true
 	}
@@ -194,7 +404,8 @@ func (r *ipcReaderAdapter) Next() bool {
 
 	// Try again with new reader
 	if r.currentReader != nil && r.currentReader.Next() {
-		r.currentRecord = r.currentReader.RecordBatch()
+		rec := r.currentReader.RecordBatch()
+		r.currentRecord = r.handleGeoRecord(rec)
 		r.currentRecord.Retain()
 		return true
 	}
@@ -220,6 +431,11 @@ func (r *ipcReaderAdapter) Release() {
 		if r.currentRecord != nil {
 			r.currentRecord.Release()
 			r.currentRecord = nil
+		}
+
+		if r.bufferedRecord != nil {
+			r.bufferedRecord.Release()
+			r.bufferedRecord = nil
 		}
 
 		if r.currentReader != nil {
