@@ -134,7 +134,7 @@ namespace AdbcDrivers.Databricks
             if (key == null) throw new ArgumentNullException(nameof(key));
 
             return properties.TryGetValue(key, out string? value)
-                ? GetNonNegativeIntPropertyWithValidation(key, value)
+                ? ParseNonNegativeIntPropertyWithValidation(key, value)
                 : defaultValue;
         }
 
@@ -145,7 +145,7 @@ namespace AdbcDrivers.Databricks
         /// <param name="value">The property value.</param>
         /// <returns>The parsed integer value.</returns>
         /// <exception cref="ArgumentOutOfRangeException">Thrown if the value is not a non-negative integer.</exception>
-        public static int GetNonNegativeIntPropertyWithValidation(string key, string? value)
+        public static int ParseNonNegativeIntPropertyWithValidation(string key, string? value)
         {
             if (!string.IsNullOrEmpty(value) && int.TryParse(value, out int result) && result >= 0)
             {

@@ -260,7 +260,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     break;
 
                 case ApacheParameters.QueryTimeoutSeconds:
-                    PropertyHelper.GetNonNegativeIntPropertyWithValidation(key, value);
+                    PropertyHelper.ParseNonNegativeIntPropertyWithValidation(key, value);
                     break;
 
                 case DatabricksParameters.QueryTags:
