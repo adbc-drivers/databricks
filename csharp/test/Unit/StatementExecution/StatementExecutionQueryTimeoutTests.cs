@@ -63,12 +63,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         private StatementExecutionStatement CreateStatement(int queryTimeoutSeconds, int pollingIntervalMs = 50)
         {
+            return CreateStatement(queryTimeoutSeconds.ToString(), pollingIntervalMs);
+        }
+
+        private StatementExecutionStatement CreateStatement(string queryTimeoutSeconds, int pollingIntervalMs = 50)
+        {
             var properties = new Dictionary<string, string>
             {
                 { SparkParameters.HostName, "test.databricks.com" },
                 { DatabricksParameters.WarehouseId, "wh-1" },
                 { SparkParameters.AccessToken, "token" },
-                { ApacheParameters.QueryTimeoutSeconds, queryTimeoutSeconds.ToString() }
+                { ApacheParameters.QueryTimeoutSeconds, queryTimeoutSeconds }
             };
 
             var connection = new StatementExecutionConnection(properties, _httpClient);
@@ -92,6 +97,40 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             stmt.SqlQuery = "SELECT 1";
             return stmt;
+        }
+
+        [Theory]
+        [InlineData("zero")]
+        [InlineData("-2147483648")]
+        [InlineData("2147483648")]
+        [InlineData("-1")]
+        public void ConnectionProperty_InvalidQueryTimeout_ThrowsArgumentOutOfRangeException(string value)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => CreateStatement(value));
+        }
+
+        [Theory]
+        [InlineData("0")]
+        [InlineData("1")]
+        [InlineData("2147483647")]
+        public void SetOption_ValidQueryTimeout_DoesNotThrow(string value)
+        {
+            using var statement = CreateStatement(queryTimeoutSeconds: 30);
+
+            statement.SetOption(ApacheParameters.QueryTimeoutSeconds, value);
+        }
+
+        [Theory]
+        [InlineData("zero")]
+        [InlineData("-2147483648")]
+        [InlineData("2147483648")]
+        [InlineData("-1")]
+        public void SetOption_InvalidQueryTimeout_ThrowsArgumentOutOfRangeException(string value)
+        {
+            using var statement = CreateStatement(queryTimeoutSeconds: 30);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                statement.SetOption(ApacheParameters.QueryTimeoutSeconds, value));
         }
 
         private void SetupExecuteReturnsRunning()

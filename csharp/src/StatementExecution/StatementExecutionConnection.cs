@@ -374,7 +374,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // SHOW COLUMNS / SHOW CATALOGS statements. Default matches the Thrift path (3h); 0 = no
             // timeout. Bounds the metadata operation via CreateMetadataTimeoutCts and the statement's
             // own poll loop (PollWithTimeoutAsync) using the same value.
-            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+            _queryTimeoutSeconds = PropertyHelper.GetNonNegativeIntPropertyWithValidation(
                 properties, ApacheParameters.QueryTimeoutSeconds,
                 DatabricksConstants.DefaultQueryTimeoutSeconds);
 

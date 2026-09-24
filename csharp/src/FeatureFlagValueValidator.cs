@@ -29,6 +29,7 @@ namespace AdbcDrivers.Databricks
     {
         Boolean,
         Int,
+        NonNegativeInt,
         PositiveInt,
         Long,
         PositiveLong,
@@ -103,7 +104,7 @@ namespace AdbcDrivers.Databricks
             // Base-class (Apache) parameters live in a separate assembly and cannot carry the
             // attribute; register them explicitly. These mirror the Get*PropertyWithValidation
             // reads on the StatementExecution connect path.
-            map[ApacheParameters.QueryTimeoutSeconds] = FeatureFlagValueKind.Int;
+            map[ApacheParameters.QueryTimeoutSeconds] = FeatureFlagValueKind.NonNegativeInt;
             map[ApacheParameters.PollTimeMilliseconds] = FeatureFlagValueKind.PositiveInt;
 
             return map;
@@ -128,6 +129,8 @@ namespace AdbcDrivers.Databricks
                     return bool.TryParse(value, out _);
                 case FeatureFlagValueKind.Int:
                     return int.TryParse(value, out _);
+                case FeatureFlagValueKind.NonNegativeInt:
+                    return int.TryParse(value, out int nonNegativeInt) && nonNegativeInt >= 0;
                 case FeatureFlagValueKind.PositiveInt:
                     return int.TryParse(value, out int i) && i > 0;
                 case FeatureFlagValueKind.Long:
