@@ -33,6 +33,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParameterBindingModeForQuery(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		expected parameterBindingMode
+	}{
+		{name: "positional", query: "SELECT ?", expected: positionalParameterBinding},
+		{name: "named", query: "SELECT :value", expected: namedParameterBinding},
+		{name: "single quoted", query: "SELECT '?', :value", expected: namedParameterBinding},
+		{name: "doubled single quote", query: "SELECT 'isn''t ?'", expected: namedParameterBinding},
+		{name: "double quoted", query: `SELECT "?"`, expected: namedParameterBinding},
+		{name: "backtick quoted", query: "SELECT `?`", expected: namedParameterBinding},
+		{name: "line comment", query: "SELECT 1 -- ?\n, :value", expected: namedParameterBinding},
+		{name: "block comment", query: "SELECT /* ? */ :value", expected: namedParameterBinding},
+		{name: "nested block comment", query: "SELECT /* outer /* ? */ */ :value", expected: namedParameterBinding},
+		{name: "marker after quoted text", query: "SELECT '?', ?", expected: positionalParameterBinding},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.expected, parameterBindingModeForQuery(test.query))
+		})
+	}
+}
+
 func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 	timestampType := &arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}
 	schema := arrow.NewSchema([]arrow.Field{
@@ -75,13 +100,13 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 			"date64": "2026-09-23",
 			"timestamp": "2026-09-22T12:34:56.123456Z"
 		}
-	]`), array.WithUseNumber())
+	]`))
 	require.NoError(t, err)
 	defer record.Release()
 
 	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
 	require.NoError(t, err)
-	iterator, err := newParameterRowIterator(stream)
+	iterator, err := newParameterRowIterator(stream, namedParameterBinding)
 	require.NoError(t, err)
 	defer iterator.Release()
 
@@ -124,9 +149,9 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 }
 
 func TestParameterRowIteratorPositionalMultipleBatches(t *testing.T) {
-	schema := arrow.NewSchema([]arrow.Field{{Type: arrow.PrimitiveTypes.Int32}}, nil)
+	schema := arrow.NewSchema([]arrow.Field{{Name: "ignored", Type: arrow.PrimitiveTypes.Int32}}, nil)
 	stream := newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3})
-	iterator, err := newParameterRowIterator(stream)
+	iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery("SELECT ?"))
 	require.NoError(t, err)
 	defer iterator.Release()
 
@@ -152,7 +177,7 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 		status adbc.Status
 	}{
 		{
-			name: "mixed named and positional",
+			name: "unnamed field in named mode",
 			fields: []arrow.Field{
 				{Name: "named", Type: arrow.PrimitiveTypes.Int64},
 				{Type: arrow.PrimitiveTypes.Int64},
@@ -212,7 +237,7 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			schema := arrow.NewSchema(test.fields, nil)
 			stream, err := array.NewRecordReader(schema, nil)
 			require.NoError(t, err)
-			_, err = newParameterRowIterator(stream)
+			_, err = newParameterRowIterator(stream, namedParameterBinding)
 			requireADBCStatus(t, err, test.status)
 		})
 	}
@@ -230,7 +255,7 @@ func TestParameterRowIteratorRejectsTypedNull(t *testing.T) {
 
 	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
 	require.NoError(t, err)
-	iterator, err := newParameterRowIterator(stream)
+	iterator, err := newParameterRowIterator(stream, namedParameterBinding)
 	require.NoError(t, err)
 	defer iterator.Release()
 
@@ -240,7 +265,8 @@ func TestParameterRowIteratorRejectsTypedNull(t *testing.T) {
 
 func TestParameterizedQueryReaderConcatenatesResultsLazily(t *testing.T) {
 	parameterSchema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
-	iterator, err := newParameterRowIterator(newInt32RecordReader(t, parameterSchema, []int32{1, 2}, []int32{3}))
+	iterator, err := newParameterRowIterator(
+		newInt32RecordReader(t, parameterSchema, []int32{1, 2}, []int32{3}), namedParameterBinding)
 	require.NoError(t, err)
 
 	resultSchema := arrow.NewSchema([]arrow.Field{{Name: "result", Type: arrow.PrimitiveTypes.Int32}}, nil)
@@ -268,7 +294,8 @@ func TestParameterizedQueryReaderConcatenatesResultsLazily(t *testing.T) {
 
 func TestParameterizedQueryReaderRejectsSchemaChanges(t *testing.T) {
 	parameterSchema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
-	iterator, err := newParameterRowIterator(newInt32RecordReader(t, parameterSchema, []int32{1, 2}))
+	iterator, err := newParameterRowIterator(
+		newInt32RecordReader(t, parameterSchema, []int32{1, 2}), namedParameterBinding)
 	require.NoError(t, err)
 
 	executions := 0
@@ -291,7 +318,7 @@ func TestParameterizedQueryReaderRejectsEmptyInput(t *testing.T) {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
 	stream, err := array.NewRecordReader(schema, nil)
 	require.NoError(t, err)
-	iterator, err := newParameterRowIterator(stream)
+	iterator, err := newParameterRowIterator(stream, namedParameterBinding)
 	require.NoError(t, err)
 
 	_, err = newParameterizedQueryReader(iterator, func(_ []driver.NamedValue) (array.RecordReader, error) {
@@ -302,35 +329,48 @@ func TestParameterizedQueryReaderRejectsEmptyInput(t *testing.T) {
 }
 
 func TestExecuteUpdateRunsOncePerParameterRow(t *testing.T) {
-	capture := &parameterCaptureConn{}
-	driverName := fmt.Sprintf("databricks-parameter-test-%d", parameterTestDriverCounter.Add(1))
-	sql.Register(driverName, parameterCaptureDriver{conn: capture})
-	database, err := sql.Open(driverName, "")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, database.Close()) }()
-	sqlConn, err := database.Conn(context.Background())
-	require.NoError(t, err)
-	defer func() { require.NoError(t, sqlConn.Close()) }()
-
-	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
-	statement := &statementImpl{
-		conn:        &connectionImpl{conn: sqlConn},
-		query:       "UPDATE target SET value = :value",
-		boundStream: newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3}),
+	tests := []struct {
+		name          string
+		query         string
+		parameterName string
+	}{
+		{name: "named", query: "UPDATE target SET value = :value", parameterName: "value"},
+		{name: "positional", query: "UPDATE target SET value = ?", parameterName: ""},
 	}
 
-	rowsAffected, err := statement.ExecuteUpdate(context.Background())
-	require.NoError(t, err)
-	require.EqualValues(t, 3, rowsAffected)
-	require.Len(t, capture.calls, 3)
-	for i, args := range capture.calls {
-		require.Len(t, args, 1)
-		parameter := args[0].Value.(dbsql.Parameter)
-		require.Equal(t, "value", parameter.Name)
-		require.Equal(t, dbsql.SqlInteger, parameter.Type)
-		require.Equal(t, strconv.Itoa(i+1), parameter.Value)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := &parameterCaptureConn{}
+			driverName := fmt.Sprintf("databricks-parameter-test-%d", parameterTestDriverCounter.Add(1))
+			sql.Register(driverName, parameterCaptureDriver{conn: capture})
+			database, err := sql.Open(driverName, "")
+			require.NoError(t, err)
+			defer func() { require.NoError(t, database.Close()) }()
+			sqlConn, err := database.Conn(context.Background())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, sqlConn.Close()) }()
+
+			schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
+			statement := &statementImpl{
+				conn:        &connectionImpl{conn: sqlConn},
+				query:       test.query,
+				boundStream: newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3}),
+			}
+
+			rowsAffected, err := statement.ExecuteUpdate(context.Background())
+			require.NoError(t, err)
+			require.EqualValues(t, 3, rowsAffected)
+			require.Len(t, capture.calls, 3)
+			for i, args := range capture.calls {
+				require.Len(t, args, 1)
+				parameter := args[0].Value.(dbsql.Parameter)
+				require.Equal(t, test.parameterName, parameter.Name)
+				require.Equal(t, dbsql.SqlInteger, parameter.Type)
+				require.Equal(t, strconv.Itoa(i+1), parameter.Value)
+			}
+			require.Nil(t, statement.boundStream)
+		})
 	}
-	require.Nil(t, statement.boundStream)
 }
 
 func TestBindNilUnbinds(t *testing.T) {
