@@ -120,9 +120,8 @@ Examples:
 
 ### Parameter binding
 
-Named parameters use non-empty Arrow field names, while positional parameters
-require all field names to be empty. Mixing named and positional fields is not
-supported.
+Queries with named markers use non-empty Arrow field names as parameter names.
+Queries with positional markers ignore Arrow field names.
 
 Each execution attempt consumes the bound parameter data, including when the
 execution fails. Bind the parameter data again before retrying.

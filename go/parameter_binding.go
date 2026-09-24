@@ -35,13 +35,20 @@ type parameterRowIterator struct {
 	timestampConverters []func(arrow.Timestamp) time.Time
 }
 
+type parameterBindingMode uint8
+
+const (
+	positionalParameterBinding parameterBindingMode = iota
+	namedParameterBinding
+)
+
 // newParameterRowIterator takes ownership of stream.
-func newParameterRowIterator(stream array.RecordReader) (*parameterRowIterator, error) {
+func newParameterRowIterator(stream array.RecordReader, mode parameterBindingMode) (*parameterRowIterator, error) {
 	if stream == nil {
 		return nil, adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "parameter stream is nil"}
 	}
 
-	it := &parameterRowIterator{stream: stream}
+	it := &parameterRowIterator{stream: stream, named: mode == namedParameterBinding}
 	schema := stream.Schema()
 	if schema == nil {
 		it.Release()
@@ -50,17 +57,14 @@ func newParameterRowIterator(stream array.RecordReader) (*parameterRowIterator, 
 
 	fields := schema.Fields()
 	it.timestampConverters = make([]func(arrow.Timestamp) time.Time, len(fields))
-	if len(fields) > 0 {
-		it.named = fields[0].Name != ""
-	}
 
 	seenNames := make(map[string]struct{}, len(fields))
 	for i, field := range fields {
-		if (field.Name != "") != it.named {
+		if it.named && field.Name == "" {
 			it.Release()
 			return nil, adbc.Error{
 				Code: adbc.StatusInvalidArgument,
-				Msg:  "parameter fields must be either all named or all unnamed",
+				Msg:  "named parameter fields must have names",
 			}
 		}
 		if it.named {
@@ -117,6 +121,90 @@ func validateParameterType(dataType arrow.DataType) error {
 		Code: adbc.StatusNotImplemented,
 		Msg:  fmt.Sprintf("parameter type %s is not supported", dataType),
 	}
+}
+
+// hasPositionalParameterMarker ignores question marks in quoted text and SQL comments.
+func hasPositionalParameterMarker(query string) bool {
+	const (
+		queryText = iota
+		singleQuoted
+		doubleQuoted
+		backtickQuoted
+		lineComment
+		blockComment
+	)
+
+	state := queryText
+	blockCommentDepth := 0
+	for i := 0; i < len(query); i++ {
+		ch := query[i]
+		next := byte(0)
+		if i+1 < len(query) {
+			next = query[i+1]
+		}
+
+		switch state {
+		case queryText:
+			switch {
+			case ch == '?':
+				return true
+			case ch == '\'':
+				state = singleQuoted
+			case ch == '"':
+				state = doubleQuoted
+			case ch == '`':
+				state = backtickQuoted
+			case ch == '-' && next == '-':
+				state = lineComment
+				i++
+			case ch == '/' && next == '*':
+				state = blockComment
+				blockCommentDepth = 1
+				i++
+			}
+		case singleQuoted, doubleQuoted, backtickQuoted:
+			quote := byte('\'')
+			switch state {
+			case doubleQuoted:
+				quote = '"'
+			case backtickQuoted:
+				quote = '`'
+			}
+			if ch == '\\' && next != 0 {
+				i++
+			} else if ch == quote {
+				if next == quote {
+					i++
+				} else {
+					state = queryText
+				}
+			}
+		case lineComment:
+			if ch == '\n' || ch == '\r' {
+				state = queryText
+			}
+		case blockComment:
+			if ch == '/' && next == '*' {
+				blockCommentDepth++
+				i++
+			} else if ch == '*' && next == '/' {
+				blockCommentDepth--
+				i++
+				if blockCommentDepth == 0 {
+					state = queryText
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+func parameterBindingModeForQuery(query string) parameterBindingMode {
+	if hasPositionalParameterMarker(query) {
+		return positionalParameterBinding
+	}
+	return namedParameterBinding
 }
 
 func (it *parameterRowIterator) Next() ([]driver.NamedValue, bool, error) {
