@@ -21,6 +21,8 @@ def test_package() -> None:
         "databricks://token:foo@foo.cloud.databricks.com:443/sql/1.0/warehouses/foobar"
     )
     # Just ensure the driver itself loads
-    with pytest.raises(adbc_driver_manager.dbapi.Error, match="error connecting"):
-        with adbc_driver_manager.dbapi.connect(driver="databricks", uri=uri):
-            pass
+    with (
+        pytest.raises(adbc_driver_manager.dbapi.Error, match="error connecting"),
+        adbc_driver_manager.dbapi.connect(driver="databricks", uri=uri),
+    ):
+        pass

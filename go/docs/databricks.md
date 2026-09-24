@@ -44,10 +44,10 @@ To connect, edit the `uri` option below to match your environment and run the fo
 from adbc_driver_manager import dbapi
 
 conn = dbapi.connect(
-  driver="databricks",
-  db_kwargs = {
-    "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
-  }
+    driver="databricks",
+    db_kwargs={
+        "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
+    },
 )
 ```
 
