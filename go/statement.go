@@ -107,7 +107,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		conn := s.conn.conn
 		query := s.query
 		errorHelper := s.ErrorHelper
-		iterator, err := newParameterRowIterator(stream)
+		iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(query))
 		if err != nil {
 			return nil, -1, err
 		}
@@ -183,7 +183,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 
 	stream := s.boundStream
 	s.boundStream = nil
-	iterator, err := newParameterRowIterator(stream)
+	iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(s.query))
 	if err != nil {
 		return -1, err
 	}
