@@ -62,7 +62,7 @@ jobs:
     steps:
       - name: Mint engineer-bot App token
         id: token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
           private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
@@ -83,7 +83,7 @@ jobs:
             --body "🤖 engineer-bot is on it — working on a fix. Progress: [run log](${RUN_URL}). I'll comment again with the outcome (and open a fix PR if I make changes)."
 
       - name: Checkout (the PR will be opened against this repo)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           token: ${{ steps.token.outputs.token }}   # so the fix-branch push authenticates as the bot
           persist-credentials: true
@@ -119,7 +119,7 @@ jobs:
           echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4.3.1
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
         with:
           dotnet-version: '8.0.x'
 
