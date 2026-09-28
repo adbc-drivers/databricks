@@ -262,10 +262,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             int rateLimitRetryTimeout = PropertyHelper.GetIntPropertyWithValidation(properties, DatabricksParameters.RateLimitRetryTimeout, DatabricksConstants.DefaultRateLimitRetryTimeout);
             int timeoutMinutes = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchTimeoutMinutes, DatabricksConstants.DefaultCloudFetchTimeoutMinutes);
 
+            // SEA inline results are base64-of-LZ4-Arrow wrapped in JSON; the API proxy gzips that
+            // JSON envelope, which is wasteful (double compression on already-compressed data) and
+            // ~40ms slower in-region for multi-MB results. Default to not requesting gzip on the SEA
+            // statements client; a bandwidth-constrained client can re-enable it. Scoped to this
+            // client only — CloudFetch (S3) and the Thrift path are unaffected.
+            bool seaResponseCompression = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.SeaResponseCompressionEnabled, false);
+
             var config = new HttpHandlerFactory.HandlerConfig
             {
-                BaseHandler = HttpClientFactory.CreateHandler(properties),
-                BaseAuthHandler = HttpClientFactory.CreateHandler(properties),
+                BaseHandler = HttpClientFactory.CreateHandler(properties, seaResponseCompression),
+                BaseAuthHandler = HttpClientFactory.CreateHandler(properties, seaResponseCompression),
                 Properties = properties,
                 Host = GetHost(properties),
                 ActivityTracer = this,

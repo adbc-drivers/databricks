@@ -112,6 +112,20 @@ namespace AdbcDrivers.Databricks
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string ApplySSPWithQueries = "adbc.databricks.apply_ssp_with_queries";
 
+        /// <summary>
+        /// Whether the SEA (Statement Execution API) HTTP client requests response compression (gzip)
+        /// via Accept-Encoding. SEA inline results are base64-encoded LZ4-compressed Arrow wrapped in
+        /// JSON; the API proxy then gzips that JSON envelope, which is wasteful double-compression on
+        /// already-compressed data and measurably slower for multi-MB inline results in-region
+        /// (~40ms server-side; the gzipped wire is even larger than the Thrift binary). Disabling it
+        /// makes the proxy return the body uncompressed. Default is false (compression disabled) for
+        /// best in-region performance; set to true for bandwidth-constrained clients where the smaller
+        /// gzipped body outweighs the compression cost. Only affects the SEA statements client — not
+        /// CloudFetch (S3) or the Thrift path.
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string SeaResponseCompressionEnabled = "adbc.databricks.sea_response_compression_enabled";
+
 
         /// <summary>
         /// Prefix for server-side properties. Properties with this prefix will be passed to the server
