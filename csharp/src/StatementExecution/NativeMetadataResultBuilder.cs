@@ -31,12 +31,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             IReadOnlyList<RecordBatch> batches, Schema schema, MetadataOperation operation,
             string? requestedCatalog = null, IReadOnlyCollection<string>? tableTypes = null,
             string? parentCatalog = null, string? parentSchema = null, string? parentTable = null,
-            IReadOnlyList<string?>? sourceCatalogs = null)
+            IReadOnlyList<string?>? sourceCatalogs = null, bool requireExactCatalog = false)
         {
             // C# exposes BASE_TYPE_NAME after the 23 Thrift GetColumns fields.
             int sourceColumns = schema.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
             if (sourceCatalogs != null && sourceCatalogs.Count != batches.Count)
                 throw new ArgumentException("Each native batch must have a source catalog", nameof(sourceCatalogs));
+            string? catalogField = operation switch
+            {
+                MetadataOperation.GetSchemas => "TABLE_CATALOG",
+                MetadataOperation.GetTables or MetadataOperation.GetColumns => "TABLE_CAT",
+                _ => null,
+            };
             var rows = new List<(NativeMetadataColumns Columns, int Index, string? Catalog)>();
             for (int batchIndex = 0; batchIndex < batches.Count; batchIndex++)
             {
@@ -46,8 +52,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 for (int row = 0; row < batch.Length; row++)
                 {
-                    if (operation == MetadataOperation.GetTables && requestedCatalog != null &&
-                        !string.Equals(requestedCatalog, columns.String("TABLE_CAT", row) ?? sourceCatalog, StringComparison.OrdinalIgnoreCase))
+                    // Native metadata can expand wildcard characters in a quoted catalog.
+                    if (catalogField != null && requestedCatalog != null &&
+                        (operation == MetadataOperation.GetTables || requireExactCatalog) &&
+                        !string.Equals(requestedCatalog, columns.String(catalogField, row) ?? sourceCatalog, StringComparison.OrdinalIgnoreCase))
                         continue;
                     if (operation == MetadataOperation.GetTables && tableTypes != null &&
                         !tableTypes.Contains(DefaultTableType(columns.String("TABLE_TYPE", row))))

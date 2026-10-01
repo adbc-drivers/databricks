@@ -94,6 +94,45 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Theory]
+        [InlineData((int)MetadataOperation.GetSchemas, "%", true, 0)]
+        [InlineData((int)MetadataOperation.GetColumns, "compar%", true, 0)]
+        [InlineData((int)MetadataOperation.GetColumns, @"comparator\_tests", true, 0)]
+        [InlineData((int)MetadataOperation.GetSchemas, "comparator_tests", true, 1)]
+        [InlineData((int)MetadataOperation.GetColumns, "COMPARATOR_TESTS", true, 1)]
+        [InlineData((int)MetadataOperation.GetSchemas, "compar%", false, 2)]
+        public void NativeSchemasAndColumns_FilterLiteralCatalogsOnlyWhenRequested(
+            int operationCode, string requestedCatalog, bool requireExactCatalog, int expectedRows)
+        {
+            var operation = (MetadataOperation)operationCode;
+            var target = operation == MetadataOperation.GetSchemas
+                ? MetadataSchemaFactory.CreateSchemasSchema()
+                : MetadataSchemaFactory.CreateColumnMetadataSchema();
+            var fields = operation == MetadataOperation.GetColumns
+                ? target.FieldsList.Take(23).ToArray()
+                : target.FieldsList.ToArray();
+            string catalogField = operation == MetadataOperation.GetSchemas ? "TABLE_CATALOG" : "TABLE_CAT";
+            var source = new Schema(fields, null);
+            var arrays = fields.Select(field => field.DataType.TypeId switch
+            {
+                ArrowTypeId.String when field.Name == catalogField =>
+                    (IArrowArray)new StringArray.Builder().Append("comparator_tests").Append("comparator-tests").Build(),
+                ArrowTypeId.String => new StringArray.Builder().Append(field.Name == "TYPE_NAME" ? "INT" : "value")
+                    .Append(field.Name == "TYPE_NAME" ? "INT" : "value").Build(),
+                ArrowTypeId.Int8 => new Int8Array.Builder().Append(0).Append(0).Build(),
+                ArrowTypeId.Int16 => new Int16Array.Builder().Append(0).Append(0).Build(),
+                ArrowTypeId.Int32 => new Int32Array.Builder().Append(0).Append(0).Build(),
+                _ => (IArrowArray)new Int64Array.Builder().Append(0).Append(0).Build(),
+            }).ToArray();
+            using var nativeBatch = new RecordBatch(source, arrays, 2);
+
+            var result = NativeMetadataResultBuilder.Build(
+                new[] { nativeBatch }, target, operation,
+                requestedCatalog: requestedCatalog, requireExactCatalog: requireExactCatalog);
+
+            Assert.Equal(expectedRows, result.RowCount);
+        }
+
+        [Theory]
         [InlineData((int)MetadataOperation.GetCatalogs)]
         [InlineData((int)MetadataOperation.GetSchemas)]
         [InlineData((int)MetadataOperation.GetPrimaryKeys)]
