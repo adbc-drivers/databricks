@@ -1008,7 +1008,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         ColumnMetadataHelper.PopulateTableInfoFromTypeName(
                             tableInfo, colName, colType, position, nullable,
                             columnDefault: isNative ? native!.String("COLUMN_DEF", i) : null,
-                            isAutoIncrement: isNative && string.Equals(native!.String("IS_AUTOINCREMENT", i), "YES", StringComparison.OrdinalIgnoreCase));
+                            isAutoIncrement: isNative && string.Equals(native!.String("IS_AUTO_INCREMENT", i), "YES", StringComparison.OrdinalIgnoreCase));
                     }
                 }
             }
@@ -1095,7 +1095,31 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
                             sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
-                        results.AddRange(batches.Select(columns => (columns, isNative, (string?)sourceCatalog)));
+                        foreach (var columns in batches)
+                        {
+                            if (!isNative)
+                            {
+                                results.Add((columns, false, sourceCatalog));
+                                continue;
+                            }
+
+                            // Native GetColumns can treat catalog names as LIKE patterns.
+                            var native = new NativeMetadataColumns(
+                                columns, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
+                            int start = -1;
+                            for (int row = 0; row <= columns.Length; row++)
+                            {
+                                string? rowCatalog = row < columns.Length ? native.String("TABLE_CAT", row) : null;
+                                bool matches = row < columns.Length && (rowCatalog == null ||
+                                    string.Equals(rowCatalog, sourceCatalog, StringComparison.OrdinalIgnoreCase));
+                                if (matches && start < 0) start = row;
+                                if (!matches && start >= 0)
+                                {
+                                    results.Add((columns.Slice(start, row - start), true, sourceCatalog));
+                                    start = -1;
+                                }
+                            }
+                        }
                     }
                     catch
                     {

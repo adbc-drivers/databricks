@@ -16,12 +16,14 @@
 
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
@@ -50,10 +52,50 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static HttpClient CreateHttpClient()
+        private static byte[] ArrowNativeColumns(Field[] fields)
         {
-            byte[] catalogs = ArrowStrings("TABLE_CAT", "main", "other");
-            byte[] columns = ArrowStrings("col_name", "a");
+            var schema = new Schema(fields, null);
+            var arrays = fields.Select(field =>
+            {
+                if (field.Name == "TABLE_CAT")
+                    return (IArrowArray)new StringArray.Builder().Append("foo_bar").Append("fooxbar").Build();
+                string value = field.Name switch
+                {
+                    "TABLE_SCHEM" => "default",
+                    "TABLE_NAME" => "t",
+                    "COLUMN_NAME" => "a",
+                    "TYPE_NAME" => "INT",
+                    "IS_AUTO_INCREMENT" => "YES",
+                    _ => field.Name,
+                };
+                return field.DataType.TypeId switch
+                {
+                    ArrowTypeId.String => (IArrowArray)new StringArray.Builder()
+                        .Append(value).Append(value).Build(),
+                    ArrowTypeId.Int8 => new Int8Array.Builder().Append(0).Append(0).Build(),
+                    ArrowTypeId.Int16 => new Int16Array.Builder().Append(0).Append(0).Build(),
+                    ArrowTypeId.Int32 => new Int32Array.Builder().Append(0).Append(0).Build(),
+                    _ => (IArrowArray)new Int64Array.Builder().Append(0).Append(0).Build(),
+                };
+            }).ToArray();
+            using var raw = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(raw, schema))
+            {
+                writer.WriteRecordBatch(new RecordBatch(schema, arrays, 2));
+                writer.WriteEnd();
+            }
+            return raw.ToArray();
+        }
+
+        private static HttpClient CreateHttpClient(bool overlappingNativeColumns = false)
+        {
+            byte[] catalogs = overlappingNativeColumns
+                ? ArrowStrings("TABLE_CAT", "foo_bar", "fooxbar")
+                : ArrowStrings("TABLE_CAT", "main", "other");
+            Field[] nativeColumnFields = MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Take(23).ToArray();
+            byte[] columns = overlappingNativeColumns
+                ? ArrowNativeColumns(nativeColumnFields)
+                : ArrowStrings("col_name", "a");
             var handler = new Mock<HttpMessageHandler>();
             handler.Protected()
                 .Setup<Task<HttpResponseMessage>>("SendAsync",
@@ -70,19 +112,35 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                         sql = json.RootElement.GetProperty("statement").GetString() ?? "";
                     }
                     bool isCatalogs = sql.StartsWith("SHOW CATALOGS");
-                    string name = isCatalogs ? "TABLE_CAT" : "col_name";
+                    Field[] fields = isCatalogs
+                        ? new[] { new Field("TABLE_CAT", StringType.Default, true) }
+                        : overlappingNativeColumns
+                            ? nativeColumnFields
+                            : new[] { new Field("col_name", StringType.Default, true) };
+                    var manifestColumns = fields.Select((field, position) =>
+                    {
+                        string type = field.DataType.TypeId switch
+                        {
+                            ArrowTypeId.Int8 => "TINYINT",
+                            ArrowTypeId.Int16 => "SMALLINT",
+                            ArrowTypeId.Int32 => "INT",
+                            ArrowTypeId.Int64 => "BIGINT",
+                            _ => "STRING",
+                        };
+                        return new { name = field.Name, position, type_name = type, type_text = type };
+                    }).ToArray();
                     var body = JsonSerializer.Serialize(new
                     {
                         statement_id = "stmt-1",
                         status = new { state = "SUCCEEDED" },
                         manifest = new
                         {
-                            is_native_metadata_result = isCatalogs,
-                            total_row_count = isCatalogs ? 2 : 1,
+                            is_native_metadata_result = isCatalogs || overlappingNativeColumns,
+                            total_row_count = isCatalogs || overlappingNativeColumns ? 2 : 1,
                             schema = new
                             {
-                                column_count = 1,
-                                columns = new[] { new { name, position = 0, type_name = "STRING", type_text = "STRING" } },
+                                column_count = fields.Length,
+                                columns = manifestColumns,
                             },
                         },
                         result = new { attachment = isCatalogs ? catalogs : columns },
@@ -139,6 +197,45 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(2, batches.Count);
             Assert.Equal("main", batches[0].Catalog);
             Assert.Equal("other", batches[1].Catalog);
+        }
+
+        [Fact]
+        public async Task ColumnFanout_FiltersOverlappingNativeCatalogNames()
+        {
+            using var http = CreateHttpClient(overlappingNativeColumns: true);
+            using var connection = CreateConnection(http);
+
+            var batches = await connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None);
+
+            Assert.Equal(2, batches.Count);
+            Assert.All(batches, result =>
+            {
+                Assert.True(result.IsNative);
+                Assert.Equal(1, result.Batch.Length);
+                Assert.Equal(result.Catalog, ((StringArray)result.Batch.Column("TABLE_CAT")).GetString(0));
+            });
+            Assert.Equal(new[] { "foo_bar", "fooxbar" }, batches.Select(result => result.Catalog));
+
+            var result = NativeMetadataResultBuilder.Build(
+                batches.Select(batch => batch.Batch).ToArray(),
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
+                sourceCatalogs: batches.Select(batch => batch.Catalog).ToArray());
+            using var stream = result.Stream!;
+            Assert.Equal(2, result.RowCount);
+
+            var catalogMap = new Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>>();
+            foreach (string catalog in new[] { "foo_bar", "fooxbar" })
+            {
+                catalogMap[catalog] = new Dictionary<string, Dictionary<string, TableInfo>>
+                {
+                    ["default"] = new Dictionary<string, TableInfo> { ["t"] = new TableInfo("TABLE") },
+                };
+            }
+            await ((IGetObjectsDataProvider)connection).PopulateColumnInfoAsync(
+                null, null, null, null, catalogMap, CancellationToken.None);
+            Assert.Single(catalogMap["foo_bar"]["default"]["t"].ColumnName);
+            Assert.Single(catalogMap["fooxbar"]["default"]["t"].ColumnName);
+            Assert.True(catalogMap["foo_bar"]["default"]["t"].IsAutoIncrement.Single());
         }
     }
 }

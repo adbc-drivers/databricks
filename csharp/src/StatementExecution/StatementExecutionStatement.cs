@@ -1618,7 +1618,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             position,
                             nullable,
                             columnDefault: isNative ? native!.String("COLUMN_DEF", i) : null,
-                            isAutoIncrement: isNative && string.Equals(native!.String("IS_AUTOINCREMENT", i), "YES", StringComparison.OrdinalIgnoreCase));
+                            isAutoIncrement: isNative && string.Equals(native!.String("IS_AUTO_INCREMENT", i), "YES", StringComparison.OrdinalIgnoreCase));
                     }
                 }
 
