@@ -218,7 +218,6 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.max_bytes_per_fetch_request` | Max bytes per fetch request (supports B, KB, MB, GB) | `400MB` | Not Supported |
 | `adbc.databricks.apply_ssp_with_queries` | Apply server-side properties with queries | `false` | Not Supported |
 | `adbc.databricks.enable_multiple_catalog_support` | Support multiple catalogs | `true` | `true` |
-| `adbc.databricks.enable_thrift_native_metadata` | Require native metadata results for SEA metadata queries; set `false` to use SHOW results | Not Supported | `true` |
 | `adbc.databricks.enable_pk_fk` | Enable primary/foreign key metadata | `true` | `true` |
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
 | `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | Not Supported (Thrift-only concept) |
