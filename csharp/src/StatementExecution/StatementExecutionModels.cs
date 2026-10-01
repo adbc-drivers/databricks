@@ -19,6 +19,16 @@ using System.Text.Json.Serialization;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
+    internal enum MetadataOperation
+    {
+        GetCatalogs,
+        GetSchemas,
+        GetTables,
+        GetColumns,
+        GetPrimaryKeys,
+        GetCrossReference,
+    }
+
     // ============================================================================
     // Session Management Models
     // ============================================================================
@@ -184,6 +194,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonIgnore]
         public bool IsMetadata { get; set; }
+
+        [JsonIgnore]
+        internal MetadataOperation? MetadataOperation { get; set; }
 
         /// <summary>
         /// Maximum number of rows to return.
@@ -400,6 +413,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("is_volume_operation")]
         public bool? IsVolumeOperation { get; set; }
+
+        [JsonPropertyName("is_native_metadata_result")]
+        public bool? IsNativeMetadataResult { get; set; }
     }
 
     /// <summary>

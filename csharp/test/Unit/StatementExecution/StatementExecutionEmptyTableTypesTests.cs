@@ -113,6 +113,74 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return new HttpClient(handler.Object);
         }
 
+        private static HttpClient HttpClientReturningNativeTables(List<string> operations)
+        {
+            static StringArray ThreeNulls()
+            {
+                var builder = new StringArray.Builder();
+                builder.AppendNull();
+                builder.AppendNull();
+                builder.AppendNull();
+                return builder.Build();
+            }
+
+            string[] names =
+            {
+                "TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "TABLE_TYPE", "REMARKS",
+                "TYPE_CAT", "TYPE_SCHEM", "TYPE_NAME", "SELF_REFERENCING_COL_NAME", "REF_GENERATION",
+            };
+            var schema = new Schema(names.Select(name => new Field(name, StringType.Default, true)), null);
+            var arrays = new IArrowArray[]
+            {
+                new StringArray.Builder().Append("main").Append("main").Append("other").Build(),
+                new StringArray.Builder().Append("default").Append("default").Append("default").Build(),
+                new StringArray.Builder().Append("my_table").Append("my_view").Append("other_view").Build(),
+                new StringArray.Builder().Append("TABLE").Append("VIEW").Append("VIEW").Build(),
+                new StringArray.Builder().Append("table remark").Append("view remark").Append("other remark").Build(),
+                ThreeNulls(), ThreeNulls(), ThreeNulls(), ThreeNulls(), ThreeNulls(),
+            };
+            using var raw = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(raw, schema))
+            {
+                writer.WriteRecordBatch(new RecordBatch(schema, arrays, 3));
+                writer.WriteEnd();
+            }
+            var executeBody = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-native-tables",
+                status = new { state = "SUCCEEDED" },
+                manifest = new
+                {
+                    is_native_metadata_result = true,
+                    total_row_count = 3,
+                    schema = new
+                    {
+                        column_count = names.Length,
+                        columns = names.Select((name, position) => new
+                        {
+                            name, position, type_name = "STRING", type_text = "STRING",
+                        }).ToArray(),
+                    },
+                },
+                result = new { attachment = raw.ToArray() },
+            });
+            var sessionBody = JsonSerializer.Serialize(new { session_id = "session-1" });
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
+                {
+                    if (req.RequestUri?.AbsolutePath.EndsWith("/api/2.0/sql/sessions") == true)
+                        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
+                    if (req.Method != HttpMethod.Post)
+                        return new HttpResponseMessage(HttpStatusCode.OK);
+                    operations.Add(req.Headers.GetValues("x-databricks-metadata-operation-type").Single());
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(executeBody) };
+                });
+            return new HttpClient(handler.Object);
+        }
+
         private static StatementExecutionConnection CreateConnection(HttpClient http)
         {
             var properties = new Dictionary<string, string>
@@ -173,6 +241,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal("TABLE", rows[0].tableType);
         }
 
+        [Fact]
+        public async Task GetTables_NativeResult_UsesThriftColumns()
+        {
+            var operations = new List<string>();
+            using var http = HttpClientReturningNativeTables(operations);
+            using var connection = CreateConnection(http);
+
+            var rows = await ListTablesAsync(connection, new[] { "VIEW" });
+
+            Assert.Single(rows);
+            Assert.Equal("my_view", rows[0].table);
+            Assert.Equal("VIEW", rows[0].tableType);
+            Assert.Equal(new[] { "GetTables" }, operations);
+        }
+
         // ─── is_metadata_command path (StatementExecutionStatement.GetTablesAsync) ──────
         // The metadata-command shim receives tableTypes as a pre-joined string option
         // (adbc.get_metadata.target_table_types). An empty string means "match none"
@@ -230,6 +313,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var types = await MetadataCommandTableTypes(http, tableTypesOption: "TABLE");
             Assert.Single(types);
             Assert.Equal("TABLE", types[0]);
+        }
+
+        [Fact]
+        public async Task MetadataCommand_NativeTables_FiltersByType()
+        {
+            var operations = new List<string>();
+            using var http = HttpClientReturningNativeTables(operations);
+
+            var types = await MetadataCommandTableTypes(http, "TABLE");
+
+            Assert.Equal(new[] { "TABLE" }, types);
+            Assert.Equal(new[] { "GetTables" }, operations);
         }
     }
 }
