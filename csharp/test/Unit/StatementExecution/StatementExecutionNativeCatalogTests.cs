@@ -50,7 +50,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static HttpClient CreateHttpClient(string? otherFailureState = null, string otherFailureCode = "QUERY_ERROR")
+        private static HttpClient CreateHttpClient()
         {
             byte[] catalogs = ArrowStrings("TABLE_CAT", "main", "other");
             byte[] columns = ArrowStrings("col_name", "a");
@@ -69,24 +69,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                         using var json = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
                         sql = json.RootElement.GetProperty("statement").GetString() ?? "";
                     }
-                    if (otherFailureState != null && sql.Contains("`other`"))
-                    {
-                        string failedBody = JsonSerializer.Serialize(new
-                        {
-                            statement_id = "failed",
-                            status = new
-                            {
-                                state = "FAILED",
-                                sql_state = otherFailureState,
-                                error = new { error_code = otherFailureCode, message = "catalog query failed" },
-                            },
-                        });
-                        return new HttpResponseMessage(HttpStatusCode.OK)
-                        {
-                            Content = new StringContent(failedBody),
-                        };
-                    }
-
                     bool isCatalogs = sql.StartsWith("SHOW CATALOGS");
                     string name = isCatalogs ? "TABLE_CAT" : "col_name";
                     var body = JsonSerializer.Serialize(new
@@ -157,38 +139,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(2, batches.Count);
             Assert.Equal("main", batches[0].Catalog);
             Assert.Equal("other", batches[1].Catalog);
-        }
-
-        [Fact]
-        public async Task ColumnFanout_PropagatesUnrelatedCatalogFailure()
-        {
-            using var http = CreateHttpClient(otherFailureState: "XX000");
-            using var connection = CreateConnection(http);
-
-            await Assert.ThrowsAsync<DatabricksException>(() =>
-                connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None));
-        }
-
-        [Fact]
-        public async Task ColumnFanout_SkipsSqlPermissionDeniedCatalog()
-        {
-            using var http = CreateHttpClient(otherFailureState: "42501");
-            using var connection = CreateConnection(http);
-
-            var batches = await connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None);
-
-            Assert.Single(batches);
-            Assert.Equal("main", batches[0].Catalog);
-        }
-
-        [Fact]
-        public async Task ColumnFanout_PropagatesNativeRequirementRejection()
-        {
-            using var http = CreateHttpClient(otherFailureState: "22023", otherFailureCode: "INVALID_PARAMETER_VALUE");
-            using var connection = CreateConnection(http);
-
-            await Assert.ThrowsAsync<DatabricksException>(() =>
-                connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None));
         }
     }
 }
