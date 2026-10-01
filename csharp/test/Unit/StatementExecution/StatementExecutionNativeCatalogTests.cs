@@ -49,7 +49,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static HttpClient CreateHttpClient(string? otherFailureState = null)
+        private static HttpClient CreateHttpClient(string? otherFailureState = null, string otherFailureCode = "QUERY_ERROR")
         {
             byte[] catalogs = ArrowStrings("TABLE_CAT", "main", "other");
             byte[] columns = ArrowStrings("col_name", "a");
@@ -77,7 +77,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                             {
                                 state = "FAILED",
                                 sql_state = otherFailureState,
-                                error = new { error_code = "QUERY_ERROR", message = "catalog query failed" },
+                                error = new { error_code = otherFailureCode, message = "catalog query failed" },
                             },
                         });
                         return new HttpResponseMessage(HttpStatusCode.OK)
@@ -164,6 +164,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.Single(batches);
             Assert.Equal("main", batches[0].Catalog);
+        }
+
+        [Fact]
+        public async Task ColumnFanout_PropagatesNativeRequirementRejection()
+        {
+            using var http = CreateHttpClient(otherFailureState: "22023", otherFailureCode: "INVALID_PARAMETER_VALUE");
+            using var connection = CreateConnection(http);
+
+            await Assert.ThrowsAsync<DatabricksException>(() =>
+                connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None));
         }
     }
 }
