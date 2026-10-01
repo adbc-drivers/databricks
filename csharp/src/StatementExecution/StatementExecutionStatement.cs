@@ -1378,7 +1378,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     if (nativeResult.IsNative)
                         return NativeMetadataResultBuilder.Build(
                             batches, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas,
-                            requestedCatalog: catalog);
+                            requestedCatalog: catalog, requireExactCatalog: _escapePatternWildcards);
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
                 {
@@ -1588,7 +1588,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         columnBatches.Select(result => result.Batch).ToList(),
                         MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
                         requestedCatalog: catalog,
-                        sourceCatalogs: columnBatches.Select(result => result.Catalog).ToList());
+                        sourceCatalogs: columnBatches.Select(result => result.Catalog).ToList(),
+                        requireExactCatalog: _escapePatternWildcards);
                 }
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
@@ -1619,6 +1620,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         string? colType = isNative ? native!.String("TYPE_NAME", i)
                             : columnTypeArray!.IsNull(i) ? null : columnTypeArray.GetString(i);
                         if (cat == null || sch == null || tbl == null || colName == null || colType == null) continue;
+                        if (isNative && _escapePatternWildcards && catalog != null &&
+                            !string.Equals(catalog, cat, StringComparison.OrdinalIgnoreCase)) continue;
 
                         string key = $"{cat}.{sch}.{tbl}";
 
