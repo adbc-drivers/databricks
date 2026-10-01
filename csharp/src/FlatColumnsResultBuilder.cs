@@ -81,7 +81,8 @@ namespace AdbcDrivers.Databricks
 
                     nullableBuilder.Append(info.Nullable[i]);
                     remarksBuilder.Append("");
-                    columnDefBuilder.AppendNull();
+                    if (string.IsNullOrEmpty(info.ColumnDefault[i])) columnDefBuilder.AppendNull();
+                    else columnDefBuilder.Append(info.ColumnDefault[i]);
 
                     sqlDataTypeBuilder.Append(info.ColType[i]);
 
