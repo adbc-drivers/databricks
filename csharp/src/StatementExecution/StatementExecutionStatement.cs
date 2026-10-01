@@ -417,7 +417,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,
-                MetadataOperation = _connection.EnableThriftNativeMetadata ? metadataOperation : null,
+                MetadataOperation = metadataOperation,
                 QueryTags = ParseQueryTags(_queryTags)
             };
 

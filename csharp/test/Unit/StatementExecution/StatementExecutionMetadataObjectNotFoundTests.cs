@@ -170,7 +170,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task DisableNativeMetadata_LeavesOnlyTheSynchronousMetadataHeader()
+        public async Task MetadataConnection_AlwaysRequestsNativeMetadata()
         {
             bool hasSyncHeader = false;
             bool hasOperationHeader = false;
@@ -198,15 +198,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 [SparkParameters.HostName] = "test.databricks.com",
                 [DatabricksParameters.WarehouseId] = "wh-1",
                 [SparkParameters.AccessToken] = "token",
-                [DatabricksParameters.EnableThriftNativeMetadata] = "false",
             };
             using var connection = new StatementExecutionConnection(properties, http);
 
             await connection.ExecuteNativeMetadataSqlAsync("SHOW CATALOGS", MetadataOperation.GetCatalogs, CancellationToken.None);
 
             Assert.True(hasSyncHeader);
-            Assert.False(hasOperationHeader);
-            Assert.False(hasRequireHeader);
+            Assert.True(hasOperationHeader);
+            Assert.True(hasRequireHeader);
         }
 
         // ─── Issue #525: `%` match-all catalog wildcard ──────────────────────────────

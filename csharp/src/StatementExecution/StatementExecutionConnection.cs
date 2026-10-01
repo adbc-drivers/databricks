@@ -72,7 +72,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private bool _scopeCurrentCatalog;
         private bool _useDescTableExtended;
         private bool _enableFastMetadataQuery;
-        private bool _enableThriftNativeMetadata;
         private bool _applySSPWithQueries;
 
         // Connection bring-up timeout (PECO-3059). Mirrors the Thrift path's
@@ -316,7 +315,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _scopeCurrentCatalog = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.ScopeCurrentCatalog, false);
             _useDescTableExtended = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.UseDescTableExtended, true);
             _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableFastMetadataQuery, false);
-            _enableThriftNativeMetadata = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableThriftNativeMetadata, true);
             // When true, SSPs (adbc.databricks.ssp_*) are applied via post-open SET statements
             // rather than CreateSession.session_confs — mirrors Thrift's behavior so callers
             // who depend on the SET-statement path (e.g., for audit visibility or for SSPs
@@ -1180,8 +1178,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// Default: false.
         /// </summary>
         internal bool EnableFastMetadataQuery => _enableFastMetadataQuery;
-
-        internal bool EnableThriftNativeMetadata => _enableThriftNativeMetadata;
 
         /// <summary>
         /// Returns the session's default catalog by querying the server via
