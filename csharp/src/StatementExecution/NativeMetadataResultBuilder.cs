@@ -197,6 +197,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private static bool Matches(string? requested, string? actual)
             => requested == null || (actual != null && string.Equals(requested, actual, StringComparison.OrdinalIgnoreCase));
 
-        internal static string DefaultTableType(string? value) => string.IsNullOrEmpty(value) ? "TABLE" : value;
+        internal static string DefaultTableType(string? value) => string.IsNullOrEmpty(value) ? "TABLE" : value!;
     }
 }
