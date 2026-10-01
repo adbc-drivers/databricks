@@ -94,12 +94,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Theory]
-        [InlineData(MetadataOperation.GetCatalogs)]
-        [InlineData(MetadataOperation.GetSchemas)]
-        [InlineData(MetadataOperation.GetPrimaryKeys)]
-        [InlineData(MetadataOperation.GetCrossReference)]
-        public async Task OtherNativeOperations_PreserveTheirSchemas(MetadataOperation operation)
+        [InlineData((int)MetadataOperation.GetCatalogs)]
+        [InlineData((int)MetadataOperation.GetSchemas)]
+        [InlineData((int)MetadataOperation.GetPrimaryKeys)]
+        [InlineData((int)MetadataOperation.GetCrossReference)]
+        public async Task OtherNativeOperations_PreserveTheirSchemas(int operationCode)
         {
+            var operation = (MetadataOperation)operationCode;
             var schema = operation switch
             {
                 MetadataOperation.GetCatalogs => MetadataSchemaFactory.CreateCatalogsSchema(),

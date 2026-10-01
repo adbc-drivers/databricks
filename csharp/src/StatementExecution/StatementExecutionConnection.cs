@@ -1087,7 +1087,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         results.AddRange(batches.Select(columns => (columns, isNative, (string?)sourceCatalog)));
                     }
                     catch (DatabricksException ex) when (!cancellationToken.IsCancellationRequested &&
-                        (ex.IsObjectNotFoundException() || IsSqlPermissionDenied(ex)))
+                        (IsCatalogObjectNotFound(ex) || IsSqlPermissionDenied(ex)))
                     {
                         System.Diagnostics.Activity.Current?.AddEvent(new System.Diagnostics.ActivityEvent(
                             "statement.get_columns.catalog_skipped",
@@ -1105,6 +1105,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private static bool IsSqlPermissionDenied(DatabricksException ex)
             => ex.SqlState == "42501" || ex.Message.IndexOf("SQLSTATE: 42501", StringComparison.OrdinalIgnoreCase) >= 0
                 || ex.Message.IndexOf("INSUFFICIENT_PERMISSIONS", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        private static bool IsCatalogObjectNotFound(DatabricksException ex)
+            => ex.SqlState == "42704" || ex.Message.IndexOf("NO_SUCH_CATALOG_EXCEPTION", StringComparison.OrdinalIgnoreCase) >= 0
+                || ex.Message.IndexOf("SCHEMA_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
+                || ex.Message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0;
 
         private static bool MatchesCatalogPattern(string? pattern, string catalog)
         {
