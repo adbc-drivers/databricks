@@ -30,32 +30,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal static QueryResult Build(
             IReadOnlyList<RecordBatch> batches, Schema schema, MetadataOperation operation,
             string? requestedCatalog = null, IReadOnlyCollection<string>? tableTypes = null,
-            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
+            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null,
+            IReadOnlyList<string?>? sourceCatalogs = null)
         {
             // C# exposes BASE_TYPE_NAME after the 23 Thrift GetColumns fields.
             int sourceColumns = schema.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
-            var rows = new List<(RecordBatch Batch, int Index)>();
-            foreach (var batch in batches)
+            if (sourceCatalogs != null && sourceCatalogs.Count != batches.Count)
+                throw new ArgumentException("Each native batch must have a source catalog", nameof(sourceCatalogs));
+            var rows = new List<(NativeMetadataColumns Columns, int Index, string? Catalog)>();
+            for (int batchIndex = 0; batchIndex < batches.Count; batchIndex++)
             {
-                if (batch.Schema.FieldsList.Count != sourceColumns)
-                    throw new DatabricksException($"Invalid native {operation} result: expected {sourceColumns} columns, found {batch.Schema.FieldsList.Count}");
+                var batch = batches[batchIndex];
+                var columns = new NativeMetadataColumns(batch, schema, operation);
+                string? sourceCatalog = sourceCatalogs?[batchIndex] ?? requestedCatalog;
 
                 for (int row = 0; row < batch.Length; row++)
                 {
                     if (operation == MetadataOperation.GetTables && requestedCatalog != null &&
-                        !string.Equals(requestedCatalog, ReadString(batch.Column(0), row), StringComparison.OrdinalIgnoreCase))
+                        !string.Equals(requestedCatalog, columns.String("TABLE_CAT", row) ?? sourceCatalog, StringComparison.OrdinalIgnoreCase))
                         continue;
                     if (operation == MetadataOperation.GetTables && tableTypes != null &&
-                        !tableTypes.Contains(ReadString(batch.Column(3), row) ?? string.Empty))
+                        !tableTypes.Contains(DefaultTableType(columns.String("TABLE_TYPE", row))))
                         continue;
 
                     if (operation == MetadataOperation.GetCrossReference &&
-                        (!Matches(parentCatalog, ReadString(batch.Column(0), row)) ||
-                         !Matches(parentSchema, ReadString(batch.Column(1), row)) ||
-                         !Matches(parentTable, ReadString(batch.Column(2), row))))
+                        (!Matches(parentCatalog, columns.String(schema.FieldsList[0].Name, row)) ||
+                         !Matches(parentSchema, columns.String(schema.FieldsList[1].Name, row)) ||
+                         !Matches(parentTable, columns.String(schema.FieldsList[2].Name, row))))
                         continue;
 
-                    rows.Add((batch, row));
+                    rows.Add((columns, row, sourceCatalog));
                 }
             }
 
@@ -66,9 +70,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     foreach (int column in sortColumns)
                     {
+                        string? leftValue = left.Columns.String(schema.FieldsList[column].Name, left.Index);
+                        string? rightValue = right.Columns.String(schema.FieldsList[column].Name, right.Index);
+                        if (column == 3)
+                        {
+                            leftValue = DefaultTableType(leftValue);
+                            rightValue = DefaultTableType(rightValue);
+                        }
+                        if (column == 0)
+                        {
+                            leftValue ??= left.Catalog;
+                            rightValue ??= right.Catalog;
+                        }
                         int result = StringComparer.Ordinal.Compare(
-                            ReadString(left.Batch.Column(column), left.Index),
-                            ReadString(right.Batch.Column(column), right.Index));
+                            leftValue, rightValue);
                         if (result != 0) return result;
                     }
                     return 0;
@@ -82,18 +97,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     case ArrowTypeId.String:
                         var strings = new StringArray.Builder();
-                        foreach (var (batch, row) in rows)
+                        foreach (var (columns, row, sourceCatalog) in rows)
                         {
                             string? typeName = column == sourceColumns && operation == MetadataOperation.GetColumns
-                                ? ReadString(batch.Column(5), row)
+                                ? columns.String("TYPE_NAME", row)
                                 : null;
                             string? value = column == sourceColumns && operation == MetadataOperation.GetColumns
                                 ? typeName == null ? null : ColumnMetadataHelper.GetBaseTypeName(typeName)
-                                : ReadString(batch.Column(column), row);
+                                : columns.String(schema.FieldsList[column].Name, row);
                             if (column == 1 && operation == MetadataOperation.GetSchemas)
-                                value ??= requestedCatalog;
+                                value ??= sourceCatalog ?? "";
                             if (column == 0 && (operation == MetadataOperation.GetTables || operation == MetadataOperation.GetColumns))
-                                value ??= requestedCatalog;
+                                value ??= sourceCatalog ?? "";
+                            if (column == 3 && operation == MetadataOperation.GetTables)
+                                value = DefaultTableType(value);
                             if (value == null) strings.AppendNull(); else strings.Append(value);
                         }
                         arrays.Add(strings.Build());
@@ -101,9 +118,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     case ArrowTypeId.Int8:
                         var int8 = new Int8Array.Builder();
-                        foreach (var (batch, row) in rows)
+                        foreach (var (columns, row, _) in rows)
                         {
-                            long? value = ReadInteger(batch.Column(column), row);
+                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
                             if (value.HasValue) int8.Append(checked((sbyte)value.Value)); else int8.AppendNull();
                         }
                         arrays.Add(int8.Build());
@@ -111,9 +128,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     case ArrowTypeId.Int16:
                         var int16 = new Int16Array.Builder();
-                        foreach (var (batch, row) in rows)
+                        foreach (var (columns, row, _) in rows)
                         {
-                            long? value = ReadInteger(batch.Column(column), row);
+                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
                             if (value.HasValue) int16.Append(checked((short)value.Value)); else int16.AppendNull();
                         }
                         arrays.Add(int16.Build());
@@ -121,12 +138,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     case ArrowTypeId.Int32:
                         var int32 = new Int32Array.Builder();
-                        foreach (var (batch, row) in rows)
+                        foreach (var (columns, row, _) in rows)
                         {
-                            long? value = ReadInteger(batch.Column(column), row);
-                            if (value.HasValue && operation == MetadataOperation.GetColumns &&
-                                schema.FieldsList[column].Name == "ORDINAL_POSITION")
-                                value = checked(value.Value + 1);
+                            string name = schema.FieldsList[column].Name;
+                            long? value = columns.Integer(name, row);
+                            if (operation == MetadataOperation.GetColumns && (name is "COLUMN_SIZE" or "DECIMAL_DIGITS"))
+                            {
+                                string? typeName = columns.String("TYPE_NAME", row);
+                                if (typeName != null)
+                                    value = name == "COLUMN_SIZE"
+                                        ? ColumnMetadataHelper.GetColumnSizeDefault(typeName)
+                                        : ColumnMetadataHelper.GetDecimalDigitsDefault(typeName);
+                            }
                             if (value.HasValue) int32.Append(checked((int)value.Value)); else int32.AppendNull();
                         }
                         arrays.Add(int32.Build());
@@ -134,9 +157,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     case ArrowTypeId.Int64:
                         var int64 = new Int64Array.Builder();
-                        foreach (var (batch, row) in rows)
+                        foreach (var (columns, row, _) in rows)
                         {
-                            long? value = ReadInteger(batch.Column(column), row);
+                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
                             if (value.HasValue) int64.Append(value.Value); else int64.AppendNull();
                         }
                         arrays.Add(int64.Build());
@@ -173,5 +196,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private static bool Matches(string? requested, string? actual)
             => requested == null || (actual != null && string.Equals(requested, actual, StringComparison.OrdinalIgnoreCase));
+
+        internal static string DefaultTableType(string? value) => string.IsNullOrEmpty(value) ? "TABLE" : value;
     }
 }

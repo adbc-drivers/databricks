@@ -340,6 +340,13 @@ namespace AdbcDrivers.Databricks
         public const string EnableFastMetadataQuery = "adbc.databricks.enable_fast_metadata_query";
 
         /// <summary>
+        /// Require Thrift-shaped native metadata results on Statement Execution metadata queries.
+        /// Default value is true. Set false to use SHOW results instead.
+        /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
+        public const string EnableThriftNativeMetadata = "adbc.databricks.enable_thrift_native_metadata";
+
+        /// <summary>
         /// Whether to enable RunAsync flag in Thrift operation
         /// Default value is true if not specified.
         /// </summary>
