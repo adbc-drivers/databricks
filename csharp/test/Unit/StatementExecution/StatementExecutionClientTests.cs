@@ -266,8 +266,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal("true", Assert.Single(capturedRequest!.Headers.GetValues("x-databricks-sea-can-run-fully-sync")));
             Assert.Equal("GetTables", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-metadata-operation-type")));
             Assert.Equal("true", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-require-thrift-native-metadata")));
-            Assert.DoesNotContain("metadataOperation", capturedContent);
-            Assert.DoesNotContain("is_native_metadata_result", capturedContent);
+            using var requestJson = JsonDocument.Parse(capturedContent!);
+            foreach (var property in requestJson.RootElement.EnumerateObject())
+            {
+                Assert.False(string.Equals(property.Name, "MetadataOperation", StringComparison.OrdinalIgnoreCase));
+                Assert.False(string.Equals(property.Name, "IsNativeMetadataResult", StringComparison.OrdinalIgnoreCase));
+            }
         }
 
         [Fact]

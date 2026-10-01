@@ -417,12 +417,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,
-                MetadataOperation = metadataOperation,
+                MetadataOperation = _connection.EnableThriftNativeMetadata ? metadataOperation : null,
                 QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+            bool? initialNativeMetadata = response.Manifest?.IsNativeMetadataResult;
             _currentStatementId = response.StatementId;
             // Reset per-execution: statements are reusable, so this must reflect the CURRENT
             // execution's state, not a prior CLOSED result. Otherwise a later SUCCEEDED (genuinely
@@ -470,7 +471,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _statementClosedByServer = true;
             }
 
-            IsNativeMetadataResult = response.Manifest?.IsNativeMetadataResult == true;
+            IsNativeMetadataResult = response.Manifest?.IsNativeMetadataResult
+                ?? initialNativeMetadata
+                ?? HasNativeMetadataSchema(response.Manifest?.Schema, metadataOperation);
 
             // Check for truncated results warning
             if (response.Manifest?.Truncated == true)
@@ -512,6 +515,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Return query result - use 0 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new QueryResult(rowCount, reader);
+        }
+
+        private static bool HasNativeMetadataSchema(ResultSchema? resultSchema, MetadataOperation? operation)
+        {
+            if (operation == null || resultSchema?.Columns == null)
+                return false;
+
+            Schema expected = operation.Value switch
+            {
+                MetadataOperation.GetCatalogs => MetadataSchemaFactory.CreateCatalogsSchema(),
+                MetadataOperation.GetSchemas => MetadataSchemaFactory.CreateSchemasSchema(),
+                MetadataOperation.GetTables => MetadataSchemaFactory.CreateTablesSchema(),
+                MetadataOperation.GetColumns => MetadataSchemaFactory.CreateColumnMetadataSchema(),
+                MetadataOperation.GetPrimaryKeys => MetadataSchemaFactory.CreatePrimaryKeysSchema(),
+                MetadataOperation.GetCrossReference => MetadataSchemaFactory.CreateCrossReferenceSchema(),
+                _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+            };
+            int count = expected.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
+            if (resultSchema.Columns.Count != count)
+                return false;
+            for (int i = 0; i < count; i++)
+            {
+                if (!string.Equals(resultSchema.Columns[i].Name, expected.FieldsList[i].Name, StringComparison.Ordinal))
+                    return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -1486,7 +1515,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     for (int i = 0; i < batch.Length; i++)
                     {
                         if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
-                        string tableType = tableTypeArray != null && !tableTypeArray.IsNull(i) ? tableTypeArray.GetString(i) : "TABLE";
+                        string tableType = NativeMetadataResultBuilder.DefaultTableType(
+                            tableTypeArray != null && !tableTypeArray.IsNull(i) ? tableTypeArray.GetString(i) : null);
                         if (tableTypeFilter != null && !tableTypeFilter.Contains(tableType)) continue;
                         tableCatBuilder.Append(catalogArray.GetString(i));
                         tableSchemaBuilder.Append(schemaArray.GetString(i));
@@ -1533,7 +1563,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                List<(RecordBatch Batch, bool IsNative)> columnBatches;
+                List<(RecordBatch Batch, bool IsNative, string? Catalog)> columnBatches;
                 try
                 {
                     columnBatches = await _connection.ExecuteNativeShowColumnsAsync(
@@ -1557,51 +1587,61 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return NativeMetadataResultBuilder.Build(
                         columnBatches.Select(result => result.Batch).ToList(),
                         MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
-                        requestedCatalog: catalog);
+                        requestedCatalog: catalog,
+                        sourceCatalogs: columnBatches.Select(result => result.Catalog).ToList());
                 }
 
                 var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
 
-                foreach (var (batch, isNative) in columnBatches)
+                foreach (var (batch, isNative, sourceCatalog) in columnBatches)
                 {
-                    var catalogArray = isNative ? batch.Column(0) as StringArray : TryGetColumn<StringArray>(batch, "catalogName");
-                    var schemaArray = isNative ? batch.Column(1) as StringArray : TryGetColumn<StringArray>(batch, "namespace");
-                    var tableArray = isNative ? batch.Column(2) as StringArray : TryGetColumn<StringArray>(batch, "tableName");
-                    var colNameArray = isNative ? batch.Column(3) as StringArray : TryGetColumn<StringArray>(batch, "col_name");
-                    var columnTypeArray = isNative ? batch.Column(5) as StringArray : TryGetColumn<StringArray>(batch, "columnType");
-                    var isNullableArray = isNative ? batch.Column(17) as StringArray : TryGetColumn<StringArray>(batch, "isNullable");
+                    var native = isNative ? new NativeMetadataColumns(batch, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns) : null;
+                    var catalogArray = isNative ? null : TryGetColumn<StringArray>(batch, "catalogName");
+                    var schemaArray = isNative ? null : TryGetColumn<StringArray>(batch, "namespace");
+                    var tableArray = isNative ? null : TryGetColumn<StringArray>(batch, "tableName");
+                    var colNameArray = isNative ? null : TryGetColumn<StringArray>(batch, "col_name");
+                    var columnTypeArray = isNative ? null : TryGetColumn<StringArray>(batch, "columnType");
+                    var isNullableArray = isNative ? null : TryGetColumn<StringArray>(batch, "isNullable");
 
-                    if (catalogArray == null || schemaArray == null || tableArray == null ||
-                        colNameArray == null || columnTypeArray == null) continue;
+                    if (!isNative && (catalogArray == null || schemaArray == null || tableArray == null ||
+                        colNameArray == null || columnTypeArray == null)) continue;
 
                     for (int i = 0; i < batch.Length; i++)
                     {
-                        if ((!isNative && catalogArray.IsNull(i)) || schemaArray.IsNull(i) || tableArray.IsNull(i) ||
-                            colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
+                        string? cat = isNative ? native!.String("TABLE_CAT", i) ?? sourceCatalog ?? catalog
+                            : catalogArray!.IsNull(i) ? null : catalogArray.GetString(i);
+                        string? sch = isNative ? native!.String("TABLE_SCHEM", i)
+                            : schemaArray!.IsNull(i) ? null : schemaArray.GetString(i);
+                        string? tbl = isNative ? native!.String("TABLE_NAME", i)
+                            : tableArray!.IsNull(i) ? null : tableArray.GetString(i);
+                        string? colName = isNative ? native!.String("COLUMN_NAME", i)
+                            : colNameArray!.IsNull(i) ? null : colNameArray.GetString(i);
+                        string? colType = isNative ? native!.String("TYPE_NAME", i)
+                            : columnTypeArray!.IsNull(i) ? null : columnTypeArray.GetString(i);
+                        if (cat == null || sch == null || tbl == null || colName == null || colType == null) continue;
 
-                        string cat = catalogArray.IsNull(i) ? catalog ?? "" : catalogArray.GetString(i);
-                        string sch = schemaArray.GetString(i);
-                        string tbl = tableArray.GetString(i);
                         string key = $"{cat}.{sch}.{tbl}";
 
                         if (!tableInfos.ContainsKey(key))
                             tableInfos[key] = (cat, sch, tbl, new TableInfo("TABLE"));
 
                         var entry = tableInfos[key];
-                        bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
-                            !isNullableArray.GetString(i).Equals(
-                                isNative ? "NO" : "false", StringComparison.OrdinalIgnoreCase);
+                        bool nullable = isNative ? native!.Integer("NULLABLE", i) == 1
+                            : isNullableArray == null || isNullableArray.IsNull(i) ||
+                              !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
 
                         int position = isNative
-                            ? checked((int)(NativeMetadataResultBuilder.ReadInteger(batch.Column(16), i) ?? 0) + 1)
+                            ? checked((int)(native!.Integer("ORDINAL_POSITION", i) ?? 0))
                             : entry.info.ColumnName.Count;
 
                         ColumnMetadataHelper.PopulateTableInfoFromTypeName(
                             entry.info,
-                            colNameArray.GetString(i),
-                            columnTypeArray.GetString(i),
+                            colName,
+                            colType,
                             position,
-                            nullable);
+                            nullable,
+                            columnDefault: isNative ? native!.String("COLUMN_DEF", i) : null,
+                            isAutoIncrement: isNative && string.Equals(native!.String("IS_AUTOINCREMENT", i), "YES", StringComparison.OrdinalIgnoreCase));
                     }
                 }
 
@@ -1851,9 +1891,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     batches = nativeResult.Batches;
                     if (nativeResult.IsNative)
                     {
-                        using var emptyStream = MetadataSchemaFactory.CreateEmptyPrimaryKeysResult().Stream;
                         return NativeMetadataResultBuilder.Build(
-                            batches, emptyStream!.Schema, MetadataOperation.GetPrimaryKeys);
+                            batches, MetadataSchemaFactory.CreatePrimaryKeysSchema(), MetadataOperation.GetPrimaryKeys);
                     }
                 }
                 catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
@@ -1981,9 +2020,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     batches = nativeResult.Batches;
                     if (nativeResult.IsNative)
                     {
-                        using var emptyStream = MetadataSchemaFactory.CreateEmptyCrossReferenceResult().Stream;
                         return NativeMetadataResultBuilder.Build(
-                            batches, emptyStream!.Schema, MetadataOperation.GetCrossReference,
+                            batches, MetadataSchemaFactory.CreateCrossReferenceSchema(), MetadataOperation.GetCrossReference,
                             parentCatalog: pkCatalog, parentSchema: pkSchema, parentTable: pkTable);
                     }
                 }

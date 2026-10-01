@@ -242,7 +242,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             int ordinalPosition,
             bool isNullable = true,
             string? comment = null,
-            string? columnDefault = null)
+            string? columnDefault = null,
+            bool isAutoIncrement = false)
         {
             tableInfo.ColumnName.Add(columnName);
             tableInfo.TypeName.Add(typeName);
@@ -254,7 +255,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             tableInfo.OrdinalPosition.Add(ordinalPosition);
             tableInfo.Nullable.Add(isNullable ? (short)1 : (short)0);
             tableInfo.IsNullable.Add(isNullable ? "YES" : "NO");
-            tableInfo.IsAutoIncrement.Add(false);
+            tableInfo.IsAutoIncrement.Add(isAutoIncrement);
             tableInfo.ColumnDefault.Add(columnDefault ?? "");
         }
 

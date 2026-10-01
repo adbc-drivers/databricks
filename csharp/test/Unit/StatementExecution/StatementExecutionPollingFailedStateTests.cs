@@ -160,6 +160,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Contains("table not found", exception.Message);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task MetadataResultAfterPolling_KeepsOrDetectsNativeShape(bool initialFlag)
+        {
+            _mockClient.Setup(c => c.ExecuteStatementAsync(It.IsAny<ExecuteStatementRequest>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ExecuteStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "PENDING" },
+                    Manifest = initialFlag ? new ResultManifest { IsNativeMetadataResult = true } : null,
+                });
+            _mockClient.Setup(c => c.GetStatementAsync(StatementId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new GetStatementResponse
+                {
+                    StatementId = StatementId,
+                    Status = new StatementStatus { State = "SUCCEEDED" },
+                    Manifest = new ResultManifest
+                    {
+                        Schema = new ResultSchema
+                        {
+                            ColumnCount = 1,
+                            Columns = new List<ColumnInfo> { new ColumnInfo { Name = "TABLE_CAT", Position = 0, TypeName = "STRING" } },
+                        },
+                    },
+                });
+
+            using var stmt = CreateStatement();
+            var queryResult = await stmt.ExecuteQueryAsync(
+                CancellationToken.None, isMetadataExecution: true, metadataOperation: MetadataOperation.GetCatalogs);
+            using var stream = queryResult.Stream;
+
+            Assert.True(stmt.IsNativeMetadataResult);
+        }
+
         public void Dispose()
         {
             _httpClient?.Dispose();

@@ -229,7 +229,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             if (request.IsMetadata && request.MetadataOperation is MetadataOperation operation)
             {
-                httpRequest.Headers.TryAddWithoutValidation("x-databricks-metadata-operation-type", operation.ToString());
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-metadata-operation-type", operation switch
+                {
+                    MetadataOperation.GetCatalogs => "GetCatalogs",
+                    MetadataOperation.GetSchemas => "GetSchemas",
+                    MetadataOperation.GetTables => "GetTables",
+                    MetadataOperation.GetColumns => "GetColumns",
+                    MetadataOperation.GetPrimaryKeys => "GetPrimaryKeys",
+                    MetadataOperation.GetCrossReference => "GetCrossReference",
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+                });
                 httpRequest.Headers.TryAddWithoutValidation("x-databricks-require-thrift-native-metadata", "true");
             }
 

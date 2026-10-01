@@ -169,6 +169,46 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 connection: connection);
         }
 
+        [Fact]
+        public async Task DisableNativeMetadata_LeavesOnlyTheSynchronousMetadataHeader()
+        {
+            bool hasSyncHeader = false;
+            bool hasOperationHeader = false;
+            bool hasRequireHeader = false;
+            var handler = new Mock<HttpMessageHandler>();
+            handler.Protected()
+                .Setup<Task<HttpResponseMessage>>("SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+                {
+                    if (request.Method == HttpMethod.Post && request.RequestUri?.AbsolutePath.EndsWith("/sql/statements") == true)
+                    {
+                        hasSyncHeader = request.Headers.Contains("x-databricks-sea-can-run-fully-sync");
+                        hasOperationHeader = request.Headers.Contains("x-databricks-metadata-operation-type");
+                        hasRequireHeader = request.Headers.Contains("x-databricks-require-thrift-native-metadata");
+                    }
+                    string body = request.RequestUri?.AbsolutePath.EndsWith("/sql/sessions") == true
+                        ? "{\"session_id\":\"session-1\"}"
+                        : "{\"statement_id\":\"stmt-1\",\"status\":{\"state\":\"SUCCEEDED\"}}";
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+                });
+            using var http = new HttpClient(handler.Object);
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [DatabricksParameters.WarehouseId] = "wh-1",
+                [SparkParameters.AccessToken] = "token",
+                [DatabricksParameters.EnableThriftNativeMetadata] = "false",
+            };
+            using var connection = new StatementExecutionConnection(properties, http);
+
+            await connection.ExecuteNativeMetadataSqlAsync("SHOW CATALOGS", MetadataOperation.GetCatalogs, CancellationToken.None);
+
+            Assert.True(hasSyncHeader);
+            Assert.False(hasOperationHeader);
+            Assert.False(hasRequireHeader);
+        }
+
         // ─── Issue #525: `%` match-all catalog wildcard ──────────────────────────────
         // The `%` SQL-LIKE wildcard must mean "all catalogs" on the SEA path, exactly as
         // Thrift treats it, rather than being passed through as a literal backtick-quoted
