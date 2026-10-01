@@ -1061,7 +1061,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
                 var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
                     sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
-                results.AddRange(batches.Select(batch => (batch, isNative, catalog)));
+                results.AddRange(batches.Select(batch => (batch, isNative, (string?)catalog)));
                 return results;
             }
 
@@ -1084,7 +1084,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
                             sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
-                        results.AddRange(batches.Select(columns => (columns, isNative, sourceCatalog)));
+                        results.AddRange(batches.Select(columns => (columns, isNative, (string?)sourceCatalog)));
                     }
                     catch (DatabricksException ex) when (!cancellationToken.IsCancellationRequested &&
                         (ex.IsObjectNotFoundException() || IsSqlPermissionDenied(ex)))

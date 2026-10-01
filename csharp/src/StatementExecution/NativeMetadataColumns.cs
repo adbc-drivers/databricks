@@ -44,8 +44,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     ? array is StringArray
                     : IsInteger(expected.DataType.TypeId) && IsInteger(batch.Schema.FieldsList[index].DataType.TypeId)
                       && array is Int8Array or Int16Array or Int32Array or Int64Array;
-                if (!valid || !_columns.TryAdd(expected.Name, array))
+                if (!valid || _columns.ContainsKey(expected.Name))
                     throw new DatabricksException($"Invalid native {operation} result: unexpected type or duplicate {expected.Name}");
+                _columns.Add(expected.Name, array);
             }
         }
 
