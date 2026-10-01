@@ -1091,12 +1091,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             }
 
                             // Native GetColumns can treat catalog names as LIKE patterns.
-                            var native = new NativeMetadataColumns(
+                            var nativeColumns = new NativeMetadataColumns(
                                 columns, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
                             int start = -1;
                             for (int row = 0; row <= columns.Length; row++)
                             {
-                                string? rowCatalog = row < columns.Length ? native.String("TABLE_CAT", row) : null;
+                                string? rowCatalog = row < columns.Length ? nativeColumns.String("TABLE_CAT", row) : null;
                                 bool matches = row < columns.Length && (rowCatalog == null ||
                                     string.Equals(rowCatalog, sourceCatalog, StringComparison.OrdinalIgnoreCase));
                                 if (matches && start < 0) start = row;
