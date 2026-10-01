@@ -25,6 +25,7 @@ using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Moq;
@@ -129,6 +130,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var catalogs = await ((IGetObjectsDataProvider)connection).GetCatalogsAsync("main", CancellationToken.None);
 
             Assert.Equal(new[] { "main" }, catalogs);
+        }
+
+        [Fact]
+        public async Task GetObjects_CatalogDepth_FiltersNativeCatalogs()
+        {
+            using var http = CreateHttpClient();
+            using var connection = CreateConnection(http);
+            using var stream = connection.GetObjects(
+                AdbcConnection.GetObjectsDepth.Catalogs, "main", null, null, null, null);
+            using var batch = await stream.ReadNextRecordBatchAsync();
+
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch.Length);
+            Assert.Equal("main", ((StringArray)batch.Column(0)).GetString(0));
         }
 
         [Fact]
