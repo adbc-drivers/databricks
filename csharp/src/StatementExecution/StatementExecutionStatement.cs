@@ -473,7 +473,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             IsNativeMetadataResult = response.Manifest?.IsNativeMetadataResult
                 ?? initialNativeMetadata
-                ?? HasNativeMetadataSchema(response.Manifest?.Schema, metadataOperation);
+                ?? false;
 
             // Check for truncated results warning
             if (response.Manifest?.Truncated == true)
@@ -515,32 +515,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Return query result - use 0 if row count is not available
             long rowCount = response.Manifest?.TotalRowCount ?? 0;
             return new QueryResult(rowCount, reader);
-        }
-
-        private static bool HasNativeMetadataSchema(ResultSchema? resultSchema, MetadataOperation? operation)
-        {
-            if (operation == null || resultSchema?.Columns == null)
-                return false;
-
-            Schema expected = operation.Value switch
-            {
-                MetadataOperation.GetCatalogs => MetadataSchemaFactory.CreateCatalogsSchema(),
-                MetadataOperation.GetSchemas => MetadataSchemaFactory.CreateSchemasSchema(),
-                MetadataOperation.GetTables => MetadataSchemaFactory.CreateTablesSchema(),
-                MetadataOperation.GetColumns => MetadataSchemaFactory.CreateColumnMetadataSchema(),
-                MetadataOperation.GetPrimaryKeys => MetadataSchemaFactory.CreatePrimaryKeysSchema(),
-                MetadataOperation.GetCrossReference => MetadataSchemaFactory.CreateCrossReferenceSchema(),
-                _ => throw new ArgumentOutOfRangeException(nameof(operation)),
-            };
-            int count = expected.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
-            if (resultSchema.Columns.Count != count)
-                return false;
-            for (int i = 0; i < count; i++)
-            {
-                if (!string.Equals(resultSchema.Columns[i].Name, expected.FieldsList[i].Name, StringComparison.Ordinal))
-                    return false;
-            }
-            return true;
         }
 
         /// <summary>
