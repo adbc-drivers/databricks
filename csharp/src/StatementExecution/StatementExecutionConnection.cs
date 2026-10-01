@@ -697,13 +697,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 using var cts = CreateMetadataTimeoutCts();
                 // Pass catalog through with SPARK→null normalization, matching Thrift
-                // which sends catalog as-is to the server. ExecuteShowColumnsAsync
+                // which sends catalog as-is to the server. ExecuteNativeShowColumnsAsync
                 // handles null by iterating all catalogs.
                 string? resolvedCatalog = DatabricksConnection.HandleSparkCatalog(catalog);
-                List<RecordBatch> batches;
+                List<(RecordBatch Batch, bool IsNative)> batches;
                 try
                 {
-                    batches = ExecuteShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                    batches = ExecuteNativeShowColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
                         .GetAwaiter().GetResult();
                 }
                 catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)
@@ -715,11 +715,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
 
                 var fields = new List<Field>();
-                foreach (var batch in batches)
+                foreach (var (batch, isNative) in batches)
                 {
-                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
-                    var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+                    var colNameArray = isNative ? batch.Column(3) as StringArray : TryGetColumn<StringArray>(batch, "col_name");
+                    var columnTypeArray = isNative ? batch.Column(5) as StringArray : TryGetColumn<StringArray>(batch, "columnType");
+                    var isNullableArray = isNative ? batch.Column(17) as StringArray : TryGetColumn<StringArray>(batch, "isNullable");
 
                     if (colNameArray == null || columnTypeArray == null) continue;
 
@@ -730,7 +730,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         string colName = colNameArray.GetString(i);
                         string colType = columnTypeArray.GetString(i);
                         bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
-                            !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+                            !isNullableArray.GetString(i).Equals(
+                                isNative ? "NO" : "false", StringComparison.OrdinalIgnoreCase);
 
                         short typeCode = ColumnMetadataHelper.GetDataTypeCode(colType);
                         IArrowType arrowType = HiveServer2Connection.GetArrowType(typeCode, colType, false, null, null);
@@ -749,9 +750,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
             List<RecordBatch> batches;
+            bool isNative;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                    sql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -762,7 +765,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var result = new List<string>();
             foreach (var batch in batches)
             {
-                var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
+                var catalogArray = isNative ? batch.Column(0) as StringArray : TryGetColumn<StringArray>(batch, "catalog");
                 if (catalogArray == null) continue;
                 for (int i = 0; i < batch.Length; i++)
                 {
@@ -782,9 +785,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
 
             List<RecordBatch> batches;
+            bool isNative;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                    sql, MetadataOperation.GetSchemas, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -801,7 +806,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 StringArray? catalogArray = null;
                 StringArray? schemaArray = null;
 
-                if (showSchemasInAllCatalogs)
+                if (isNative)
+                {
+                    schemaArray = batch.Column(0) as StringArray;
+                    catalogArray = batch.Column(1) as StringArray;
+                }
+                else if (showSchemasInAllCatalogs)
                 {
                     schemaArray = batch.Column(0) as StringArray;
                     catalogArray = batch.Column(1) as StringArray;
@@ -840,27 +850,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
 
             List<RecordBatch> batches;
+            bool isNative;
             try
             {
-                batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                    sql, MetadataOperation.GetTables, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
                 return System.Array.Empty<(string, string, string, string)>();
             }
-            var result = new List<(string, string, string, string)>();
+            var result = new List<(string catalog, string schema, string table, string tableType)>();
             foreach (var batch in batches)
             {
-                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                var tableArray = TryGetColumn<StringArray>(batch, "tableName");
-                var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
+                var catalogArray = isNative ? batch.Column(0) as StringArray : TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = isNative ? batch.Column(1) as StringArray : TryGetColumn<StringArray>(batch, "namespace");
+                var tableArray = isNative ? batch.Column(2) as StringArray : TryGetColumn<StringArray>(batch, "tableName");
+                var tableTypeArray = isNative ? batch.Column(3) as StringArray : TryGetColumn<StringArray>(batch, "tableType");
 
                 if (catalogArray == null || schemaArray == null || tableArray == null) continue;
 
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
+                    if ((!isNative && catalogArray.IsNull(i)) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
+                    if (isNative && catalogPattern != null &&
+                        !string.Equals(catalogPattern, catalogArray.IsNull(i) ? null : catalogArray.GetString(i),
+                            StringComparison.OrdinalIgnoreCase)) continue;
 
                     string tableType = "TABLE";
                     if (tableTypeArray != null && !tableTypeArray.IsNull(i))
@@ -876,9 +891,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     if (tableTypes != null && !tableTypes.Contains(tableType))
                         continue;
 
-                    result.Add((catalogArray.GetString(i), schemaArray.GetString(i),
+                    result.Add((catalogArray.IsNull(i) ? catalogPattern ?? "" : catalogArray.GetString(i), schemaArray.GetString(i),
                         tableArray.GetString(i), tableType));
                 }
+            }
+            if (isNative)
+            {
+                result.Sort((left, right) =>
+                {
+                    int order = StringComparer.Ordinal.Compare(left.tableType, right.tableType);
+                    if (order != 0) return order;
+                    order = StringComparer.Ordinal.Compare(left.catalog, right.catalog);
+                    if (order != 0) return order;
+                    order = StringComparer.Ordinal.Compare(left.schema, right.schema);
+                    return order != 0 ? order : StringComparer.Ordinal.Compare(left.table, right.table);
+                });
             }
             return result;
         }
@@ -888,10 +915,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            List<RecordBatch> batches;
+            List<(RecordBatch Batch, bool IsNative)> batches;
             try
             {
-                batches = await ExecuteShowColumnsAsync(catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
+                batches = await ExecuteNativeShowColumnsAsync(
+                    catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
@@ -902,24 +930,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var tablePositions = new Dictionary<string, int>();
 
-            foreach (var batch in batches)
+            foreach (var (batch, isNative) in batches)
             {
-                var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                var tableNameArray = TryGetColumn<StringArray>(batch, "tableName");
-                var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
-                var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
-                var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
+                var catalogArray = isNative ? batch.Column(0) as StringArray : TryGetColumn<StringArray>(batch, "catalogName");
+                var schemaArray = isNative ? batch.Column(1) as StringArray : TryGetColumn<StringArray>(batch, "namespace");
+                var tableNameArray = isNative ? batch.Column(2) as StringArray : TryGetColumn<StringArray>(batch, "tableName");
+                var colNameArray = isNative ? batch.Column(3) as StringArray : TryGetColumn<StringArray>(batch, "col_name");
+                var columnTypeArray = isNative ? batch.Column(5) as StringArray : TryGetColumn<StringArray>(batch, "columnType");
+                var isNullableArray = isNative ? batch.Column(17) as StringArray : TryGetColumn<StringArray>(batch, "isNullable");
 
                 if (catalogArray == null || schemaArray == null || tableNameArray == null ||
                     colNameArray == null || columnTypeArray == null) continue;
 
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableNameArray.IsNull(i) ||
+                    if ((!isNative && catalogArray.IsNull(i)) || schemaArray.IsNull(i) || tableNameArray.IsNull(i) ||
                         colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
 
-                    string cat = catalogArray.GetString(i);
+                    string cat = catalogArray.IsNull(i) ? catalogPattern ?? "" : catalogArray.GetString(i);
                     string sch = schemaArray.GetString(i);
                     string tbl = tableNameArray.GetString(i);
                     string colName = colNameArray.GetString(i);
@@ -930,10 +958,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string tableKey = $"{cat}.{sch}.{tbl}";
                     if (!tablePositions.ContainsKey(tableKey))
                         tablePositions[tableKey] = 1;
-                    int position = tablePositions[tableKey]++;
+                    int position = isNative
+                        ? checked((int)(NativeMetadataResultBuilder.ReadInteger(batch.Column(16), i) ?? 0) + 1)
+                        : tablePositions[tableKey]++;
 
-                    bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
-                        !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
+                    bool nullable = isNative
+                        ? isNullableArray == null || isNullableArray.IsNull(i) ||
+                          !isNullableArray.GetString(i).Equals("NO", StringComparison.OrdinalIgnoreCase)
+                        : isNullableArray == null || isNullableArray.IsNull(i) ||
+                          !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
 
                     if (catalogMap.TryGetValue(cat, out var schemaMap)
                         && schemaMap.TryGetValue(sch, out var tableMap)
@@ -960,12 +993,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal async Task<List<RecordBatch>> ExecuteMetadataSqlAsync(string sql, CancellationToken cancellationToken = default)
         {
+            var (batches, _) = await ExecuteMetadataSqlCoreAsync(sql, null, cancellationToken).ConfigureAwait(false);
+            return batches;
+        }
+
+        internal Task<(List<RecordBatch> Batches, bool IsNative)> ExecuteNativeMetadataSqlAsync(
+            string sql, MetadataOperation operation, CancellationToken cancellationToken)
+            => ExecuteMetadataSqlCoreAsync(sql, operation, cancellationToken);
+
+        private async Task<(List<RecordBatch> Batches, bool IsNative)> ExecuteMetadataSqlCoreAsync(
+            string sql, MetadataOperation? operation, CancellationToken cancellationToken)
+        {
             var batches = new List<RecordBatch>();
             using var stmt = (StatementExecutionStatement)CreateStatement();
             stmt.SqlQuery = sql;
-            var result = await stmt.ExecuteQueryAsync(cancellationToken, isMetadataExecution: true).ConfigureAwait(false);
+            var result = await stmt.ExecuteQueryAsync(
+                cancellationToken, isMetadataExecution: true, metadataOperation: operation).ConfigureAwait(false);
             using var stream = result.Stream;
-            if (stream == null) return batches;
+            if (stream == null) return (batches, stmt.IsNativeMetadataResult);
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -973,7 +1018,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 if (batch == null) break;
                 batches.Add(batch);
             }
-            return batches;
+            return (batches, stmt.IsNativeMetadataResult);
         }
 
         internal List<RecordBatch> ExecuteMetadataSql(string sql, CancellationToken cancellationToken = default)
@@ -981,26 +1026,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return ExecuteMetadataSqlAsync(sql, cancellationToken).GetAwaiter().GetResult();
         }
 
-        /// <summary>
-        /// Executes a SHOW COLUMNS command. When catalog is null, iterates over all catalogs
-        /// since SHOW COLUMNS IN ALL CATALOGS is not yet supported by the backend.
-        /// </summary>
-        internal async Task<List<RecordBatch>> ExecuteShowColumnsAsync(
+        // SHOW COLUMNS IN ALL CATALOGS is unavailable, so fan out over catalogs.
+        internal async Task<List<(RecordBatch Batch, bool IsNative)>> ExecuteNativeShowColumnsAsync(
             string? catalog, string? schemaPattern, string? tablePattern, string? columnPattern,
             CancellationToken cancellationToken)
         {
+            var results = new List<(RecordBatch, bool)>();
             if (catalog != null)
             {
                 string sql = new ShowColumnsCommand(catalog, schemaPattern, tablePattern, columnPattern).Build();
-                return await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                    sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
+                results.AddRange(batches.Select(batch => (batch, isNative)));
+                return results;
             }
 
-            // SHOW COLUMNS IN ALL CATALOGS is not supported — iterate over each catalog.
-            // TODO: Remove this fallback when the backend supports SHOW COLUMNS IN ALL CATALOGS.
-            var allBatches = new List<RecordBatch>();
             string catalogsSql = new ShowCatalogsCommand(null).Build();
-            var catalogBatches = await ExecuteMetadataSqlAsync(catalogsSql, cancellationToken).ConfigureAwait(false);
-
+            var (catalogBatches, _) = await ExecuteNativeMetadataSqlAsync(
+                catalogsSql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
             foreach (var batch in catalogBatches)
             {
                 var catalogArray = batch.Column(0) as StringArray;
@@ -1008,20 +1051,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 for (int i = 0; i < catalogArray.Length; i++)
                 {
                     if (catalogArray.IsNull(i)) continue;
-                    string cat = catalogArray.GetString(i);
-                    string sql = new ShowColumnsCommand(cat, schemaPattern, tablePattern, columnPattern).Build();
+                    string sql = new ShowColumnsCommand(
+                        catalogArray.GetString(i), schemaPattern, tablePattern, columnPattern).Build();
                     try
                     {
-                        var batches = await ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                        allBatches.AddRange(batches);
+                        var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                            sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
+                        results.AddRange(batches.Select(columns => (columns, isNative)));
                     }
-                    catch
+                    catch (Exception) when (!cancellationToken.IsCancellationRequested)
                     {
-                        // Skip catalogs we can't access (permission errors)
+                        // Skip catalogs that cannot be queried.
                     }
                 }
             }
-            return allBatches;
+            return results;
         }
 
         internal bool EnablePKFK => _enablePKFK;

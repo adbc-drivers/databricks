@@ -227,6 +227,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 httpRequest.Headers.TryAddWithoutValidation("x-databricks-sea-can-run-fully-sync", "true");
             }
 
+            if (request.IsMetadata && request.MetadataOperation is MetadataOperation operation)
+            {
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-metadata-operation-type", operation.ToString());
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-require-thrift-native-metadata", "true");
+            }
+
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
