@@ -21,7 +21,7 @@ require (
 	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20251215145213-df04bfe8de4f
 	github.com/apache/arrow-adbc/go/adbc v1.11.0
 	github.com/apache/arrow-go/v18 v18.8.0
-	github.com/databricks/databricks-sql-go v1.15.1
+	github.com/databricks/databricks-sql-go v1.16.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 )
