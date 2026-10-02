@@ -231,8 +231,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseBytes, s_jsonOptions);
 
             if (executeResponse == null)
             {
@@ -300,8 +300,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var getResponse = JsonSerializer.Deserialize<GetStatementResponse>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var getResponse = JsonSerializer.Deserialize<GetStatementResponse>(responseBytes, s_jsonOptions);
 
             if (getResponse == null)
             {
@@ -340,8 +340,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var resultData = JsonSerializer.Deserialize<ResultData>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var resultData = JsonSerializer.Deserialize<ResultData>(responseBytes, s_jsonOptions);
 
             if (resultData == null)
             {
