@@ -40,7 +40,7 @@ class TestConnection(BaseTestConnection):
             for obj in objects
             for schema in obj["catalog_db_schemas"]
         ]
-        assert list(sorted(set(schemas))) == list(sorted(schemas))
+        assert sorted(set(schemas)) == sorted(schemas)
         assert (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -60,7 +60,7 @@ class TestConnection(BaseTestConnection):
             for obj in objects
             for schema in obj["catalog_db_schemas"]
         ]
-        assert list(sorted(set(schemas))) == list(sorted(schemas))
+        assert sorted(set(schemas)) == sorted(schemas)
         assert (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -124,7 +124,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         table_id = (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -154,7 +154,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id in tables
 
     def test_get_objects_table_invalid_schema(
@@ -179,7 +179,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id not in tables
 
     def test_get_objects_table_invalid_table(
@@ -205,7 +205,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id not in tables
 
     def test_get_objects_table_exact_table(
@@ -231,7 +231,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id in tables
 
     def test_get_objects_column_not_exist(
@@ -261,7 +261,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         table_id = (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -298,7 +298,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") in columns
 
@@ -331,7 +331,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") not in columns
 
@@ -364,7 +364,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") in columns
         assert len(columns) == 2

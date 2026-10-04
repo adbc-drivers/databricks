@@ -23,14 +23,14 @@ platforms = ["linux-64", "osx-arm64", "win-64", "linux-aarch64"]
 version = "0.1.0"
 
 [tasks]
-make = "adbc-make run build DRIVER=databricks VERBOSE=true"
+make = "adbc-make run build VERBOSE=true"
 test = "go test -tags assert -v ./..."
 release = "adbc-release"
 validate = "pytest -vvs --junit-xml=validation-report.xml -rfEsxX validation/tests/"
 gendocs = "python -m validation.tests.generate_documentation"
 
 [dependencies]
-python = ">=3.13.5,<3.14"
+python = ">=3.14.3,<3.15"
 
 [pypi-dependencies]
 adbc-drivers-dev = { git = "https://github.com/adbc-drivers/dev" }

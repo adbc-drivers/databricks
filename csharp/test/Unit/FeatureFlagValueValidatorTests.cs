@@ -77,12 +77,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void BaseClassApacheParameters_AreRegistered()
         {
-            // PollTimeMilliseconds is a positive-int; QueryTimeoutSeconds is a plain int.
+            // PollTimeMilliseconds is a positive-int; QueryTimeoutSeconds is a non-negative int.
             Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "1000"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "null"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "0"));
 
-            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "-5"));
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "0"));
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "5"));
+            Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "-5"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "null"));
         }
 

@@ -510,23 +510,27 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(TestConfiguration.DbSchema, defaultNamespace.SchemaName);
         }
 
-        // Test that the catalog and schema are set correctly in the dbr session and the statement
-        // note - this test assumes not legacy dbr and hive_metastore is the default catalog
-        // also assumes there is a main catalog and hive_metastore.information_schema schema
+        // Test that the catalog and schema are set correctly in the dbr session and the statement.
+        // The default catalog (what current_catalog() returns when the driver pins no specific
+        // catalog) is read live via GetWarehouseDefaultCatalogAsync rather than assumed: it is a
+        // workspace-side setting that has changed over time (historically hive_metastore, now main)
+        // and depends on the multiple-catalog mode, so no literal is hard-coded. Expectations are
+        // derived from that discovered default. Assumes there is a "main" catalog and a
+        // hive_metastore.information_schema schema.
         [SkippableTheory]
-        [InlineData(null, null, "true", "hive_metastore", "default")]
-        [InlineData("main", null, "true", "main", "default")]
-        [InlineData(null, "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData("main", "information_schema", "true", "main", "information_schema")]
-        [InlineData("SPARK", null, "true", "hive_metastore", "default")]
-        [InlineData("SPARK", "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData(null, null, "false", null, "default")]
-        [InlineData("main", null, "false", null, "default")]
-        [InlineData(null, "information_schema", "false", null, "information_schema")]
-        [InlineData("main", "information_schema", "false", null, "information_schema")]
-        [InlineData("SPARK", null, "false", null, "default")]
-        [InlineData("SPARK", "information_schema", "false", null, "information_schema")]
-        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedCatalogInStatement, string? expectedRuntimeSchema)
+        [InlineData(null, null, "true", "default")]
+        [InlineData("main", null, "true", "default")]
+        [InlineData(null, "information_schema", "true", "information_schema")]
+        [InlineData("main", "information_schema", "true", "information_schema")]
+        [InlineData("SPARK", null, "true", "default")]
+        [InlineData("SPARK", "information_schema", "true", "information_schema")]
+        [InlineData(null, null, "false", "default")]
+        [InlineData("main", null, "false", "default")]
+        [InlineData(null, "information_schema", "false", "information_schema")]
+        [InlineData("main", "information_schema", "false", "information_schema")]
+        [InlineData("SPARK", null, "false", "default")]
+        [InlineData("SPARK", "information_schema", "false", "information_schema")]
+        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedRuntimeSchema)
         {
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
@@ -566,16 +570,27 @@ namespace AdbcDrivers.Databricks.Tests
             var catalogFromRuntime = ((StringArray)batch.Column(0)).GetString(0);
             var schemaFromRuntime = ((StringArray)batch.Column(1)).GetString(0);
 
-            // Assert runtime results
-            // if !enableMultipleCatalogSupport, then the runtime catalog should be hive_metastore
-            var expectedRuntimeCatalog = enableMultipleCatalogSupport == "true" ? expectedCatalogInStatement : "hive_metastore";
+            // Assert runtime results.
+            // current_catalog() reflects the default catalog for this mode, EXCEPT when a real UC
+            // catalog is explicitly pinned (multi-catalog ON + an existing catalog like "main").
+            // "SPARK"/null pin nothing real, so the session falls back to that default.
+            // The default is a workspace-side value that also depends on the multiple-catalog mode:
+            // on Thrift, legacy mode (off) yields hive_metastore while UC mode (on) yields the
+            // workspace default (historically hive_metastore, now main). So we discover it live, in
+            // the SAME mode as the case, instead of asserting a literal.
+            string defaultCatalog = await GetWarehouseDefaultCatalogAsync(enableMultipleCatalogSupport);
+            bool pinsRealCatalog = enableMultipleCatalogSupport == "true" && inputCatalog == "main";
+            var expectedRuntimeCatalog = pinsRealCatalog ? inputCatalog : defaultCatalog;
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName.
+            // With multiple-catalog support ON the driver tracks the effective session catalog (the
+            // pinned real catalog, else the discovered default); with it OFF it pins no catalog.
             if (statement is DatabricksStatement dbStatement)
             {
-                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                string? expectedStatementCatalog = enableMultipleCatalogSupport == "true" ? expectedRuntimeCatalog : null;
+                Assert.Equal(expectedStatementCatalog, dbStatement.CatalogName);
                 Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
                 OutputHelper?.WriteLine(
@@ -588,6 +603,41 @@ namespace AdbcDrivers.Databricks.Tests
                     $"Test passed for inputCatalog={inputCatalog}, inputSchema={inputSchema}, enableMultipleCatalogSupport={enableMultipleCatalogSupport}. " +
                     $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
             }
+        }
+
+        /// <summary>
+        /// Discovers the default catalog — the value <c>current_catalog()</c> returns when the driver
+        /// pins no specific catalog (no catalog configured) — for the given multiple-catalog mode.
+        /// This is a workspace/warehouse-side default that has changed over time (historically
+        /// <c>hive_metastore</c>, now <c>main</c>) AND depends on the mode (on Thrift, legacy/off mode
+        /// yields hive_metastore while UC/on mode yields the workspace default), so the test reads it
+        /// live in the same mode as the case under test rather than hard-coding it.
+        /// </summary>
+        private async Task<string> GetWarehouseDefaultCatalogAsync(string enableMultipleCatalogSupport)
+        {
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.EnableMultipleCatalogSupport = enableMultipleCatalogSupport;
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+
+            using var connection = NewConnection(testConfig);
+            return await ExecuteScalarStringAsync(connection, "SELECT current_catalog()");
+        }
+
+        /// <summary>Runs <paramref name="sql"/> on a new statement and returns the first column of the first row as a string.</summary>
+        private static Task<string> ExecuteScalarStringAsync(AdbcConnection connection, string sql)
+        {
+            var statement = connection.CreateStatement();
+            statement.SqlQuery = sql;
+            return ExecuteScalarStringAsync(statement);
+        }
+
+        /// <summary>Executes <paramref name="statement"/> and returns the first column of the first row as a string.</summary>
+        private static async Task<string> ExecuteScalarStringAsync(AdbcStatement statement)
+        {
+            var result = await statement.ExecuteQueryAsync();
+            var batch = await result.Stream!.ReadNextRecordBatchAsync();
+            return ((StringArray)batch.Column(0)).GetString(0);
         }
 
         /// <summary>
@@ -666,12 +716,8 @@ namespace AdbcDrivers.Databricks.Tests
 
         private async Task RunStatementCatalogNotScopedWhenFlagOff(string? protocol)
         {
-            var catalog = TestConfiguration.Metadata.Catalog;
-            var schema = TestConfiguration.Metadata.Schema;
-            var table = TestConfiguration.Metadata.Table;
-
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
-            testConfig.Catalog = string.Empty;
+            testConfig.Catalog = string.Empty;      // open on the session's own default catalog
             testConfig.DbSchema = string.Empty;
             testConfig.EnableMultipleCatalogSupport = "true";
             // ScopeCurrentCatalog left OFF (default) — the statement target catalog must be ignored.
@@ -681,34 +727,34 @@ namespace AdbcDrivers.Databricks.Tests
             }
 
             using var connection = NewConnection(testConfig);
+
+            // The session's own default catalog, before any statement target is set.
+            var sessionCatalog = await ExecuteScalarStringAsync(connection, "SELECT current_catalog()");
+
+            // Target a catalog that DIFFERS from the session default, so "not scoped" is observable
+            // no matter what the workspace default catalog is (it changed from hive_metastore to main).
+            // With the flag OFF the driver must not issue USE CATALOG, so the target is ignored and
+            // current_catalog() stays on the session default. Asserting the catalog value directly
+            // (rather than a 2-level-name resolution failure) keeps this independent of warehouse
+            // name-resolution quirks such as cross-catalog fallback. The scoped counterpart is
+            // StatementCatalogScopesTwoLevelNameQuery.
+            string targetCatalog = string.Equals(sessionCatalog, "main", StringComparison.OrdinalIgnoreCase)
+                ? "hive_metastore"
+                : "main";
+
             var statement = connection.CreateStatement();
-            statement.SetOption(ApacheParameters.CatalogName, catalog);
-            statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+            statement.SetOption(ApacheParameters.CatalogName, targetCatalog);
+            statement.SqlQuery = "SELECT current_catalog()";
+            var catalogAfterTarget = await ExecuteScalarStringAsync(statement);
 
-            // With the flag off, no USE CATALOG is issued; the 2-level name resolves against the
-            // session's default catalog (not the target), so the query must fail to find it.
-            var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-            {
-                var result = await statement.ExecuteQueryAsync();
-                if (result.Stream != null)
-                {
-                    await result.Stream.ReadNextRecordBatchAsync();
-                }
-            });
-
-            // Assert the SPECIFIC unresolved-name failure, not any exception: a transient
-            // connection drop, auth failure, or timeout must NOT pass this test as a false
-            // positive. The server raises TABLE_OR_VIEW_NOT_FOUND (SQLSTATE 42P01) because the
-            // 2-level name was resolved against the wrong (default) catalog.
-            string message = ex.ToString();
-            Assert.True(
-                message.IndexOf("TABLE_OR_VIEW_NOT_FOUND", StringComparison.OrdinalIgnoreCase) >= 0
-                    || message.IndexOf("42P01", StringComparison.OrdinalIgnoreCase) >= 0,
-                $"Expected TABLE_OR_VIEW_NOT_FOUND / 42P01 (2-level name unresolved), but got: {message}");
+            // Flag off => target catalog ignored => current catalog unchanged (never the target).
+            Assert.Equal(sessionCatalog, catalogAfterTarget);
+            Assert.NotEqual(targetCatalog, catalogAfterTarget);
 
             OutputHelper?.WriteLine(
                 $"StatementCatalogNotScopedWhenFlagOff (protocol={protocol ?? "default"}): " +
-                $"flag off, `{schema}`.`{table}` did not resolve (opt-in gate confirmed).");
+                $"session default={sessionCatalog}, statement target={targetCatalog} ignored (flag off), " +
+                $"current_catalog stayed {catalogAfterTarget}.");
         }
 
         /// <summary>

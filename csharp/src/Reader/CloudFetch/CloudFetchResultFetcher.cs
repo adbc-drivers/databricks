@@ -163,6 +163,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <returns>A task representing the asynchronous operation.</returns>
         protected abstract Task FetchNextBatchAsync(CancellationToken cancellationToken);
 
+        /// <summary>
+        /// Called from the fetch loop's finally when the loop terminates for any reason — normal
+        /// completion, error, or a cancellation observed between iterations. Subclasses override this
+        /// to observe or release protocol-specific state that can outlive a single
+        /// <see cref="FetchNextBatchAsync"/> call (e.g. an in-flight look-ahead prefetch), since it is
+        /// the one point guaranteed to run for this single-use fetcher. Implementations must not throw.
+        /// </summary>
+        protected virtual void OnFetchLoopCompleted()
+        {
+        }
+
         private async Task FetchResultsAsync(CancellationToken cancellationToken)
         {
             try
@@ -211,6 +222,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
             finally
             {
+                // The loop has terminated (completion, error, or a cancellation observed between
+                // iterations). Let subclasses observe/release state that outlives a single batch —
+                // e.g. an in-flight look-ahead prefetch — since neither Dispose() nor ResetState() is
+                // guaranteed to run for this single-use fetcher.
+                OnFetchLoopCompleted();
                 Activity.Current?.AddEvent("cloudfetch.fetcher_completing", [
                     new("has_error", _error != null),
                     new("error_message", _error?.Message ?? "(none)"),
