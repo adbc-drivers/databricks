@@ -272,7 +272,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var config = new HttpHandlerFactory.HandlerConfig
             {
                 BaseHandler = HttpClientFactory.CreateHandler(properties, seaResponseCompression),
-                BaseAuthHandler = HttpClientFactory.CreateHandler(properties, seaResponseCompression),
+                // OAuth token responses are tiny, so the auth client keeps default compression.
+                BaseAuthHandler = HttpClientFactory.CreateHandler(properties),
                 Properties = properties,
                 Host = GetHost(properties),
                 ActivityTracer = this,
