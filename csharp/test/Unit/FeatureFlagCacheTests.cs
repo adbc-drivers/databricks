@@ -17,9 +17,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -122,6 +125,50 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("value", context.GetFlagValue("MyFlag"));
         }
 
+        [Theory]
+        [InlineData(null, false, null, null, null, null, null)]
+        [InlineData("", false, null, null, null, null, null)]
+        [InlineData("null", false, null, null, null, null, null)]
+        [InlineData("{bad json", false, null, null, null, null, null)]
+        [InlineData("{}", false, null, null, null, null, null)]
+        [InlineData("true", true, null, null, null, null, null)]
+        [InlineData("TrUe", true, null, null, null, null, null)]
+        [InlineData("false", false, null, null, null, null, null)]
+        [InlineData("2147483647", false, int.MaxValue, 2147483647L, 2147483647d, null, null)]
+        [InlineData("-2147483648", false, int.MinValue, -2147483648L, -2147483648d, null, null)]
+        [InlineData("2147483648", false, null, 2147483648L, 2147483648d, null, null)]
+        [InlineData("9007199254740993", false, null, 9007199254740993L, 9007199254740992d, null, null)]
+        [InlineData("9223372036854775807", false, null, long.MaxValue, 9223372036854775808d, null, null)]
+        [InlineData("-9223372036854775808", false, null, long.MinValue, -9223372036854775808d, null, null)]
+        [InlineData("9223372036854775808", false, null, null, 9223372036854775808d, null, null)]
+        [InlineData("1.5", false, null, null, 1.5, null, null)]
+        [InlineData("1e309", false, null, null, null, null, null)]
+        [InlineData("\"123\"", false, null, null, null, "123", null)]
+        [InlineData("\"hello\\nworld\"", false, null, null, null, "hello\nworld", null)]
+        [InlineData("\"\"", false, null, null, null, "", null)]
+        [InlineData("[\"a\",\"b\"]", false, null, null, null, null, new string[] { "a", "b" })]
+        [InlineData("[]", false, null, null, null, null, new string[] { })]
+        [InlineData("[\"a\",null]", false, null, null, null, null, null)]
+        [InlineData("[\"a\",1]", false, null, null, null, null, null)]
+        public void FeatureFlagContext_TypedGetters_ValidateValues(
+            string? raw, bool expectedBoolean, int? expectedInt32, long? expectedInt64,
+            double? expectedDouble, string? expectedString, string[]? expectedList)
+        {
+            using var context = CreateTestContext();
+            if (raw != null)
+            {
+                context.SetFlag("flag", raw);
+            }
+
+            Assert.Equal(expectedBoolean, context.GetBoolean("FLAG"));
+            Assert.Equal(expectedInt32, context.GetInt32("FLAG"));
+            Assert.Equal(expectedInt64, context.GetInt64("FLAG"));
+            Assert.Equal(expectedDouble, context.GetDouble("FLAG"));
+            Assert.Equal(expectedString, context.GetString("FLAG"));
+            Assert.Equal(expectedList, context.GetStringList("FLAG"));
+            Assert.Equal(raw, context.GetFlagValue("flag")); // Typed reads never change raw values.
+        }
+
         [Fact]
         public void FeatureFlagContext_GetAllFlags_ReturnsAllFlags()
         {
@@ -214,6 +261,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             context.Dispose();
             context.Dispose();
             context.Dispose();
+        }
+
+        [Fact]
+        public void FeatureFlagContext_Dispose_DisposesHttpClient()
+        {
+            var httpClient = CreateMockHttpClient(HttpStatusCode.OK);
+            using var context = new FeatureFlagContext(TestHost, httpClient, DriverVersion, null);
+
+            context.Dispose();
+
+            Assert.Throws<ObjectDisposedException>(() => httpClient.CancelPendingRequests());
         }
 
         #endregion
@@ -467,6 +525,62 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         #endregion
 
         #region Background Refresh Error Handling Tests
+
+        [Fact]
+        public async Task FeatureFlagCache_CreateContextAsync_RefreshesAndRemovesWithdrawnFlags()
+        {
+            // Exercise the real factory: mocking CreateContextAsync would hide early client disposal.
+            using var cache = new FeatureFlagCache(new MemoryCache(new MemoryCacheOptions()));
+            var server = new TcpListener(IPAddress.Loopback, 0);
+            server.Start();
+            try
+            {
+                var endpoint = $"http://127.0.0.1:{((IPEndPoint)server.LocalEndpoint).Port}/flags";
+                var creating = cache.CreateContextAsync(
+                    TestHost, new Dictionary<string, string>(), DriverVersion, endpoint, CancellationToken.None);
+                await RespondToFlagRequestAsync(server, JsonSerializer.Serialize(new FeatureFlagsResponse
+                {
+                    Flags = new[]
+                    {
+                        new FeatureFlagEntry { Name = "kept", Value = "true" },
+                        new FeatureFlagEntry { Name = "withdrawn", Value = "true" },
+                        new FeatureFlagEntry { Name = DatabricksParameters.UseCloudFetch, Value = "true" }
+                    },
+                    TtlSeconds = 1
+                }));
+                using var context = await creating;
+                var original = context.GetAllFlags();
+                Assert.Equal(3, original.Count);
+
+                await RespondToFlagRequestAsync(server, "", HttpStatusCode.InternalServerError);
+                Assert.True(SpinWait.SpinUntil(
+                    () => context.LastFetchStatus == FeatureFlagFetchStatus.Failed, TimeSpan.FromSeconds(5)));
+                Assert.Equal(original, context.GetAllFlags());
+
+                await RespondToFlagRequestAsync(server, JsonSerializer.Serialize(new FeatureFlagsResponse
+                {
+                    Flags = new[]
+                    {
+                        new FeatureFlagEntry { Name = "kept", Value = "false" },
+                        new FeatureFlagEntry { Name = DatabricksParameters.UseCloudFetch, Value = "null" }
+                    },
+                    TtlSeconds = 1
+                }));
+                Assert.True(SpinWait.SpinUntil(
+                    () => context.GetFlagValue("kept") == "false", TimeSpan.FromSeconds(5)));
+                Assert.Single(context.GetAllFlags()); // Both withdrawn and now-invalid flags disappear.
+                Assert.False(context.GetBoolean("kept"));
+                Assert.Equal("true", original["kept"]); // Existing connection properties are unchanged.
+
+                await RespondToFlagRequestAsync(server, "{\"flags\":[],\"ttl_seconds\":300}");
+                Assert.True(SpinWait.SpinUntil(
+                    () => context.GetAllFlags().Count == 0, TimeSpan.FromSeconds(5)));
+            }
+            finally
+            {
+                server.Stop();
+            }
+        }
 
         [Fact]
         public async Task FeatureFlagContext_BackgroundRefreshError_SetsActivityStatusToError()
@@ -898,18 +1012,38 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             // A genuinely cancelled caller token must propagate, unlike an HttpClient timeout.
             using var cts = new CancellationTokenSource();
             cts.Cancel();
+            var httpClient = CreateDelayedMockHttpClient(
+                new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>() }, delayMs: 1000);
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                 FeatureFlagContext.CreateAsync(
                     "cancel.databricks.com",
-                    CreateDelayedMockHttpClient(new FeatureFlagsResponse { Flags = new List<FeatureFlagEntry>() }, delayMs: 1000),
+                    httpClient,
                     DriverVersion,
                     cancellationToken: cts.Token));
+            Assert.Throws<ObjectDisposedException>(() => httpClient.CancelPendingRequests());
         }
 
         #endregion
 
         #region Helper Methods
+
+        private static async Task RespondToFlagRequestAsync(
+            TcpListener server, string body, HttpStatusCode status = HttpStatusCode.OK)
+        {
+            var accepting = server.AcceptTcpClientAsync();
+            Assert.Same(accepting, await Task.WhenAny(accepting, Task.Delay(TimeSpan.FromSeconds(5))));
+            using var client = await accepting;
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, false, 1024, leaveOpen: true);
+            Assert.StartsWith("GET /flags HTTP/1.1", await reader.ReadLineAsync());
+            while (!string.IsNullOrEmpty(await reader.ReadLineAsync())) { }
+
+            var response = Encoding.UTF8.GetBytes(
+                $"HTTP/1.1 {(int)status} Test\r\nContent-Type: application/json\r\n" +
+                $"Content-Length: {Encoding.UTF8.GetByteCount(body)}\r\nConnection: close\r\n\r\n{body}");
+            await stream.WriteAsync(response, 0, response.Length);
+        }
 
         /// <summary>
         /// Creates a FeatureFlagContext for unit testing with pre-populated flags.

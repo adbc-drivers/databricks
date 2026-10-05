@@ -86,7 +86,7 @@ namespace AdbcDrivers.Databricks
         private readonly string _driverVersion;
         private readonly string _endpointFormat;
         private readonly HttpClient? _httpClient;
-        private readonly ConcurrentDictionary<string, string> _flags;
+        private volatile ConcurrentDictionary<string, string> _flags;
         private readonly CancellationTokenSource _refreshCts;
         private readonly object _ttlLock = new object();
 
@@ -153,7 +153,7 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         /// <param name="host">The Databricks host.</param>
         /// <param name="httpClient">
-        /// HttpClient from the connection, pre-configured with:
+        /// HttpClient owned and disposed by this context, pre-configured with:
         /// - Base address (https://{host})
         /// - Auth headers (Bearer token)
         /// - Custom User-Agent for connector service
@@ -181,18 +181,26 @@ namespace AdbcDrivers.Databricks
 
             var context = new FeatureFlagContext(host, httpClient, driverVersion, endpointFormat);
 
-            // Initial async fetch - wait for it to complete
-            await context.FetchFeatureFlagsAsync("Initial", cancellationToken).ConfigureAwait(false);
-
-            // Only run the background refresh loop for a healthy context. A failed initial
-            // fetch is negatively cached with a short TTL and recovers when the cache entry
-            // expires and the next connection recreates it.
-            if (context.LastFetchStatus == FeatureFlagFetchStatus.Healthy)
+            try
             {
-                context.StartBackgroundRefresh();
-            }
+                // Initial async fetch - wait for it to complete
+                await context.FetchFeatureFlagsAsync("Initial", cancellationToken).ConfigureAwait(false);
 
-            return context;
+                // Only run the background refresh loop for a healthy context. A failed initial
+                // fetch is negatively cached with a short TTL and recovers when the cache entry
+                // expires and the next connection recreates it.
+                if (context.LastFetchStatus == FeatureFlagFetchStatus.Healthy)
+                {
+                    context.StartBackgroundRefresh();
+                }
+
+                return context;
+            }
+            catch
+            {
+                context.Dispose();
+                throw;
+            }
         }
 
         /// <summary>
@@ -209,6 +217,49 @@ namespace AdbcDrivers.Databricks
             }
 
             return _flags.TryGetValue(flagName, out var value) ? value : null;
+        }
+
+        /// <summary>Missing or invalid Boolean flags default to false.</summary>
+        public bool GetBoolean(string flagName) =>
+            bool.TryParse(GetFlagValue(flagName), out bool value) && value;
+
+        // Other typed getters return null for missing, invalid or out-of-range values,
+        // leaving the fallback to the consumer. Raw access and property merging are unchanged.
+        public int? GetInt32(string flagName) => Parse<int?>(flagName);
+
+        public long? GetInt64(string flagName) => Parse<long?>(flagName);
+
+        public double? GetDouble(string flagName)
+        {
+            var value = Parse<double?>(flagName);
+            return value.HasValue && !double.IsNaN(value.Value) && !double.IsInfinity(value.Value)
+                ? value : null;
+        }
+
+        public string? GetString(string flagName) => Parse<string>(flagName);
+
+        public IReadOnlyList<string>? GetStringList(string flagName)
+        {
+            var value = Parse<string[]>(flagName);
+            return value != null && Array.TrueForAll(value, item => item != null) ? value : null;
+        }
+
+        private T? Parse<T>(string flagName)
+        {
+            var value = GetFlagValue(flagName);
+            if (value == null)
+            {
+                return default;
+            }
+
+            try
+            {
+                return JsonSerializer.Deserialize<T>(value);
+            }
+            catch (JsonException)
+            {
+                return default;
+            }
         }
 
         /// <summary>
@@ -290,6 +341,7 @@ namespace AdbcDrivers.Databricks
             }
 
             _refreshCts.Dispose();
+            _httpClient?.Dispose();
         }
 
         /// <summary>
@@ -381,6 +433,7 @@ namespace AdbcDrivers.Databricks
 
                 if (response?.Flags != null)
                 {
+                    var flags = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var flag in response.Flags)
                     {
                         if (string.IsNullOrEmpty(flag.Name))
@@ -405,8 +458,12 @@ namespace AdbcDrivers.Databricks
                             continue;
                         }
 
-                        _flags[flag.Name] = flagValue;
+                        flags[flag.Name] = flagValue;
                     }
+
+                    // Replace the full map atomically: withdrawn flags disappear, and readers
+                    // never see a partially applied response. Fetch failures keep the old map.
+                    _flags = flags;
 
                     activity?.SetTag("feature_flags.count", response.Flags.Count);
                     activity?.AddEvent("feature_flags.updated", [

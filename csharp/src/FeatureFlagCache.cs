@@ -212,7 +212,8 @@ namespace AdbcDrivers.Databricks
             CancellationToken cancellationToken)
         {
             // Create HttpClient only on cache miss (lazy creation)
-            using var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
+            // The context owns this client for its lifetime, including background refreshes.
+            var httpClient = Http.HttpClientFactory.CreateFeatureFlagHttpClient(properties, host, driverVersion);
 
             // Create context asynchronously - this waits for initial fetch to complete
             return await FeatureFlagContext.CreateAsync(
