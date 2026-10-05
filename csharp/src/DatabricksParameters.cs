@@ -124,8 +124,8 @@ namespace AdbcDrivers.Databricks
         /// CloudFetch (S3) or the Thrift path.
         /// Default value is false if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string SeaResponseCompressionEnabled = "adbc.databricks.sea_response_compression_enabled";
-
 
         /// <summary>
         /// Prefix for server-side properties. Properties with this prefix will be passed to the server

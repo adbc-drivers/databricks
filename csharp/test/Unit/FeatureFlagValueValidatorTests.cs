@@ -47,6 +47,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Theory]
+        [InlineData("true", true)]
+        [InlineData("false", true)]
+        [InlineData("null", false)]
+        [InlineData("", false)]
+        public void SeaResponseCompressionEnabled_IsValidatedAsBoolean(string value, bool expected)
+        {
+            // Read with the throwing boolean getter on the SEA connect path, so a malformed
+            // server-pushed value must be dropped rather than break connection setup.
+            Assert.Equal(expected, FeatureFlagValueValidator.IsAcceptable(DatabricksParameters.SeaResponseCompressionEnabled, value));
+        }
+
+        [Theory]
         [InlineData("3")]
         [InlineData("1")]
         public void PositiveInt_Valid_IsAcceptable(string value)
