@@ -15,9 +15,14 @@
 */
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
+using System.Net.Http;
+using System.Reflection;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Http;
+using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2.Spark;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Http
@@ -50,8 +55,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Http
         [Fact]
         public void CreateHandler_CompressionDisabled_SendsNoAcceptEncoding()
         {
-            // No AutomaticDecompression => HttpClient sends no Accept-Encoding => proxy returns the
-            // body uncompressed (the SEA-inline fast path).
+            // No AutomaticDecompression => the handler adds no Accept-Encoding of its own; the SEA
+            // statements client sends Accept-Encoding: identity on top (see the tests below).
             using var handler = HttpClientFactory.CreateHandler(EmptyProps, enableResponseCompression: false);
             Assert.Equal(DecompressionMethods.None, handler.AutomaticDecompression);
         }
@@ -76,6 +81,39 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Http
             bool enabled = PropertyHelper.GetBooleanPropertyWithValidation(
                 props, DatabricksParameters.SeaResponseCompressionEnabled, false);
             Assert.True(enabled);
+        }
+
+        private static string[] SeaAcceptEncoding(Dictionary<string, string> extraProperties)
+        {
+            var properties = new Dictionary<string, string>(extraProperties)
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [SparkParameters.Path] = "/sql/1.0/warehouses/abc123",
+                [SparkParameters.AccessToken] = "test-token",
+            };
+            using var connection = new StatementExecutionConnection(properties);
+            var field = typeof(StatementExecutionConnection)
+                .GetField("_httpClient", BindingFlags.NonPublic | BindingFlags.Instance);
+            var httpClient = (HttpClient)field!.GetValue(connection)!;
+            return httpClient.DefaultRequestHeaders.AcceptEncoding.Select(v => v.ToString()).ToArray();
+        }
+
+        [Fact]
+        public void SeaClient_CompressionDisabledByDefault_RequestsIdentity()
+        {
+            // Without Accept-Encoding a server may pick any coding (RFC 9110 §12.5.3), and the
+            // handler won't decompress, so the SEA client must ask for an uncompressed body.
+            Assert.Equal(new[] { "identity" }, SeaAcceptEncoding(new Dictionary<string, string>()));
+        }
+
+        [Fact]
+        public void SeaClient_CompressionEnabled_LeavesAcceptEncodingToHandler()
+        {
+            var props = new Dictionary<string, string>
+            {
+                [DatabricksParameters.SeaResponseCompressionEnabled] = "true"
+            };
+            Assert.Empty(SeaAcceptEncoding(props));
         }
     }
 }

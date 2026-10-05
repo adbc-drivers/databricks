@@ -300,6 +300,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             string userAgent = GetUserAgent(properties);
             httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(userAgent);
 
+            // A request with no Accept-Encoding lets the server pick any coding (RFC 9110 §12.5.3),
+            // and the handler above won't decompress, so ask for an uncompressed body explicitly.
+            if (!seaResponseCompression)
+                httpClient.DefaultRequestHeaders.AcceptEncoding.Add(new System.Net.Http.Headers.StringWithQualityHeaderValue("identity"));
+
             if (!string.IsNullOrEmpty(_orgId))
                 httpClient.DefaultRequestHeaders.TryAddWithoutValidation(DatabricksConstants.OrgIdHeader, _orgId);
 

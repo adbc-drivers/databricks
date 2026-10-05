@@ -49,7 +49,8 @@ namespace AdbcDrivers.Databricks.Http
             var handler = HiveServer2TlsImpl.NewHttpClientHandler(tlsOptions, proxyConfigurator);
             if (!enableResponseCompression)
             {
-                // No Accept-Encoding => the server/proxy returns the body uncompressed. For the SEA
+                // The handler neither negotiates nor decompresses gzip; the SEA statements client also
+                // sends Accept-Encoding: identity so the server returns the body uncompressed. For the SEA
                 // inline path this avoids gzip-ing base64-of-LZ4-Arrow (double compression), which
                 // costs ~40ms server-side for multi-MB results and nets a larger wire than Thrift's
                 // raw binary. See DatabricksParameters.SeaResponseCompressionEnabled.
