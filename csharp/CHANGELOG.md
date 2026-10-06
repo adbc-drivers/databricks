@@ -20,6 +20,23 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.11] - 2026-10-06
+
+### Fixed
+
+- Validate SEA query timeout values (#689)
+
+### Changed
+
+- Revert the AOT/trim-safe `net10.0` change from 1.1.9 (#509) (#672)
+- Bump hiveserver2 submodule for the NU1902 SourceLink fix (#675)
+
+### Performance
+
+- Pipeline SEA `GetResultChunk` link fetches to keep CloudFetch downloads fed (#681)
+- Read SEA result responses as UTF-8 bytes instead of a string (#693)
+- Skip gzip on the SEA inline response body (#678)
+
 ## [1.1.10] - 2026-09-09
 
 ### Added
