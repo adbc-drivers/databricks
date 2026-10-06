@@ -767,6 +767,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
+            if (catalogPattern == "")
+                return System.Array.Empty<string>();
+
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
             List<RecordBatch> batches;
             bool isNative;
@@ -791,7 +794,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 {
                     string? name = isNative ? native!.String("TABLE_CAT", i)
                         : catalogArray!.IsNull(i) ? null : catalogArray.GetString(i);
-                    if (name != null && (!isNative || MatchesCatalogPattern(catalogPattern, name)))
+                    if (name != null && MatchesCatalogPattern(catalogPattern, name))
                         result.Add(name);
                 }
             }
@@ -800,11 +803,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
         {
-            // Note: catalogPattern comes from GetObjectsResultBuilder which resolves individual
-            // catalog names before calling this method. Despite the "pattern" name (from the
-            // IGetObjectsDataProvider interface), the value passed to ShowSchemasCommand is used
-            // as a literal catalog identifier (backtick-quoted), not a wildcard pattern.
-            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
+            var result = new List<(string catalog, string schema)>();
+            foreach (string? catalog in await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false))
+            {
+                result.AddRange(await GetSchemasInCatalogAsync(catalog, schemaPattern, cancellationToken).ConfigureAwait(false));
+            }
+            return result;
+        }
+
+        private async Task<IReadOnlyList<(string catalog, string schema)>> GetSchemasInCatalogAsync(
+            string? catalog, string? schemaPattern, CancellationToken cancellationToken)
+        {
+            string sql = new ShowSchemasCommand(catalog, schemaPattern).Build();
 
             List<RecordBatch> batches;
             bool isNative;
@@ -820,7 +830,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
             // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-            bool showSchemasInAllCatalogs = catalogPattern == null;
+            bool showSchemasInAllCatalogs = catalog == null;
 
             var result = new List<(string, string)>();
             foreach (var batch in batches)
@@ -834,8 +844,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     for (int i = 0; i < batch.Length; i++)
                     {
                         string? name = native.String("TABLE_SCHEM", i);
-                        if (name != null)
-                            result.Add((native.String("TABLE_CATALOG", i) ?? catalogPattern ?? "", name));
+                        string? rowCatalog = native.String("TABLE_CATALOG", i) ?? catalog;
+                        if (name != null && (catalog == null ||
+                            string.Equals(catalog, rowCatalog, StringComparison.OrdinalIgnoreCase)))
+                            result.Add((rowCatalog ?? "", name));
                     }
                     continue;
                 }
@@ -853,10 +865,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 for (int i = 0; i < batch.Length; i++)
                 {
                     if (schemaArray.IsNull(i)) continue;
-                    string catalog = catalogArray != null && !catalogArray.IsNull(i)
+                    string rowCatalog = catalogArray != null && !catalogArray.IsNull(i)
                         ? catalogArray.GetString(i)
-                        : catalogPattern ?? "";
-                    result.Add((catalog, schemaArray.GetString(i)));
+                        : catalog ?? "";
+                    result.Add((rowCatalog, schemaArray.GetString(i)));
                 }
             }
             return result;
@@ -875,7 +887,23 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return System.Array.Empty<(string, string, string, string)>();
             }
 
-            string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
+            IReadOnlyList<string?> catalogs = await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false);
+            var result = new List<(string catalog, string schema, string table, string tableType)>();
+            foreach (string? catalog in catalogs)
+            {
+                result.AddRange(await GetTablesInCatalogAsync(
+                    catalog, schemaPattern, tableNamePattern, tableTypes, cancellationToken).ConfigureAwait(false));
+            }
+            if (catalogs.Count > 1)
+                result.Sort(CompareTables);
+            return result;
+        }
+
+        private async Task<IReadOnlyList<(string catalog, string schema, string table, string tableType)>> GetTablesInCatalogAsync(
+            string? catalog, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes,
+            CancellationToken cancellationToken)
+        {
+            string sql = new ShowTablesCommand(catalog, schemaPattern, tableNamePattern).Build();
 
             List<RecordBatch> batches;
             bool isNative;
@@ -901,7 +929,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 for (int i = 0; i < batch.Length; i++)
                 {
-                    string? cat = isNative ? native!.String("TABLE_CAT", i) ?? catalogPattern
+                    string? cat = isNative ? native!.String("TABLE_CAT", i) ?? catalog
                         : catalogArray!.IsNull(i) ? null : catalogArray.GetString(i);
                     string? sch = isNative ? native!.String("TABLE_SCHEM", i)
                         : schemaArray!.IsNull(i) ? null : schemaArray.GetString(i);
@@ -909,8 +937,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         : tableArray!.IsNull(i) ? null : tableArray.GetString(i);
                     if ((!isNative && cat == null) || sch == null || tbl == null) continue;
                     cat ??= "";
-                    if (isNative && catalogPattern != null &&
-                        !string.Equals(catalogPattern, cat, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (isNative && catalog != null &&
+                        !string.Equals(catalog, cat, StringComparison.OrdinalIgnoreCase)) continue;
 
                     string tableType = NativeMetadataResultBuilder.DefaultTableType(isNative
                         ? native!.String("TABLE_TYPE", i)
@@ -926,18 +954,20 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 }
             }
             if (isNative)
-            {
-                result.Sort((left, right) =>
-                {
-                    int order = StringComparer.Ordinal.Compare(left.tableType, right.tableType);
-                    if (order != 0) return order;
-                    order = StringComparer.Ordinal.Compare(left.catalog, right.catalog);
-                    if (order != 0) return order;
-                    order = StringComparer.Ordinal.Compare(left.schema, right.schema);
-                    return order != 0 ? order : StringComparer.Ordinal.Compare(left.table, right.table);
-                });
-            }
+                result.Sort(CompareTables);
             return result;
+        }
+
+        private static int CompareTables(
+            (string catalog, string schema, string table, string tableType) left,
+            (string catalog, string schema, string table, string tableType) right)
+        {
+            int order = StringComparer.Ordinal.Compare(left.tableType, right.tableType);
+            if (order != 0) return order;
+            order = StringComparer.Ordinal.Compare(left.catalog, right.catalog);
+            if (order != 0) return order;
+            order = StringComparer.Ordinal.Compare(left.schema, right.schema);
+            return order != 0 ? order : StringComparer.Ordinal.Compare(left.table, right.table);
         }
 
         async Task IGetObjectsDataProvider.PopulateColumnInfoAsync(string? catalogPattern, string? schemaPattern,
@@ -945,17 +975,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            List<(RecordBatch Batch, bool IsNative, string? Catalog)> batches;
-            try
+            var batches = new List<(RecordBatch Batch, bool IsNative, string? Catalog)>();
+            foreach (string? catalog in await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false))
             {
-                batches = await ExecuteNativeShowColumnsAsync(
-                    catalogPattern, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false);
-            }
-            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-            {
-                // Object-not-found → leave the column info unpopulated (empty), matching
-                // the flat metadata methods and the JDBC reference driver.
-                return;
+                try
+                {
+                    batches.AddRange(await ExecuteNativeShowColumnsAsync(
+                        catalog, schemaPattern, tablePattern, columnPattern, cancellationToken).ConfigureAwait(false));
+                }
+                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+                {
+                    // A catalog may disappear after enumeration.
+                }
             }
 
             var tablePositions = new Dictionary<string, int>();
@@ -986,6 +1017,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string? colType = isNative ? native!.String("TYPE_NAME", i)
                         : columnTypeArray!.IsNull(i) ? null : columnTypeArray.GetString(i);
                     if (cat == null || sch == null || tbl == null || colName == null || colType == null) continue;
+                    if (isNative && sourceCatalog != null &&
+                        !string.Equals(sourceCatalog, cat, StringComparison.OrdinalIgnoreCase)) continue;
 
                     if (string.IsNullOrEmpty(colName)) continue;
 
@@ -1151,6 +1184,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
             regex.Append('$');
             return Regex.IsMatch(catalog, regex.ToString(), RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
                 TimeSpan.FromSeconds(1));
+        }
+
+        private async Task<IReadOnlyList<string?>> ResolveGetObjectsCatalogsAsync(
+            string? pattern, CancellationToken cancellationToken)
+        {
+            if (pattern == null || (pattern.Length > 0 && pattern.All(character => character == '%')))
+                return new string?[] { null };
+            if (pattern == "")
+                return System.Array.Empty<string?>();
+            if (pattern.IndexOfAny(new[] { '%', '_', '\\' }) < 0)
+                return new string?[] { pattern };
+
+            // SHOW scopes are identifiers; resolve LIKE patterns to concrete catalog names.
+            IReadOnlyList<string> catalogs = await ((IGetObjectsDataProvider)this)
+                .GetCatalogsAsync(pattern, cancellationToken).ConfigureAwait(false);
+            return catalogs.Select(catalog => (string?)catalog).ToList();
         }
 
         internal bool EnablePKFK => _enablePKFK;

@@ -612,6 +612,10 @@ Run tests matching a pattern:
 dotnet test --filter "FullyQualifiedName~CloudFetch"
 ```
 
+For a native-capable warehouse, set `"requireNativeMetadata": true` in the test
+configuration and run `dotnet test --filter "FullyQualifiedName~NativeMetadata_UsesNativeResponse"`.
+These tests fail if any supported metadata operation falls back to SHOW.
+
 #### Verbose Test Output
 
 Get detailed test output:

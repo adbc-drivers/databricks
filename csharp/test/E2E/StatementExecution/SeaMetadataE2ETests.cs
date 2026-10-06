@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
@@ -84,7 +85,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
         private async Task<List<Dictionary<string, string>>> ReadMetadata(AdbcConnection connection, string command,
             string? catalog = null, string? schema = null, string? table = null, string? column = null,
-            string? tableTypes = null, bool escapeWildcards = false)
+            string? tableTypes = null, bool escapeWildcards = false, bool requireNative = false,
+            string? foreignTable = null)
         {
             var results = new List<Dictionary<string, string>>();
             using var stmt = connection.CreateStatement();
@@ -95,10 +97,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
             if (column != null) stmt.SetOption(ApacheParameters.ColumnName, column);
             if (tableTypes != null) stmt.SetOption(ApacheParameters.TableTypes, tableTypes);
+            if (foreignTable != null)
+            {
+                stmt.SetOption(ApacheParameters.ForeignCatalogName, catalog!);
+                stmt.SetOption(ApacheParameters.ForeignSchemaName, schema!);
+                stmt.SetOption(ApacheParameters.ForeignTableName, foreignTable);
+            }
 
             stmt.SqlQuery = command;
             var result = stmt.ExecuteQuery();
             using var reader = result.Stream;
+            if (requireNative)
+            {
+                Assert.True(Assert.IsType<StatementExecutionStatement>(stmt).IsNativeMetadataResult,
+                    $"{command} fell back to SHOW; this warehouse must return is_native_metadata_result: true.");
+            }
 
             while (true)
             {
@@ -199,6 +212,31 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // rather than relying on the run's configured protocol.
         private static readonly Dictionary<string, string> RestProtocol =
             new() { { DatabricksParameters.Protocol, "rest" } };
+
+        [SkippableTheory]
+        [InlineData("GetCatalogs", "all_column_types", null, "TABLE_CAT", "main")]
+        [InlineData("GetSchemas", "all_column_types", null, "TABLE_SCHEM", TestSchema)]
+        [InlineData("GetTables", "all_column_types", null, "TABLE_NAME", "all_column_types")]
+        [InlineData("GetColumns", "all_column_types", null, "COLUMN_NAME", "c_int")]
+        [InlineData("GetPrimaryKeys", "cross_ref_customers", null, "TABLE_NAME", "cross_ref_customers")]
+        [InlineData("GetCrossReference", "cross_ref_customers", "cross_ref_orders", "PKTABLE_NAME", "cross_ref_customers")]
+        public async Task NativeMetadata_UsesNativeResponse(
+            string command, string table, string? foreignTable, string expectedColumn, string expectedValue)
+        {
+            SkipIfNotConfigured();
+            Skip.IfNot(TestConfiguration.RequireNativeMetadata,
+                "Set requireNativeMetadata=true in the test configuration for a native-capable warehouse.");
+
+            using var conn = CreateConnection(new Dictionary<string, string>(RestProtocol)
+            {
+                [DatabricksParameters.EnableMultipleCatalogSupport] = "true",
+                [DatabricksParameters.EnablePKFK] = "true",
+            });
+            var rows = await ReadMetadata(conn, command, TestCatalog, TestSchema, table,
+                requireNative: true, foreignTable: foreignTable);
+
+            Assert.Contains(rows, row => row[expectedColumn] == expectedValue);
+        }
 
         [SkippableFact]
         public async Task GetColumns_CatalogMatchAll_WithEscaping_ReturnsEmpty()

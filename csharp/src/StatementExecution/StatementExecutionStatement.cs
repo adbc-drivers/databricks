@@ -314,6 +314,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal async Task<QueryResult> ExecuteQueryAsync(
             CancellationToken cancellationToken, bool isMetadataExecution, MetadataOperation? metadataOperation)
         {
+            IsNativeMetadataResult = false;
             if (_isMetadataCommand)
             {
                 return await ExecuteMetadataCommandAsync(cancellationToken).ConfigureAwait(false);
@@ -394,7 +395,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private async Task<QueryResult> ExecuteQueryInternalAsync(
             CancellationToken cancellationToken, bool isMetadataExecution, MetadataOperation? metadataOperation = null)
         {
-            IsNativeMetadataResult = false;
             // If the caller explicitly scoped this statement to a catalog, set the session's
             // current catalog first via USE CATALOG so a 2-level `schema`.`table` name
             // resolves. The server rejects catalog+session_id together, and SEA always uses a
@@ -471,6 +471,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _statementClosedByServer = true;
             }
 
+            // The server may fall back to SHOW even with the require-native header.
+            // Only the response manifest selects the decoder.
             IsNativeMetadataResult = response.Manifest?.IsNativeMetadataResult
                 ?? initialNativeMetadata
                 ?? false;
@@ -1293,6 +1295,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 activity?.SetTag("sql_query", sql);
                 var (batches, isNative) = await _connection.ExecuteNativeMetadataSqlAsync(
                     sql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
+                IsNativeMetadataResult = isNative;
                 if (isNative)
                     return NativeMetadataResultBuilder.Build(
                         batches, MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs);
@@ -1349,6 +1352,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var nativeResult = await _connection.ExecuteNativeMetadataSqlAsync(
                         sql, MetadataOperation.GetSchemas, cancellationToken).ConfigureAwait(false);
                     batches = nativeResult.Batches;
+                    IsNativeMetadataResult = nativeResult.IsNative;
                     if (nativeResult.IsNative)
                         return NativeMetadataResultBuilder.Build(
                             batches, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas,
@@ -1439,6 +1443,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var nativeResult = await _connection.ExecuteNativeMetadataSqlAsync(
                         sql, MetadataOperation.GetTables, cancellationToken).ConfigureAwait(false);
                     batches = nativeResult.Batches;
+                    IsNativeMetadataResult = nativeResult.IsNative;
                     if (nativeResult.IsNative)
                     {
                         var requestedTypes = _metadataTableTypes?.Split(',').Select(type => type.Trim()).ToArray();
@@ -1556,7 +1561,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         System.Array.Empty<(string, string, string, TableInfo)>());
                 }
 
-                if (columnBatches.Count > 0 && columnBatches.All(result => result.IsNative))
+                IsNativeMetadataResult = columnBatches.Count > 0 && columnBatches.All(result => result.IsNative);
+                if (IsNativeMetadataResult)
                 {
                     return NativeMetadataResultBuilder.Build(
                         columnBatches.Select(result => result.Batch).ToList(),
@@ -1866,6 +1872,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var nativeResult = await _connection.ExecuteNativeMetadataSqlAsync(
                         sql, MetadataOperation.GetPrimaryKeys, cancellationToken).ConfigureAwait(false);
                     batches = nativeResult.Batches;
+                    IsNativeMetadataResult = nativeResult.IsNative;
                     if (nativeResult.IsNative)
                     {
                         return NativeMetadataResultBuilder.Build(
@@ -1995,6 +2002,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     var nativeResult = await _connection.ExecuteNativeMetadataSqlAsync(
                         sql, MetadataOperation.GetCrossReference, cancellationToken).ConfigureAwait(false);
                     batches = nativeResult.Batches;
+                    IsNativeMetadataResult = nativeResult.IsNative;
                     if (nativeResult.IsNative)
                     {
                         return NativeMetadataResultBuilder.Build(
