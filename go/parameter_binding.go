@@ -16,10 +16,14 @@ package databricks
 
 import (
 	"database/sql/driver"
+	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
@@ -107,12 +111,15 @@ func validateParameterType(dataType arrow.DataType) error {
 		arrow.BOOL,
 		arrow.INT8, arrow.INT16, arrow.INT32, arrow.INT64,
 		arrow.UINT8, arrow.UINT16, arrow.UINT32,
-		arrow.FLOAT32, arrow.FLOAT64,
+		arrow.FLOAT16, arrow.FLOAT32, arrow.FLOAT64,
 		arrow.STRING, arrow.LARGE_STRING, arrow.STRING_VIEW,
-		arrow.DATE32, arrow.DATE64:
+		arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY,
+		arrow.DATE32, arrow.DATE64, arrow.TIMESTAMP:
 		return nil
-	case arrow.TIMESTAMP:
-		if dataType.(*arrow.TimestampType).TimeZone != "" {
+	case arrow.DECIMAL128, arrow.DECIMAL256:
+		decimalType := dataType.(arrow.DecimalType)
+		if decimalType.GetPrecision() > 0 && decimalType.GetPrecision() <= 38 &&
+			decimalType.GetScale() >= 0 && decimalType.GetScale() <= decimalType.GetPrecision() {
 			return nil
 		}
 	}
@@ -123,8 +130,13 @@ func validateParameterType(dataType arrow.DataType) error {
 	}
 }
 
-// hasPositionalParameterMarker ignores question marks in quoted text and SQL comments.
-func hasPositionalParameterMarker(query string) bool {
+type parameterMarker struct {
+	start, end int
+	name       string
+}
+
+// parameterMarkers ignores markers in quoted text and SQL comments.
+func parameterMarkers(query string) []parameterMarker {
 	const (
 		queryText = iota
 		singleQuoted
@@ -136,6 +148,7 @@ func hasPositionalParameterMarker(query string) bool {
 
 	state := queryText
 	blockCommentDepth := 0
+	var markers []parameterMarker
 	for i := 0; i < len(query); i++ {
 		ch := query[i]
 		next := byte(0)
@@ -147,7 +160,26 @@ func hasPositionalParameterMarker(query string) bool {
 		case queryText:
 			switch {
 			case ch == '?':
-				return true
+				markers = append(markers, parameterMarker{start: i, end: i + 1})
+			case ch == ':' && next != ':' && (i == 0 || query[i-1] != ':'):
+				if i > 0 {
+					prev, _ := utf8.DecodeLastRuneInString(query[:i])
+					if isParameterNameRune(prev, false) || strings.ContainsRune(")]`", prev) {
+						continue
+					}
+				}
+				end := i + 1
+				for end < len(query) {
+					r, size := utf8.DecodeRuneInString(query[end:])
+					if !isParameterNameRune(r, end == i+1) {
+						break
+					}
+					end += size
+				}
+				if end > i+1 {
+					markers = append(markers, parameterMarker{start: i, end: end, name: query[i+1 : end]})
+					i = end - 1
+				}
 			case ch == '\'':
 				state = singleQuoted
 			case ch == '"':
@@ -197,14 +229,103 @@ func hasPositionalParameterMarker(query string) bool {
 		}
 	}
 
-	return false
+	return markers
+}
+
+func isParameterNameRune(r rune, first bool) bool {
+	return r == '_' || unicode.IsLetter(r) || (!first && unicode.IsDigit(r))
 }
 
 func parameterBindingModeForQuery(query string) parameterBindingMode {
-	if hasPositionalParameterMarker(query) {
-		return positionalParameterBinding
+	for _, marker := range parameterMarkers(query) {
+		if marker.name == "" {
+			return positionalParameterBinding
+		}
 	}
 	return namedParameterBinding
+}
+
+func (it *parameterRowIterator) bindQuery(query string) (string, error) {
+	fields := it.stream.Schema().Fields()
+	byName := make(map[string]int, len(fields))
+	for i, field := range fields {
+		byName[field.Name] = i
+	}
+
+	var result strings.Builder
+	last, position := 0, 0
+	markers := parameterMarkers(query)
+	if len(markers) == 0 && len(fields) != 0 {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "query has no parameter markers"}
+	}
+	for _, marker := range markers {
+		if (marker.name != "") != it.named {
+			return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "named and positional parameters cannot be mixed"}
+		}
+		index := position
+		if it.named {
+			var ok bool
+			index, ok = byName[marker.name]
+			if !ok {
+				return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("no bound parameter named %q", marker.name)}
+			}
+		} else {
+			position++
+			if index >= len(fields) {
+				return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "parameter count does not match bound columns"}
+			}
+		}
+
+		result.WriteString(query[last:marker.start])
+		markerText := query[marker.start:marker.end]
+		dataType := fields[index].Type
+		switch dataType.ID() {
+		case arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY:
+			fmt.Fprintf(&result, "unhex(%s)", markerText)
+		default:
+			// The base driver encodes NULL as VOID; casts preserve the Arrow type.
+			fmt.Fprintf(&result, "CAST(%s AS %s)", markerText, parameterSQLType(dataType))
+		}
+		last = marker.end
+	}
+	if !it.named && position != len(fields) {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "parameter count does not match bound columns"}
+	}
+	result.WriteString(query[last:])
+	return result.String(), nil
+}
+
+func parameterSQLType(dataType arrow.DataType) string {
+	switch dataType.ID() {
+	case arrow.NULL:
+		return "VOID"
+	case arrow.BOOL:
+		return "BOOLEAN"
+	case arrow.INT8:
+		return "TINYINT"
+	case arrow.INT16, arrow.UINT8:
+		return "SMALLINT"
+	case arrow.INT32, arrow.UINT16:
+		return "INT"
+	case arrow.INT64, arrow.UINT32:
+		return "BIGINT"
+	case arrow.FLOAT16, arrow.FLOAT32:
+		return "FLOAT"
+	case arrow.FLOAT64:
+		return "DOUBLE"
+	case arrow.DATE32, arrow.DATE64:
+		return "DATE"
+	case arrow.TIMESTAMP:
+		if dataType.(*arrow.TimestampType).TimeZone == "" {
+			return "TIMESTAMP_NTZ"
+		}
+		return "TIMESTAMP"
+	case arrow.DECIMAL128, arrow.DECIMAL256:
+		decimalType := dataType.(arrow.DecimalType)
+		return fmt.Sprintf("DECIMAL(%d,%d)", decimalType.GetPrecision(), decimalType.GetScale())
+	default:
+		return "STRING"
+	}
 }
 
 func (it *parameterRowIterator) Next() ([]driver.NamedValue, bool, error) {
@@ -271,12 +392,6 @@ func arrowValueToParameter(
 ) (dbsql.Parameter, error) {
 	parameter := dbsql.Parameter{Name: name}
 	if values.IsNull(row) {
-		if values.DataType().ID() != arrow.NULL {
-			return parameter, adbc.Error{
-				Code: adbc.StatusNotImplemented,
-				Msg:  fmt.Sprintf("typed null parameter %q with type %s is not supported", name, values.DataType()),
-			}
-		}
 		parameter.Type = dbsql.SqlVoid
 		return parameter, nil
 	}
@@ -308,6 +423,9 @@ func arrowValueToParameter(
 	case arrow.UINT32:
 		parameter.Type = dbsql.SqlBigInt
 		parameter.Value = strconv.FormatUint(uint64(values.(*array.Uint32).Value(row)), 10)
+	case arrow.FLOAT16:
+		parameter.Type = dbsql.SqlFloat
+		parameter.Value = values.(*array.Float16).Value(row).String()
 	case arrow.FLOAT32:
 		parameter.Type = dbsql.SqlFloat
 		parameter.Value = strconv.FormatFloat(float64(values.(*array.Float32).Value(row)), 'g', -1, 32)
@@ -323,6 +441,26 @@ func arrowValueToParameter(
 	case arrow.STRING_VIEW:
 		parameter.Type = dbsql.SqlString
 		parameter.Value = values.(*array.StringView).Value(row)
+	case arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY:
+		parameter.Type = dbsql.SqlString
+		var value []byte
+		switch values := values.(type) {
+		case *array.Binary:
+			value = values.Value(row)
+		case *array.LargeBinary:
+			value = values.Value(row)
+		case *array.BinaryView:
+			value = values.Value(row)
+		case *array.FixedSizeBinary:
+			value = values.Value(row)
+		}
+		parameter.Value = hex.EncodeToString(value)
+	case arrow.DECIMAL128:
+		parameter.Type = dbsql.SqlString
+		parameter.Value = values.(*array.Decimal128).Value(row).ToString(values.DataType().(arrow.DecimalType).GetScale())
+	case arrow.DECIMAL256:
+		parameter.Type = dbsql.SqlString
+		parameter.Value = values.(*array.Decimal256).Value(row).ToString(values.DataType().(arrow.DecimalType).GetScale())
 	case arrow.DATE32:
 		parameter.Type = dbsql.SqlDate
 		parameter.Value = values.(*array.Date32).Value(row).ToTime().Format(time.DateOnly)
@@ -330,8 +468,14 @@ func arrowValueToParameter(
 		parameter.Type = dbsql.SqlDate
 		parameter.Value = values.(*array.Date64).Value(row).ToTime().Format(time.DateOnly)
 	case arrow.TIMESTAMP:
-		parameter.Type = dbsql.SqlTimestamp
-		parameter.Value = timestampConverter(values.(*array.Timestamp).Value(row)).Format(time.RFC3339Nano)
+		value := timestampConverter(values.(*array.Timestamp).Value(row))
+		if values.DataType().(*arrow.TimestampType).TimeZone == "" {
+			parameter.Type = dbsql.SqlString
+			parameter.Value = value.Format("2006-01-02 15:04:05.999999999")
+		} else {
+			parameter.Type = dbsql.SqlTimestamp
+			parameter.Value = value.Format(time.RFC3339Nano)
+		}
 	default:
 		return parameter, adbc.Error{
 			Code: adbc.StatusNotImplemented,
@@ -349,6 +493,7 @@ type parameterizedQueryReader struct {
 	iterator *parameterRowIterator
 	execute  parameterQueryExecutor
 	current  array.RecordReader
+	record   arrow.RecordBatch
 	schema   *arrow.Schema
 	err      error
 	closed   bool
@@ -378,11 +523,16 @@ func newParameterizedQueryReader(iterator *parameterRowIterator, execute paramet
 		return nil, adbc.Error{Code: adbc.StatusInternal, Msg: "parameterized query returned no schema"}
 	}
 
+	fields := reader.Schema().Fields()
+	for i := range fields {
+		fields[i].Nullable = true
+	}
+	metadata := reader.Schema().Metadata()
 	result := &parameterizedQueryReader{
 		iterator: iterator,
 		execute:  execute,
 		current:  reader,
-		schema:   reader.Schema(),
+		schema:   arrow.NewSchemaWithEndian(fields, &metadata, reader.Schema().Endianness()),
 	}
 	result.refCount.Store(1)
 	return result, nil
@@ -393,6 +543,10 @@ func (r *parameterizedQueryReader) Schema() *arrow.Schema {
 }
 
 func (r *parameterizedQueryReader) Next() bool {
+	if r.record != nil {
+		r.record.Release()
+		r.record = nil
+	}
 	if r.closed || r.err != nil || r.iterator == nil {
 		return false
 	}
@@ -400,6 +554,8 @@ func (r *parameterizedQueryReader) Next() bool {
 	for {
 		if r.current != nil {
 			if r.current.Next() {
+				record := r.current.RecordBatch()
+				r.record = array.NewRecordBatch(r.schema, record.Columns(), record.NumRows())
 				return true
 			}
 			if err := r.current.Err(); err != nil {
@@ -433,7 +589,7 @@ func (r *parameterizedQueryReader) Next() bool {
 			r.fail(adbc.Error{Code: adbc.StatusInternal, Msg: "parameterized query returned no schema"})
 			return false
 		}
-		if !reader.Schema().Equal(r.schema) {
+		if !parameterResultSchemasCompatible(r.schema, reader.Schema()) {
 			reader.Release()
 			r.fail(adbc.Error{
 				Code: adbc.StatusInvalidData,
@@ -446,10 +602,28 @@ func (r *parameterizedQueryReader) Next() bool {
 }
 
 func (r *parameterizedQueryReader) RecordBatch() arrow.RecordBatch {
-	if r.current == nil {
-		return nil
+	return r.record
+}
+
+func parameterResultSchemasCompatible(expected, actual *arrow.Schema) bool {
+	if expected.NumFields() != actual.NumFields() || expected.Endianness() != actual.Endianness() {
+		return false
 	}
-	return r.current.RecordBatch()
+	for i, field := range expected.Fields() {
+		other := actual.Field(i)
+		if !arrow.TypeEqual(field.Type, other.Type, arrow.CheckMetadata()) {
+			return false
+		}
+		// Extension metadata affects interpretation even when storage types match.
+		for _, key := range []string{"ARROW:extension:name", "ARROW:extension:metadata"} {
+			value, ok := field.Metadata.GetValue(key)
+			otherValue, otherOK := other.Metadata.GetValue(key)
+			if ok != otherOK || value != otherValue {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (r *parameterizedQueryReader) Record() arrow.RecordBatch {
@@ -467,6 +641,10 @@ func (r *parameterizedQueryReader) Retain() {
 func (r *parameterizedQueryReader) Release() {
 	if r.refCount.Add(-1) == 0 {
 		r.closed = true
+		if r.record != nil {
+			r.record.Release()
+			r.record = nil
+		}
 		if r.current != nil {
 			r.current.Release()
 			r.current = nil

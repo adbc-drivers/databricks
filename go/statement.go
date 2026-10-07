@@ -111,6 +111,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		if err != nil {
 			return nil, -1, err
 		}
+		query, err = iterator.bindQuery(query)
+		if err != nil {
+			iterator.Release()
+			return nil, -1, err
+		}
 		reader, err := newParameterizedQueryReader(iterator, func(args []driver.NamedValue) (array.RecordReader, error) {
 			return executeQuery(ctx, conn, query, args, errorHelper)
 		})
@@ -178,7 +183,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
 	}
 	if s.boundStream == nil {
-		return s.executeUpdate(ctx, nil)
+		return s.executeUpdate(ctx, s.query, nil)
 	}
 
 	stream := s.boundStream
@@ -188,6 +193,10 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		return -1, err
 	}
 	defer iterator.Release()
+	query, err := iterator.bindQuery(s.query)
+	if err != nil {
+		return -1, err
+	}
 
 	var totalRows int64
 	executed := false
@@ -201,7 +210,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 			break
 		}
 		executed = true
-		rows, err := s.executeUpdate(ctx, args)
+		rows, err := s.executeUpdate(ctx, query, args)
 		if err != nil {
 			return -1, err
 		}
@@ -220,7 +229,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 	return totalRows, nil
 }
 
-func (s *statementImpl) executeUpdate(ctx context.Context, args []driver.NamedValue) (int64, error) {
+func (s *statementImpl) executeUpdate(ctx context.Context, query string, args []driver.NamedValue) (int64, error) {
 	values := make([]any, len(args))
 	for i := range args {
 		values[i] = args[i].Value
@@ -228,10 +237,10 @@ func (s *statementImpl) executeUpdate(ctx context.Context, args []driver.NamedVa
 
 	var result sql.Result
 	var err error
-	if s.prepared != nil {
+	if s.prepared != nil && query == s.query {
 		result, err = s.prepared.ExecContext(ctx, values...)
 	} else {
-		result, err = s.conn.conn.ExecContext(ctx, s.query, values...)
+		result, err = s.conn.conn.ExecContext(ctx, query, values...)
 	}
 	if err != nil {
 		return -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute update: %v", err)

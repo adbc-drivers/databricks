@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -269,7 +270,7 @@ func (d *DatabricksQuirks) GetMetadata(code adbc.InfoCode) any {
 	case adbc.InfoDriverArrowVersion:
 		return "v18.8.0"
 	case adbc.InfoVendorVersion:
-		return "2026.36"
+		return regexp.MustCompile(`^(?:[0-9]+\.[0-9]+.*)$`)
 	case adbc.InfoVendorArrowVersion:
 		return "(unknown or development build)"
 	case adbc.InfoDriverADBCVersion:

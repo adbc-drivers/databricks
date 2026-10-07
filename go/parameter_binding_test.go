@@ -70,14 +70,22 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{Name: "u8", Type: arrow.PrimitiveTypes.Uint8},
 		{Name: "u16", Type: arrow.PrimitiveTypes.Uint16},
 		{Name: "u32", Type: arrow.PrimitiveTypes.Uint32},
+		{Name: "f16", Type: arrow.FixedWidthTypes.Float16},
 		{Name: "f32", Type: arrow.PrimitiveTypes.Float32},
 		{Name: "f64", Type: arrow.PrimitiveTypes.Float64},
 		{Name: "str", Type: arrow.BinaryTypes.String},
 		{Name: "large_str", Type: arrow.BinaryTypes.LargeString},
 		{Name: "str_view", Type: arrow.BinaryTypes.StringView},
+		{Name: "binary", Type: arrow.BinaryTypes.Binary},
+		{Name: "large_binary", Type: arrow.BinaryTypes.LargeBinary},
+		{Name: "binary_view", Type: arrow.BinaryTypes.BinaryView},
+		{Name: "fixed_binary", Type: &arrow.FixedSizeBinaryType{ByteWidth: 3}},
+		{Name: "decimal128", Type: &arrow.Decimal128Type{Precision: 10, Scale: 2}},
+		{Name: "decimal256", Type: &arrow.Decimal256Type{Precision: 38, Scale: 3}},
 		{Name: "date32", Type: arrow.FixedWidthTypes.Date32},
 		{Name: "date64", Type: arrow.FixedWidthTypes.Date64},
 		{Name: "timestamp", Type: timestampType},
+		{Name: "timestamp_ntz", Type: &arrow.TimestampType{Unit: arrow.Microsecond}},
 	}, nil)
 
 	record, _, err := array.RecordFromJSON(memory.DefaultAllocator, schema, strings.NewReader(`[
@@ -91,14 +99,22 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 			"u8": 8,
 			"u16": 16,
 			"u32": 32,
+			"f16": 1.25,
 			"f32": 1.25,
 			"f64": 2.5,
 			"str": "string",
 			"large_str": "large",
 			"str_view": "view",
+			"binary": "AP9B",
+			"large_binary": "",
+			"binary_view": "AP9B",
+			"fixed_binary": "AP9B",
+			"decimal128": "-123.45",
+			"decimal256": "12345678901234567890123456789012345.678",
 			"date32": "2026-09-22",
 			"date64": "2026-09-23",
-			"timestamp": "2026-09-22T12:34:56.123456Z"
+			"timestamp": "2026-09-22T12:34:56.123456Z",
+			"timestamp_ntz": "2026-09-22T12:34:56.123456"
 		}
 	]`))
 	require.NoError(t, err)
@@ -128,14 +144,22 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 		{"u8", dbsql.SqlSmallInt, "8"},
 		{"u16", dbsql.SqlInteger, "16"},
 		{"u32", dbsql.SqlBigInt, "32"},
+		{"f16", dbsql.SqlFloat, "1.25"},
 		{"f32", dbsql.SqlFloat, "1.25"},
 		{"f64", dbsql.SqlDouble, "2.5"},
 		{"str", dbsql.SqlString, "string"},
 		{"large_str", dbsql.SqlString, "large"},
 		{"str_view", dbsql.SqlString, "view"},
+		{"binary", dbsql.SqlString, "00ff41"},
+		{"large_binary", dbsql.SqlString, ""},
+		{"binary_view", dbsql.SqlString, "00ff41"},
+		{"fixed_binary", dbsql.SqlString, "00ff41"},
+		{"decimal128", dbsql.SqlString, "-123.45"},
+		{"decimal256", dbsql.SqlString, "12345678901234567890123456789012345.678"},
 		{"date32", dbsql.SqlDate, "2026-09-22"},
 		{"date64", dbsql.SqlDate, "2026-09-23"},
 		{"timestamp", dbsql.SqlTimestamp, "2026-09-22T12:34:56.123456Z"},
+		{"timestamp_ntz", dbsql.SqlString, "2026-09-22 12:34:56.123456"},
 	}
 	require.Len(t, args, len(expected))
 	for i, want := range expected {
@@ -193,8 +217,8 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			status: adbc.StatusInvalidArgument,
 		},
 		{
-			name:   "binary",
-			fields: []arrow.Field{{Name: "binary", Type: arrow.BinaryTypes.Binary}},
+			name:   "time",
+			fields: []arrow.Field{{Name: "time", Type: arrow.FixedWidthTypes.Time32s}},
 			status: adbc.StatusNotImplemented,
 		},
 		{
@@ -208,18 +232,18 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 			status: adbc.StatusNotImplemented,
 		},
 		{
-			name:   "decimal128",
-			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal128Type{Precision: 10, Scale: 2}}},
+			name:   "decimal precision above 38",
+			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal256Type{Precision: 39, Scale: 2}}},
 			status: adbc.StatusNotImplemented,
 		},
 		{
-			name:   "decimal256",
-			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal256Type{Precision: 38, Scale: 3}}},
+			name:   "negative decimal scale",
+			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal128Type{Precision: 10, Scale: -2}}},
 			status: adbc.StatusNotImplemented,
 		},
 		{
-			name:   "timestamp without timezone",
-			fields: []arrow.Field{{Name: "timestamp", Type: &arrow.TimestampType{Unit: arrow.Microsecond}}},
+			name:   "decimal scale above precision",
+			fields: []arrow.Field{{Name: "decimal", Type: &arrow.Decimal128Type{Precision: 10, Scale: 11}}},
 			status: adbc.StatusNotImplemented,
 		},
 		{
@@ -243,14 +267,29 @@ func TestParameterRowIteratorRejectsInvalidSchemas(t *testing.T) {
 	}
 }
 
-func TestParameterRowIteratorRejectsTypedNull(t *testing.T) {
-	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32, Nullable: true}}, nil)
-	record, _, err := array.RecordFromJSON(
-		memory.DefaultAllocator,
-		schema,
-		strings.NewReader(`[{"value": null}]`),
-	)
-	require.NoError(t, err)
+func TestParameterRowIteratorConvertsTypedNulls(t *testing.T) {
+	types := []arrow.DataType{
+		arrow.FixedWidthTypes.Boolean,
+		arrow.PrimitiveTypes.Int64,
+		arrow.PrimitiveTypes.Float32,
+		arrow.BinaryTypes.String,
+		arrow.BinaryTypes.Binary,
+		arrow.FixedWidthTypes.Date32,
+		&arrow.TimestampType{Unit: arrow.Microsecond},
+		&arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"},
+		&arrow.Decimal128Type{Precision: 10, Scale: 2},
+	}
+	fields := make([]arrow.Field, len(types))
+	for i, dataType := range types {
+		fields[i] = arrow.Field{Name: fmt.Sprintf("value%d", i), Type: dataType, Nullable: true}
+	}
+	schema := arrow.NewSchema(fields, nil)
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	for _, field := range builder.Fields() {
+		field.AppendNull()
+	}
+	record := builder.NewRecordBatch()
+	builder.Release()
 	defer record.Release()
 
 	stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
@@ -259,8 +298,109 @@ func TestParameterRowIteratorRejectsTypedNull(t *testing.T) {
 	require.NoError(t, err)
 	defer iterator.Release()
 
-	_, _, err = iterator.Next()
-	requireADBCStatus(t, err, adbc.StatusNotImplemented)
+	args, ok, err := iterator.Next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	for i, arg := range args {
+		require.Equal(t, dbsql.Parameter{Name: fields[i].Name, Type: dbsql.SqlVoid}, arg.Value)
+	}
+}
+
+func TestBindQuery(t *testing.T) {
+	fields := []arrow.Field{
+		{Name: "value", Type: arrow.PrimitiveTypes.Int32},
+		{Name: "decimal", Type: &arrow.Decimal128Type{Precision: 10, Scale: 2}},
+		{Name: "binary", Type: arrow.BinaryTypes.Binary},
+		{Name: "timestamp", Type: &arrow.TimestampType{Unit: arrow.Microsecond}},
+	}
+	tests := []struct {
+		name, query, expected string
+		fields                []arrow.Field
+	}{
+		{
+			name: "positional", fields: fields,
+			query:    "SELECT ?, ?, ?, ?",
+			expected: "SELECT CAST(? AS INT), CAST(? AS DECIMAL(10,2)), unhex(?), CAST(? AS TIMESTAMP_NTZ)",
+		},
+		{
+			name: "named", fields: fields,
+			query:    "SELECT :timestamp, :value, :binary, :decimal, :value",
+			expected: "SELECT CAST(:timestamp AS TIMESTAMP_NTZ), CAST(:value AS INT), unhex(:binary), CAST(:decimal AS DECIMAL(10,2)), CAST(:value AS INT)",
+		},
+		{
+			name: "quoted and commented markers", fields: fields[:1],
+			query:    "SELECT ':value ?', \"?\", `:value`, :value -- :value ?\n/* outer /* :value ? */ */",
+			expected: "SELECT ':value ?', \"?\", `:value`, CAST(:value AS INT) -- :value ?\n/* outer /* :value ? */ */",
+		},
+		{
+			name: "variant path and cast operator", fields: fields[:1],
+			query:    "SELECT v:value, v::STRING, :value",
+			expected: "SELECT v:value, v::STRING, CAST(:value AS INT)",
+		},
+		{
+			name: "name prefix", fields: append(fields[:1:1], arrow.Field{Name: "value2", Type: arrow.PrimitiveTypes.Int64}),
+			query:    "SELECT :value2, :value",
+			expected: "SELECT CAST(:value2 AS BIGINT), CAST(:value AS INT)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stream, err := array.NewRecordReader(arrow.NewSchema(test.fields, nil), nil)
+			require.NoError(t, err)
+			iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(test.query))
+			require.NoError(t, err)
+			defer iterator.Release()
+			query, err := iterator.bindQuery(test.query)
+			require.NoError(t, err)
+			require.Equal(t, test.expected, query)
+		})
+	}
+}
+
+func TestBindQueryRejectsInvalidParameters(t *testing.T) {
+	for _, query := range []string{"SELECT ?, ?", "SELECT 1", "SELECT :missing", "SELECT ?, :value"} {
+		t.Run(query, func(t *testing.T) {
+			schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
+			stream, err := array.NewRecordReader(schema, nil)
+			require.NoError(t, err)
+			iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(query))
+			require.NoError(t, err)
+			defer iterator.Release()
+			_, err = iterator.bindQuery(query)
+			requireADBCStatus(t, err, adbc.StatusInvalidArgument)
+		})
+	}
+}
+
+func TestParameterizedQueryReaderReleasesBuffers(t *testing.T) {
+	for _, consume := range []bool{false, true} {
+		t.Run(fmt.Sprintf("consume=%t", consume), func(t *testing.T) {
+			allocator := memory.NewCheckedAllocator(memory.DefaultAllocator)
+			defer allocator.AssertSize(t, 0)
+			schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
+			newReader := func() array.RecordReader {
+				record, _, err := array.RecordFromJSON(allocator, schema, strings.NewReader(`[{"value":1},{"value":2}]`))
+				require.NoError(t, err)
+				defer record.Release()
+				reader, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
+				require.NoError(t, err)
+				return reader
+			}
+			iterator, err := newParameterRowIterator(newReader(), namedParameterBinding)
+			require.NoError(t, err)
+			reader, err := newParameterizedQueryReader(iterator, func(_ []driver.NamedValue) (array.RecordReader, error) {
+				return newReader(), nil
+			})
+			require.NoError(t, err)
+			defer reader.Release()
+			require.True(t, reader.Next())
+			if consume {
+				for reader.Next() {
+				}
+				require.NoError(t, reader.Err())
+			}
+		})
+	}
 }
 
 func TestParameterizedQueryReaderConcatenatesResultsLazily(t *testing.T) {
@@ -303,7 +443,11 @@ func TestParameterizedQueryReaderRejectsSchemaChanges(t *testing.T) {
 		executions++
 		schema := arrow.NewSchema([]arrow.Field{{Name: "result", Type: arrow.PrimitiveTypes.Int32}}, nil)
 		if executions == 2 {
-			schema = arrow.NewSchema([]arrow.Field{{Name: "changed", Type: arrow.PrimitiveTypes.Int32}}, nil)
+			schema = arrow.NewSchema([]arrow.Field{{Name: "changed", Type: arrow.PrimitiveTypes.Int64}}, nil)
+			record, _, err := array.RecordFromJSON(memory.DefaultAllocator, schema, strings.NewReader(`[{"changed":2}]`))
+			require.NoError(t, err)
+			defer record.Release()
+			return array.NewRecordReader(schema, []arrow.RecordBatch{record})
 		}
 		return newInt32RecordReader(t, schema, []int32{int32(executions)}), nil
 	})
@@ -312,6 +456,53 @@ func TestParameterizedQueryReaderRejectsSchemaChanges(t *testing.T) {
 	require.True(t, reader.Next())
 	require.False(t, reader.Next())
 	requireADBCStatus(t, reader.Err(), adbc.StatusInvalidData)
+}
+
+func TestParameterizedQueryReaderNormalizesResultSchemas(t *testing.T) {
+	parameterSchema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int32}}, nil)
+	iterator, err := newParameterRowIterator(
+		newInt32RecordReader(t, parameterSchema, []int32{1, 2}), namedParameterBinding)
+	require.NoError(t, err)
+	executions := 0
+	reader, err := newParameterizedQueryReader(iterator, func(_ []driver.NamedValue) (array.RecordReader, error) {
+		executions++
+		schema := arrow.NewSchema([]arrow.Field{{
+			Name: fmt.Sprintf("(1 + %d)", executions), Type: arrow.PrimitiveTypes.Int32,
+			Nullable: executions == 2,
+		}}, nil)
+		return newInt32RecordReader(t, schema, []int32{int32(executions)}), nil
+	})
+	require.NoError(t, err)
+	defer reader.Release()
+	require.True(t, reader.Schema().Field(0).Nullable)
+	require.Equal(t, "(1 + 1)", reader.Schema().Field(0).Name)
+
+	var retained []arrow.RecordBatch
+	for reader.Next() {
+		record := reader.RecordBatch()
+		require.True(t, record.Schema().Equal(reader.Schema()))
+		record.Retain()
+		retained = append(retained, record)
+	}
+	require.NoError(t, reader.Err())
+	require.Len(t, retained, 2)
+	for i, record := range retained {
+		require.EqualValues(t, i+1, record.Column(0).(*array.Int32).Value(0))
+		record.Release()
+	}
+	require.Nil(t, reader.RecordBatch())
+}
+
+func TestParameterResultSchemasRejectExtensionChanges(t *testing.T) {
+	expected := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.BinaryTypes.Binary,
+		Metadata: arrow.NewMetadata([]string{"ARROW:extension:name"}, []string{"first"}),
+	}}, nil)
+	actual := arrow.NewSchema([]arrow.Field{{
+		Name: "value", Type: arrow.BinaryTypes.Binary,
+		Metadata: arrow.NewMetadata([]string{"ARROW:extension:name"}, []string{"second"}),
+	}}, nil)
+	require.False(t, parameterResultSchemasCompatible(expected, actual))
 }
 
 func TestParameterizedQueryReaderRejectsEmptyInput(t *testing.T) {
@@ -333,9 +524,12 @@ func TestExecuteUpdateRunsOncePerParameterRow(t *testing.T) {
 		name          string
 		query         string
 		parameterName string
+		prepared      bool
 	}{
 		{name: "named", query: "UPDATE target SET value = :value", parameterName: "value"},
 		{name: "positional", query: "UPDATE target SET value = ?", parameterName: ""},
+		{name: "prepared named", query: "UPDATE target SET value = :value", parameterName: "value", prepared: true},
+		{name: "prepared positional", query: "UPDATE target SET value = ?", parameterName: "", prepared: true},
 	}
 
 	for _, test := range tests {
@@ -356,11 +550,20 @@ func TestExecuteUpdateRunsOncePerParameterRow(t *testing.T) {
 				query:       test.query,
 				boundStream: newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3}),
 			}
+			defer func() { require.NoError(t, statement.Close()) }()
+			if test.prepared {
+				require.NoError(t, statement.Prepare(context.Background()))
+			}
 
 			rowsAffected, err := statement.ExecuteUpdate(context.Background())
 			require.NoError(t, err)
 			require.EqualValues(t, 3, rowsAffected)
 			require.Len(t, capture.calls, 3)
+			expectedQuery := "UPDATE target SET value = CAST(? AS INT)"
+			if test.parameterName != "" {
+				expectedQuery = "UPDATE target SET value = CAST(:value AS INT)"
+			}
+			require.Equal(t, []string{expectedQuery, expectedQuery, expectedQuery}, capture.queries)
 			for i, args := range capture.calls {
 				require.Len(t, args, 1)
 				parameter := args[0].Value.(dbsql.Parameter)
@@ -435,11 +638,12 @@ func (d parameterCaptureDriver) Open(string) (driver.Conn, error) {
 }
 
 type parameterCaptureConn struct {
-	calls [][]driver.NamedValue
+	calls   [][]driver.NamedValue
+	queries []string
 }
 
-func (c *parameterCaptureConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("not implemented")
+func (c *parameterCaptureConn) Prepare(query string) (driver.Stmt, error) {
+	return parameterCaptureStmt{conn: c, query: query}, nil
 }
 
 func (c *parameterCaptureConn) Close() error {
@@ -454,8 +658,29 @@ func (c *parameterCaptureConn) CheckNamedValue(*driver.NamedValue) error {
 	return nil
 }
 
-func (c *parameterCaptureConn) ExecContext(_ context.Context, _ string, args []driver.NamedValue) (driver.Result, error) {
+func (c *parameterCaptureConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	c.queries = append(c.queries, query)
 	clonedArgs := append([]driver.NamedValue(nil), args...)
 	c.calls = append(c.calls, clonedArgs)
 	return driver.RowsAffected(1), nil
+}
+
+type parameterCaptureStmt struct {
+	conn  *parameterCaptureConn
+	query string
+}
+
+func (s parameterCaptureStmt) Close() error  { return nil }
+func (s parameterCaptureStmt) NumInput() int { return -1 }
+
+func (s parameterCaptureStmt) Exec(values []driver.Value) (driver.Result, error) {
+	args := make([]driver.NamedValue, len(values))
+	for i, value := range values {
+		args[i] = driver.NamedValue{Ordinal: i + 1, Value: value}
+	}
+	return s.conn.ExecContext(context.Background(), s.query, args)
+}
+
+func (s parameterCaptureStmt) Query([]driver.Value) (driver.Rows, error) {
+	return nil, errors.New("not implemented")
 }
