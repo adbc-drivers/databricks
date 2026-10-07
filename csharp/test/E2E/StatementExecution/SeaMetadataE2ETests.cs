@@ -23,6 +23,7 @@ using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Apache.Arrow.Adbc.Tests.Metadata;
 using AdbcDrivers.HiveServer2;
 using Xunit;
 using Xunit.Abstractions;
@@ -62,6 +63,32 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         private void SkipIfNotConfigured()
         {
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
+        }
+
+        private void SkipIfNativeMetadataNotRequired()
+        {
+            SkipIfNotConfigured();
+            Skip.IfNot(TestConfiguration.RequireNativeMetadata,
+                "Set requireNativeMetadata=true in the test configuration for a native-capable warehouse.");
+        }
+
+        private async Task<MetadataRecordingConnection> CreateMetadataRecordingConnection()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.Protocol] = "rest";
+            parameters[DatabricksParameters.EnableMultipleCatalogSupport] = "true";
+            var connection = new MetadataRecordingConnection(parameters);
+            try
+            {
+                await connection.OpenAsync();
+                connection.Statements.Clear();
+                return connection;
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
         }
 
         // Connection on whatever protocol the test suite was configured with (driver
@@ -223,9 +250,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         public async Task NativeMetadata_UsesNativeResponse(
             string command, string table, string? foreignTable, string expectedColumn, string expectedValue)
         {
-            SkipIfNotConfigured();
-            Skip.IfNot(TestConfiguration.RequireNativeMetadata,
-                "Set requireNativeMetadata=true in the test configuration for a native-capable warehouse.");
+            SkipIfNativeMetadataNotRequired();
 
             using var conn = CreateConnection(new Dictionary<string, string>(RestProtocol)
             {
@@ -236,6 +261,35 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 requireNative: true, foreignTable: foreignTable);
 
             Assert.Contains(rows, row => row[expectedColumn] == expectedValue);
+        }
+
+        [SkippableFact]
+        public async Task NativeMetadata_GetObjects_UsesNativeResponse()
+        {
+            SkipIfNativeMetadataNotRequired();
+            using var connection = await CreateMetadataRecordingConnection();
+            using var stream = connection.GetObjects(
+                AdbcConnection.GetObjectsDepth.All, TestCatalog, TestSchema, TestTable, null, null);
+            using var batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+
+            var catalog = Assert.Single(GetObjectsParser.ParseCatalog(batch, null),
+                catalog => catalog.Name == TestCatalog);
+            var schema = Assert.Single(catalog.DbSchemas!, schema => schema.Name == TestSchema);
+            var table = Assert.Single(schema.Tables!, table => table.Name == TestTable);
+            Assert.Contains(table.Columns!, column => column.Name == "c_int");
+            connection.AssertNativeResponses("SHOW CATALOGS", "SHOW SCHEMAS", "SHOW TABLES", "SHOW COLUMNS");
+        }
+
+        [SkippableFact]
+        public async Task NativeMetadata_GetTableSchema_UsesNativeResponse()
+        {
+            SkipIfNativeMetadataNotRequired();
+            using var connection = await CreateMetadataRecordingConnection();
+            var schema = connection.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
+
+            Assert.Equal("customer_id", schema.FieldsList[0].Name);
+            connection.AssertNativeResponses("SHOW COLUMNS");
         }
 
         [SkippableFact]

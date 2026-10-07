@@ -82,7 +82,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(batch);
             List<AdbcCatalog> catalogs = GetObjectsParser.ParseCatalog(batch, null);
-            Assert.Equal(expectedCatalogs.OrderBy(name => name), catalogs.Select(catalog => catalog.Name).OrderBy(name => name));
+            Assert.Equal<string?>(expectedCatalogs.OrderBy(name => name),
+                catalogs.Select(catalog => catalog.Name).OrderBy(name => name));
             foreach (AdbcCatalog catalog in catalogs)
             {
                 AdbcDbSchema schema = Assert.Single(catalog.DbSchemas!);
@@ -171,7 +172,46 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }
         }
 
-        private static StatementExecutionConnection CreateConnection(HttpClient http)
+        [Theory]
+        [InlineData(0, false, false)]
+        [InlineData(1, false, true)]
+        [InlineData(2, false, false)]
+        [InlineData(3, false, true)]
+        [InlineData(0, true, false)]
+        [InlineData(1, true, true)]
+        [InlineData(2, true, false)]
+        [InlineData(3, true, false)]
+        public void NativeResponseAssertions_CheckInternalMetadataStatements(
+            int mode, bool getObjects, bool expectedNative)
+        {
+            using HttpClient http = CreateHttpClient(mode, new List<string>());
+            using var connection = (MetadataRecordingConnection)CreateConnection(http, recordMetadata: true);
+            string[] commands;
+            if (getObjects)
+            {
+                using var stream = connection.GetObjects(
+                    AdbcConnection.GetObjectsDepth.All, "ma%", "default", "t1", null, null);
+                commands = new[] { "SHOW CATALOGS", "SHOW SCHEMAS", "SHOW TABLES", "SHOW COLUMNS" };
+            }
+            else
+            {
+                Assert.NotEmpty(connection.GetTableSchema("main", "default", "t1").FieldsList);
+                commands = new[] { "SHOW COLUMNS" };
+            }
+
+            if (expectedNative)
+            {
+                connection.AssertNativeResponses(commands);
+            }
+            else
+            {
+                var exception = Assert.ThrowsAny<Xunit.Sdk.XunitException>(
+                    () => connection.AssertNativeResponses(commands));
+                Assert.Contains("fell back to SHOW", exception.Message);
+            }
+        }
+
+        private static StatementExecutionConnection CreateConnection(HttpClient http, bool recordMetadata = false)
         {
             Dictionary<string, string> properties = new Dictionary<string, string>
             {
@@ -179,7 +219,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 [DatabricksParameters.WarehouseId] = "wh-1",
                 [SparkParameters.AccessToken] = "token",
             };
-            return new StatementExecutionConnection(properties, http);
+            return recordMetadata
+                ? new MetadataRecordingConnection(properties, http)
+                : new StatementExecutionConnection(properties, http);
         }
 
         private static HttpClient CreateHttpClient(int mode, List<string> statements)

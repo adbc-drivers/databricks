@@ -59,7 +59,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     // Native metadata can expand wildcard characters in a quoted catalog.
                     if (catalogField != null && requestedCatalog != null &&
                         (operation == MetadataOperation.GetTables || requireExactCatalog) &&
-                        !string.Equals(requestedCatalog, columns.String(catalogField, row) ?? sourceCatalog, StringComparison.OrdinalIgnoreCase))
+                        !MetadataRowReader.MatchesCatalog(requestedCatalog, columns.String(catalogField, row) ?? sourceCatalog))
                         continue;
                     if (operation == MetadataOperation.GetTables && tableTypes != null &&
                         !tableTypes.Contains(DefaultTableType(columns.String("TABLE_TYPE", row))))
@@ -77,29 +77,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             if (operation == MetadataOperation.GetTables)
             {
-                int[] sortColumns = { 3, 0, 1, 2 };
-                rows.Sort((left, right) =>
-                {
-                    foreach (int column in sortColumns)
-                    {
-                        string? leftValue = left.Columns.String(schema.FieldsList[column].Name, left.Index);
-                        string? rightValue = right.Columns.String(schema.FieldsList[column].Name, right.Index);
-                        if (column == 3)
-                        {
-                            leftValue = DefaultTableType(leftValue);
-                            rightValue = DefaultTableType(rightValue);
-                        }
-                        if (column == 0)
-                        {
-                            leftValue ??= left.Catalog;
-                            rightValue ??= right.Catalog;
-                        }
-                        int result = StringComparer.Ordinal.Compare(
-                            leftValue, rightValue);
-                        if (result != 0) return result;
-                    }
-                    return 0;
-                });
+                rows.Sort((left, right) => MetadataRowReader.CompareTables(
+                    (left.Columns.String("TABLE_CAT", left.Index) ?? left.Catalog,
+                     left.Columns.String("TABLE_SCHEM", left.Index),
+                     left.Columns.String("TABLE_NAME", left.Index),
+                     left.Columns.String("TABLE_TYPE", left.Index)),
+                    (right.Columns.String("TABLE_CAT", right.Index) ?? right.Catalog,
+                     right.Columns.String("TABLE_SCHEM", right.Index),
+                     right.Columns.String("TABLE_NAME", right.Index),
+                     right.Columns.String("TABLE_TYPE", right.Index))));
             }
 
             var arrays = new List<IArrowArray>(schema.FieldsList.Count);

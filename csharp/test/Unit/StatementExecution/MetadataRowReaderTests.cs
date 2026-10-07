@@ -16,6 +16,7 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -75,7 +76,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void NativeColumns_FilterExactCatalogAndFillMissingCatalog()
+        public async Task NativeColumns_FilterExactCatalogAndFillMissingCatalog()
         {
             using var batch = NativeColumns("foo_bar", "fooxbar", null);
             var result = new ColumnMetadataResult(new[]
@@ -94,6 +95,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 Assert.True(row.Nullable);
                 Assert.True(row.IsAutoIncrement);
             });
+
+            var flat = NativeMetadataResultBuilder.Build(result.Batches,
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
+                sourceCatalogs: result.SourceCatalogs, requireExactSourceCatalog: true);
+            using var stream = flat.Stream!;
+            using var output = (await stream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(result.Rows.Count, output.Length);
+            var catalogs = (StringArray)output.Column("TABLE_CAT");
+            Assert.Equal(result.Rows.Select(row => row.Catalog),
+                Enumerable.Range(0, output.Length).Select(row => catalogs.GetString(row)));
         }
 
         [Fact]

@@ -268,8 +268,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         internal static int CompareTables(TableRow left, TableRow right)
+            => CompareTables(
+                (left.Catalog, left.Schema, left.Table, left.TableType),
+                (right.Catalog, right.Schema, right.Table, right.TableType));
+
+        internal static int CompareTables(
+            (string? Catalog, string? Schema, string? Table, string? TableType) left,
+            (string? Catalog, string? Schema, string? Table, string? TableType) right)
         {
-            int order = StringComparer.Ordinal.Compare(left.TableType, right.TableType);
+            int order = StringComparer.Ordinal.Compare(
+                NativeMetadataResultBuilder.DefaultTableType(left.TableType),
+                NativeMetadataResultBuilder.DefaultTableType(right.TableType));
             if (order != 0) return order;
             order = StringComparer.Ordinal.Compare(left.Catalog, right.Catalog);
             if (order != 0) return order;

@@ -94,6 +94,63 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Theory]
+        [InlineData(null, false)]
+        [InlineData(null, true)]
+        [InlineData("main", false)]
+        [InlineData("main", true)]
+        public async Task GetTables_FlatAndDecodedResultsShareCatalogFilteringAndOrdering(
+            string? catalog, bool filterTypes)
+        {
+            var schema = MetadataSchemaFactory.CreateTablesSchema();
+            (string? Catalog, string Schema, string Table, string? Type)[] tables =
+            {
+                ("other", "a", "other_table", "TABLE"),
+                (null, "b", "b_a", ""),
+                ("main", "a", "a_view", "VIEW"),
+                ("main", "a", "a_z", "TABLE"),
+                ("main", "a", "a_a", null),
+                ("main", "b", "b_z", "TABLE"),
+                ("main", "a", "a_b", "TABLE"),
+            };
+            var arrays = schema.FieldsList.Select(field =>
+            {
+                var builder = new StringArray.Builder();
+                foreach (var table in tables)
+                {
+                    string? value = field.Name switch
+                    {
+                        "TABLE_CAT" => table.Catalog,
+                        "TABLE_SCHEM" => table.Schema,
+                        "TABLE_NAME" => table.Table,
+                        "TABLE_TYPE" => table.Type,
+                        _ => "server_value",
+                    };
+                    if (value == null) builder.AppendNull(); else builder.Append(value);
+                }
+                return (IArrowArray)builder.Build();
+            }).ToArray();
+            using var nativeBatch = new RecordBatch(schema, arrays, tables.Length);
+            string[]? tableTypes = filterTypes ? new[] { "TABLE" } : null;
+            var decoded = MetadataRowReader.Tables(
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), catalog, tableTypes);
+            var result = NativeMetadataResultBuilder.Build(
+                new[] { nativeBatch }, schema, MetadataOperation.GetTables,
+                requestedCatalog: catalog, tableTypes: tableTypes);
+            using var reader = result.Stream!;
+            using var batch = (await reader.ReadNextRecordBatchAsync())!;
+            var names = (StringArray)batch.Column("TABLE_NAME");
+            string[] expected = catalog == null
+                ? new[] { "b_a", "a_a", "a_b", "a_z", "b_z", "other_table" }
+                : new[] { "a_a", "a_b", "a_z", "b_a", "b_z" };
+            if (!filterTypes) expected = expected.Concat(new[] { "a_view" }).ToArray();
+
+            Assert.Equal(expected, decoded.Select(row => row.Table));
+            Assert.Equal(expected, Enumerable.Range(0, batch.Length).Select(row => names.GetString(row)));
+            Assert.All(Enumerable.Range(0, batch.Length), row =>
+                Assert.Equal("server_value", ((StringArray)batch.Column("TYPE_CAT")).GetString(row)));
+        }
+
+        [Theory]
         [InlineData((int)MetadataOperation.GetSchemas, "%", true, 0)]
         [InlineData((int)MetadataOperation.GetColumns, "compar%", true, 0)]
         [InlineData((int)MetadataOperation.GetColumns, @"comparator\_tests", true, 0)]
