@@ -612,11 +612,6 @@ Run tests matching a pattern:
 dotnet test --filter "FullyQualifiedName~CloudFetch"
 ```
 
-Run `dotnet test --filter "FullyQualifiedName~SeaMetadataE2ETests.NativeMetadata_"`
-against a configured native-capable warehouse. These tests cover the six flat
-operations, `GetObjects`, and `GetTableSchema`, and always fail if any metadata
-request falls back to SHOW.
-
 #### Verbose Test Output
 
 Get detailed test output:

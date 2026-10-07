@@ -716,7 +716,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 ColumnMetadataResult columns;
                 try
                 {
-                    columns = ReadColumnsAsync(resolvedCatalog, dbSchema, tableName, null, cts.Token)
+                    columns = ReadColumnsAsync(
+                        resolvedCatalog, dbSchema, tableName, null, cts.Token, requireExactCatalog: true)
                         .GetAwaiter().GetResult();
                 }
                 catch (Exception ex) when (cts.IsCancellationRequested && ex is not TimeoutException)

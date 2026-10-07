@@ -52,13 +52,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static byte[] ArrowNativeColumns(Field[] fields)
+        private static byte[] ArrowNativeColumns(Field[] fields, string nativeCatalog)
         {
             var schema = new Schema(fields, null);
             var arrays = fields.Select(field =>
             {
                 if (field.Name == "TABLE_CAT")
-                    return (IArrowArray)new StringArray.Builder().Append("foo_bar").Append("fooxbar").Build();
+                    return (IArrowArray)new StringArray.Builder().Append(nativeCatalog).Append("fooxbar").Build();
                 string value = field.Name switch
                 {
                     "TABLE_SCHEM" => "default",
@@ -87,15 +87,16 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static HttpClient CreateHttpClient(bool overlappingNativeColumns = false, Field[]? columnFields = null)
+        private static HttpClient CreateHttpClient(
+            bool overlappingNativeColumns = false, Field[]? columnFields = null, string nativeCatalog = "foo_bar")
         {
             byte[] catalogs = overlappingNativeColumns
-                ? ArrowStrings("TABLE_CAT", "foo_bar", "fooxbar")
+                ? ArrowStrings("TABLE_CAT", nativeCatalog, "fooxbar")
                 : ArrowStrings("TABLE_CAT", "main", "other");
             Field[] nativeColumnFields = columnFields ??
                 MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Take(23).ToArray();
             byte[] columns = overlappingNativeColumns
-                ? ArrowNativeColumns(nativeColumnFields)
+                ? ArrowNativeColumns(nativeColumnFields, nativeCatalog)
                 : ArrowStrings("col_name", "a");
             var handler = new Mock<HttpMessageHandler>();
             handler.Protected()
@@ -227,6 +228,27 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.StartsWith("Invalid native GetColumns result:", exception.Message);
             Assert.Contains(expectedError, exception.Message);
+        }
+
+        [Theory]
+        [InlineData("foo_bar", "foo_bar", 1)]
+        [InlineData("FOO_BAR", "foo_bar", 1)]
+        [InlineData("foo%bar", "foo%bar", 1)]
+        [InlineData("FOO%BAR", "foo%bar", 1)]
+        [InlineData("fooxbar", "foo_bar", 1)]
+        [InlineData("missing", "foo_bar", 0)]
+        [InlineData(null, "foo_bar", 2)]
+        [InlineData("SPARK", "foo_bar", 2)]
+        public void GetTableSchema_UsesExactNativeCatalogScope(
+            string? requestedCatalog, string nativeCatalog, int expectedFields)
+        {
+            using var http = CreateHttpClient(overlappingNativeColumns: true, nativeCatalog: nativeCatalog);
+            using var connection = CreateConnection(http);
+
+            var schema = connection.GetTableSchema(requestedCatalog, "default", "t");
+
+            Assert.Equal(expectedFields, schema.FieldsList.Count);
+            Assert.All(schema.FieldsList, field => Assert.Equal("a", field.Name));
         }
 
         [Fact]
