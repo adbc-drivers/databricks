@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -113,6 +114,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	opts := []dbsql.ConnOption{
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
+		dbsql.WithArrowNativeDecimal(true),
 	}
 
 	if d.accessToken != "" {
@@ -187,13 +189,36 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	return opts, nil
 }
 
+func (d *databaseImpl) resolveConnectionDSN() (string, error) {
+	dsn := d.uri
+	if !strings.HasPrefix(dsn, "https://") && !strings.HasPrefix(dsn, "http://") {
+		dsn = "https://" + dsn
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI"}
+	}
+	parameters, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI query parameters"}
+	}
+	if !parameters.Has("useArrowNativeDecimal") {
+		parameters.Set("useArrowNativeDecimal", "true")
+	}
+	parsed.RawQuery = parameters.Encode()
+	return parsed.String(), nil
+}
+
 func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, error) {
 	var db *sql.DB
 
 	// Use URI if provided
 	if d.uri != "" {
-		var err error
-		db, err = sql.Open("databricks", d.uri)
+		dsn, err := d.resolveConnectionDSN()
+		if err != nil {
+			return nil, err
+		}
+		db, err = sql.Open("databricks", dsn)
 		if err != nil {
 			return nil, err
 		}
