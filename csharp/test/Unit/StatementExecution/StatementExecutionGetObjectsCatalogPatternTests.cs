@@ -58,7 +58,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 (@"foo\_bar", new[] { "foo_bar" }),
                 ("foo_bar", new[] { "foo_bar", "fooxbar" }),
             };
-            foreach (int mode in new[] { 0, 1, 2 })
+            foreach (int mode in new[] { 0, 1, 2, 3 })
             {
                 foreach (AdbcConnection.GetObjectsDepth depth in new[]
                     { AdbcConnection.GetObjectsDepth.Tables, AdbcConnection.GetObjectsDepth.All })
@@ -145,6 +145,32 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.False(statement.IsNativeMetadataResult);
         }
 
+        [Fact]
+        public async Task GetColumns_MixedResponses_PreserveNativeAttributesAndFlatOrdinals()
+        {
+            using HttpClient http = CreateHttpClient(3, new List<string>());
+            using StatementExecutionConnection connection = CreateConnection(http);
+            using StatementExecutionStatement statement = (StatementExecutionStatement)connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SqlQuery = "GetColumns";
+            using IArrowArrayStream stream = statement.ExecuteQuery().Stream!;
+            using RecordBatch batch = (await stream.ReadNextRecordBatchAsync())!;
+
+            Assert.False(statement.IsNativeMetadataResult);
+            Assert.Equal(s_catalogs.Length, batch.Length);
+            var catalogs = (StringArray)batch.Column("TABLE_CAT");
+            var ordinals = (Int32Array)batch.Column("ORDINAL_POSITION");
+            var defaults = (StringArray)batch.Column("COLUMN_DEF");
+            var autoIncrement = (StringArray)batch.Column("IS_AUTO_INCREMENT");
+            for (int row = 0; row < batch.Length; row++)
+            {
+                Assert.Equal(0, ordinals.GetValue(row));
+                bool native = catalogs.GetString(row) == "main";
+                Assert.Equal(native ? "7" : null, defaults.GetString(row));
+                Assert.Equal(native ? "YES" : "NO", autoIncrement.GetString(row));
+            }
+        }
+
         private static StatementExecutionConnection CreateConnection(HttpClient http)
         {
             Dictionary<string, string> properties = new Dictionary<string, string>
@@ -174,9 +200,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     string sql = json.RootElement.GetProperty("statement").GetString()!;
                     statements.Add(sql);
                     string operation = request.Headers.GetValues("x-databricks-metadata-operation-type").Single();
-                    bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables");
                     string? requestedCatalog = sql.Contains("IN ALL CATALOGS") || operation == "GetCatalogs"
                         ? null : s_catalogs.Single(catalog => sql.Contains($"`{catalog}`"));
+                    bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables") ||
+                        (mode == 3 && (operation != "GetColumns" || requestedCatalog == "main"));
                     string[] catalogs = requestedCatalog == null ? s_catalogs : new[] { requestedCatalog };
                     if (native && requestedCatalog != null && operation is "GetTables" or "GetColumns")
                         catalogs = catalogs.Concat(new[] { requestedCatalog == "other" ? "main" : "other" }).ToArray();
@@ -258,6 +285,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                             "TABLE_TYPE" or "tableType" => "TABLE",
                             "COLUMN_NAME" or "col_name" => "a",
                             "TYPE_NAME" or "columnType" => "INT",
+                            "COLUMN_DEF" => "7",
+                            "IS_AUTO_INCREMENT" => "YES",
                             "isNullable" => "true",
                             _ => null,
                         };

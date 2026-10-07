@@ -193,11 +193,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var http = CreateHttpClient();
             using var connection = CreateConnection(http);
 
-            var batches = await connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None);
+            var result = await connection.ReadColumnsAsync(null, null, null, null, CancellationToken.None);
 
-            Assert.Equal(2, batches.Count);
-            Assert.Equal("main", batches[0].Catalog);
-            Assert.Equal("other", batches[1].Catalog);
+            Assert.Equal(2, result.Batches.Count);
+            Assert.Equal(new[] { "main", "other" }, result.SourceCatalogs);
         }
 
         [Theory]
@@ -224,7 +223,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var connection = CreateConnection(http);
 
             var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
-                connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None));
+                connection.ReadColumnsAsync(null, null, null, null, CancellationToken.None));
 
             Assert.StartsWith("Invalid native GetColumns result:", exception.Message);
             Assert.Contains(expectedError, exception.Message);
@@ -236,21 +235,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var http = CreateHttpClient(overlappingNativeColumns: true);
             using var connection = CreateConnection(http);
 
-            var batches = await connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None);
+            var columns = await connection.ReadColumnsAsync(null, null, null, null, CancellationToken.None);
 
-            Assert.Equal(2, batches.Count);
-            Assert.All(batches, result =>
-            {
-                Assert.True(result.IsNative);
-                Assert.Equal(1, result.Batch.Length);
-                Assert.Equal(result.Catalog, ((StringArray)result.Batch.Column("TABLE_CAT")).GetString(0));
-            });
-            Assert.Equal(new[] { "foo_bar", "fooxbar" }, batches.Select(result => result.Catalog));
+            Assert.True(columns.IsNative);
+            Assert.Equal(2, columns.Batches.Count);
+            Assert.All(columns.Batches, batch => Assert.Equal(2, batch.Length));
+            Assert.Equal(new[] { "foo_bar", "fooxbar" }, columns.Rows.Select(row => row.Catalog));
 
             var result = NativeMetadataResultBuilder.Build(
-                batches.Select(batch => batch.Batch).ToArray(),
+                columns.Batches,
                 MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
-                sourceCatalogs: batches.Select(batch => batch.Catalog).ToArray());
+                sourceCatalogs: columns.SourceCatalogs, requireExactSourceCatalog: true);
             using var stream = result.Stream!;
             Assert.Equal(2, result.RowCount);
 

@@ -31,7 +31,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             IReadOnlyList<RecordBatch> batches, Schema schema, MetadataOperation operation,
             string? requestedCatalog = null, IReadOnlyCollection<string>? tableTypes = null,
             string? parentCatalog = null, string? parentSchema = null, string? parentTable = null,
-            IReadOnlyList<string?>? sourceCatalogs = null, bool requireExactCatalog = false)
+            IReadOnlyList<string?>? sourceCatalogs = null, bool requireExactCatalog = false,
+            bool requireExactSourceCatalog = false)
         {
             // C# exposes BASE_TYPE_NAME after the 23 Thrift GetColumns fields.
             int sourceColumns = schema.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
@@ -52,6 +53,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 for (int row = 0; row < batch.Length; row++)
                 {
+                    if (operation == MetadataOperation.GetColumns && requireExactSourceCatalog &&
+                        !MetadataRowReader.MatchesCatalog(sourceCatalog, columns.String("TABLE_CAT", row) ?? sourceCatalog))
+                        continue;
                     // Native metadata can expand wildcard characters in a quoted catalog.
                     if (catalogField != null && requestedCatalog != null &&
                         (operation == MetadataOperation.GetTables || requireExactCatalog) &&

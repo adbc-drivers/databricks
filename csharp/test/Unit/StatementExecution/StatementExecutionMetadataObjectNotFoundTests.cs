@@ -201,7 +201,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             };
             using var connection = new StatementExecutionConnection(properties, http);
 
-            await connection.ExecuteNativeMetadataSqlAsync("SHOW CATALOGS", MetadataOperation.GetCatalogs, CancellationToken.None);
+            await connection.ExecuteMetadataCommandAsync("SHOW CATALOGS", MetadataOperation.GetCatalogs, CancellationToken.None);
 
             Assert.True(hasSyncHeader);
             Assert.True(hasOperationHeader);
