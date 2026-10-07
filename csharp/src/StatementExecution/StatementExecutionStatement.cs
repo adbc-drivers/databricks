@@ -1447,7 +1447,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     : null;
 
                 int count = 0;
-                foreach (var row in MetadataRowReader.Tables(result, catalog, tableTypeFilter))
+                foreach (var row in MetadataRowReader.Tables(
+                    result, catalog, tableTypeFilter, normalizeEmptyTableType: false))
                 {
                     tableCatBuilder.Append(row.Catalog);
                     tableSchemaBuilder.Append(row.Schema);

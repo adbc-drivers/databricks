@@ -745,9 +745,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<string>> IGetObjectsDataProvider.GetCatalogsAsync(string? catalogPattern, CancellationToken cancellationToken)
         {
-            if (catalogPattern == "")
-                return System.Array.Empty<string>();
-
             string sql = new ShowCatalogsCommand(catalogPattern).Build();
             MetadataBatches result;
             try
@@ -766,18 +763,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         async Task<IReadOnlyList<(string catalog, string schema)>> IGetObjectsDataProvider.GetSchemasAsync(string? catalogPattern, string? schemaPattern, CancellationToken cancellationToken)
         {
-            var result = new List<(string catalog, string schema)>();
-            foreach (string? catalog in await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false))
-            {
-                result.AddRange(await GetSchemasInCatalogAsync(catalog, schemaPattern, cancellationToken).ConfigureAwait(false));
-            }
-            return result;
-        }
-
-        private async Task<IReadOnlyList<(string catalog, string schema)>> GetSchemasInCatalogAsync(
-            string? catalog, string? schemaPattern, CancellationToken cancellationToken)
-        {
-            string sql = new ShowSchemasCommand(catalog, schemaPattern).Build();
+            string sql = new ShowSchemasCommand(catalogPattern, schemaPattern).Build();
 
             MetadataBatches result;
             try
@@ -790,7 +776,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return System.Array.Empty<(string, string)>();
             }
 
-            return MetadataRowReader.Schemas(result, catalog)
+            return MetadataRowReader.Schemas(result, catalogPattern)
                 .Select(row => (row.Catalog, row.Schema)).ToList();
         }
 
@@ -807,23 +793,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 return System.Array.Empty<(string, string, string, string)>();
             }
 
-            IReadOnlyList<string?> catalogs = await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false);
-            var result = new List<TableRow>();
-            foreach (string? catalog in catalogs)
-            {
-                result.AddRange(await GetTablesInCatalogAsync(
-                    catalog, schemaPattern, tableNamePattern, tableTypes, cancellationToken).ConfigureAwait(false));
-            }
-            if (catalogs.Count > 1)
-                result.Sort(MetadataRowReader.CompareTables);
-            return result.Select(row => (row.Catalog, row.Schema, row.Table, row.TableType)).ToList();
-        }
-
-        private async Task<IReadOnlyList<TableRow>> GetTablesInCatalogAsync(
-            string? catalog, string? schemaPattern, string? tableNamePattern, IReadOnlyList<string>? tableTypes,
-            CancellationToken cancellationToken)
-        {
-            string sql = new ShowTablesCommand(catalog, schemaPattern, tableNamePattern).Build();
+            string sql = new ShowTablesCommand(catalogPattern, schemaPattern, tableNamePattern).Build();
 
             MetadataBatches result;
             try
@@ -833,9 +803,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
             catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
             {
-                return System.Array.Empty<TableRow>();
+                return System.Array.Empty<(string, string, string, string)>();
             }
-            return MetadataRowReader.Tables(result, catalog, tableTypes);
+            return MetadataRowReader.Tables(result, catalogPattern, tableTypes)
+                .Select(row => (row.Catalog, row.Schema, row.Table, row.TableType)).ToList();
         }
 
         async Task IGetObjectsDataProvider.PopulateColumnInfoAsync(string? catalogPattern, string? schemaPattern,
@@ -843,30 +814,31 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Dictionary<string, Dictionary<string, Dictionary<string, TableInfo>>> catalogMap,
             CancellationToken cancellationToken)
         {
-            var columns = new List<ColumnRow>();
-            foreach (string? catalog in await ResolveGetObjectsCatalogsAsync(catalogPattern, cancellationToken).ConfigureAwait(false))
+            ColumnMetadataResult columns;
+            try
             {
-                try
-                {
-                    var result = await ReadColumnsAsync(catalog, schemaPattern, tablePattern,
-                        columnPattern, cancellationToken, requireExactCatalog: true).ConfigureAwait(false);
-                    columns.AddRange(result.Rows);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    // A catalog may disappear after enumeration.
-                }
+                columns = await ReadColumnsAsync(catalogPattern, schemaPattern, tablePattern,
+                    columnPattern, cancellationToken, requireExactCatalog: true).ConfigureAwait(false);
+            }
+            catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
+            {
+                return;
             }
 
-            foreach (var column in columns)
+            var tablePositions = new Dictionary<string, int>();
+            foreach (var column in columns.Rows)
             {
                 if (column.Catalog == null || column.Schema == null || column.Table == null ||
                     string.IsNullOrEmpty(column.Name)) continue;
+                string tableKey = $"{column.Catalog}.{column.Schema}.{column.Table}";
+                tablePositions.TryGetValue(tableKey, out int position);
+                tablePositions[tableKey] = ++position;
+                int ordinal = column.IsNative ? checked(column.Ordinal + 1) : position;
                 if (catalogMap.TryGetValue(column.Catalog, out var schemaMap)
                     && schemaMap.TryGetValue(column.Schema, out var tableMap)
                     && tableMap.TryGetValue(column.Table, out var tableInfo))
                     ColumnMetadataHelper.PopulateTableInfoFromTypeName(
-                        tableInfo, column.Name, column.TypeName, checked(column.Ordinal + 1), column.Nullable,
+                        tableInfo, column.Name, column.TypeName, ordinal, column.Nullable,
                         columnDefault: column.Default, isAutoIncrement: column.IsAutoIncrement);
             }
         }
@@ -939,22 +911,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     sourceCatalog, requireExactCatalog: true));
             }
             return new ColumnMetadataResult(results);
-        }
-
-        private async Task<IReadOnlyList<string?>> ResolveGetObjectsCatalogsAsync(
-            string? pattern, CancellationToken cancellationToken)
-        {
-            if (pattern == null || (pattern.Length > 0 && pattern.All(character => character == '%')))
-                return new string?[] { null };
-            if (pattern == "")
-                return System.Array.Empty<string?>();
-            if (pattern.IndexOfAny(new[] { '%', '_', '\\' }) < 0)
-                return new string?[] { pattern };
-
-            // SHOW scopes are identifiers; resolve LIKE patterns to concrete catalog names.
-            IReadOnlyList<string> catalogs = await ((IGetObjectsDataProvider)this)
-                .GetCatalogsAsync(pattern, cancellationToken).ConfigureAwait(false);
-            return catalogs.Select(catalog => (string?)catalog).ToList();
         }
 
         internal bool EnablePKFK => _enablePKFK;

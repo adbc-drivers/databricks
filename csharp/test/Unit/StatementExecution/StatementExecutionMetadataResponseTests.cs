@@ -38,7 +38,7 @@ using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
-    public class StatementExecutionGetObjectsCatalogPatternTests
+    public class StatementExecutionMetadataResponseTests
     {
         private static readonly string[] s_catalogs = { "main", "marketing", "other", "foo_bar", "fooxbar" };
 
@@ -71,11 +71,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         [Theory]
         [MemberData(nameof(CatalogPatterns))]
-        public async Task GetObjects_ResolvesCatalogPatterns(
+        public async Task GetObjects_PreservesExistingCatalogScope(
             int mode, AdbcConnection.GetObjectsDepth depth, string? pattern, string[] expectedCatalogs)
         {
             List<string> statements = new List<string>();
-            using HttpClient http = CreateHttpClient(mode, statements);
+            using HttpClient http = CreateHttpClient(mode, statements, expectedCatalogs);
             using StatementExecutionConnection connection = CreateConnection(http);
             using IArrowArrayStream stream = connection.GetObjects(depth, pattern, "default", "t1", null, null);
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
@@ -86,6 +86,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 catalogs.Select(catalog => catalog.Name).OrderBy(name => name));
             foreach (AdbcCatalog catalog in catalogs)
             {
+                if (pattern != null && !string.Equals(pattern, catalog.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    Assert.Empty(catalog.DbSchemas!);
+                    continue;
+                }
+
                 AdbcDbSchema schema = Assert.Single(catalog.DbSchemas!);
                 Assert.Equal("default", schema.Name);
                 AdbcTable table = Assert.Single(schema.Tables!);
@@ -98,10 +104,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 }
             }
 
-            if (pattern == "")
-                Assert.Empty(statements);
-            if (pattern == "main")
-                Assert.Single(statements, sql => sql.StartsWith("SHOW CATALOGS", StringComparison.Ordinal));
+            int catalogQueries = pattern == null && depth == AdbcConnection.GetObjectsDepth.All ? 2 : 1;
+            Assert.Equal(catalogQueries,
+                statements.Count(sql => sql.StartsWith("SHOW CATALOGS", StringComparison.Ordinal)));
+            if (pattern != null)
+            {
+                string scope = $"`{pattern.ToLowerInvariant()}`";
+                Assert.Contains(statements, sql => sql.StartsWith("SHOW SCHEMAS", StringComparison.Ordinal)
+                    && sql.Contains(scope));
+                Assert.Contains(statements, sql => sql.StartsWith("SHOW TABLES", StringComparison.Ordinal)
+                    && sql.Contains(scope));
+                if (depth == AdbcConnection.GetObjectsDepth.All)
+                    Assert.Contains(statements, sql => sql.StartsWith("SHOW COLUMNS", StringComparison.Ordinal)
+                        && sql.Contains(scope));
+            }
         }
 
         [Theory]
@@ -173,6 +189,40 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task GetObjects_SkippedShowColumnsDoNotChangeOrdinals(bool native)
+        {
+            using HttpClient http = CreateHttpClient(
+                native ? 1 : 0, new List<string>(), new[] { "main" }, prependEmptyShowColumn: true);
+            using StatementExecutionConnection connection = CreateConnection(http);
+            using IArrowArrayStream stream = connection.GetObjects(
+                AdbcConnection.GetObjectsDepth.All, "main", "default", "t1", null, null);
+            using RecordBatch batch = (await stream.ReadNextRecordBatchAsync())!;
+            var catalog = Assert.Single(GetObjectsParser.ParseCatalog(batch, null));
+            var schema = Assert.Single(catalog.DbSchemas!);
+            var table = Assert.Single(schema.Tables!);
+            var column = Assert.Single(table.Columns!);
+            Assert.Equal("a", column.Name);
+            Assert.Equal(1, column.OrdinalPosition);
+
+            using var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            statement.SetOption(ApacheParameters.CatalogName, "main");
+            statement.SetOption(ApacheParameters.SchemaName, "default");
+            statement.SetOption(ApacheParameters.TableName, "t1");
+            statement.SqlQuery = "GetColumns";
+            using var flatStream = statement.ExecuteQuery().Stream!;
+            using var flatBatch = (await flatStream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(native ? 1 : 2, flatBatch.Length);
+            Assert.Equal(native ? "a" : "", ((StringArray)flatBatch.Column("COLUMN_NAME")).GetString(0));
+            Assert.Equal(0, ((Int32Array)flatBatch.Column("ORDINAL_POSITION")).GetValue(0));
+            if (!native)
+                Assert.Equal(1, ((Int32Array)flatBatch.Column("ORDINAL_POSITION")).GetValue(1));
+        }
+
+        [Theory]
         [InlineData(0, false, false)]
         [InlineData(1, false, true)]
         [InlineData(2, false, false)]
@@ -190,7 +240,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             if (getObjects)
             {
                 using var stream = connection.GetObjects(
-                    AdbcConnection.GetObjectsDepth.All, "ma%", "default", "t1", null, null);
+                    AdbcConnection.GetObjectsDepth.All, null, "default", "t1", null, null);
                 commands = new[] { "SHOW CATALOGS", "SHOW SCHEMAS", "SHOW TABLES", "SHOW COLUMNS" };
             }
             else
@@ -224,7 +274,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 : new StatementExecutionConnection(properties, http);
         }
 
-        private static HttpClient CreateHttpClient(int mode, List<string> statements)
+        private static HttpClient CreateHttpClient(
+            int mode, List<string> statements, string[]? matchingCatalogs = null, bool prependEmptyShowColumn = false)
         {
             Mock<HttpMessageHandler> handler = new Mock<HttpMessageHandler>();
             handler.Protected()
@@ -242,11 +293,27 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     string sql = json.RootElement.GetProperty("statement").GetString()!;
                     statements.Add(sql);
                     string operation = request.Headers.GetValues("x-databricks-metadata-operation-type").Single();
-                    string? requestedCatalog = sql.Contains("IN ALL CATALOGS") || operation == "GetCatalogs"
-                        ? null : s_catalogs.Single(catalog => sql.Contains($"`{catalog}`"));
+                    bool allCatalogs = sql.Contains("IN ALL CATALOGS") || operation == "GetCatalogs";
+                    string? requestedCatalog = allCatalogs
+                        ? null : s_catalogs.SingleOrDefault(catalog => sql.Contains($"`{catalog}`"));
+                    if (!allCatalogs && requestedCatalog == null)
+                    {
+                        return Response(JsonSerializer.Serialize(new
+                        {
+                            statement_id = "stmt-1",
+                            status = new
+                            {
+                                state = "FAILED",
+                                sql_state = "42704",
+                                error = new { error_code = "CATALOG_NOT_FOUND", message = "Catalog not found" },
+                            },
+                        }));
+                    }
                     bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables") ||
                         (mode == 3 && (operation != "GetColumns" || requestedCatalog == "main"));
                     string[] catalogs = requestedCatalog == null ? s_catalogs : new[] { requestedCatalog };
+                    if (!native && operation == "GetCatalogs")
+                        catalogs = matchingCatalogs ?? s_catalogs;
                     if (native && requestedCatalog != null && operation is "GetTables" or "GetColumns")
                         catalogs = catalogs.Concat(new[] { requestedCatalog == "other" ? "main" : "other" }).ToArray();
 
@@ -254,6 +321,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     using MemoryStream raw = new MemoryStream();
                     using (ArrowStreamWriter writer = new ArrowStreamWriter(raw, batch.Schema))
                     {
+                        if (!native && operation == "GetColumns" && prependEmptyShowColumn)
+                        {
+                            using var empty = CreateBatch(operation, false, catalogs, requestedCatalog, columnName: "");
+                            writer.WriteRecordBatch(empty);
+                        }
                         writer.WriteRecordBatch(batch);
                         writer.WriteEnd();
                     }
@@ -286,7 +358,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         private static HttpResponseMessage Response(string body)
             => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
 
-        private static RecordBatch CreateBatch(string operation, bool native, string[] catalogs, string? requestedCatalog)
+        private static RecordBatch CreateBatch(
+            string operation, bool native, string[] catalogs, string? requestedCatalog, string columnName = "a")
         {
             Schema schema;
             if (native)
@@ -325,7 +398,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                             "TABLE_SCHEM" or "databaseName" or "namespace" => "default",
                             "TABLE_NAME" or "tableName" => "t1",
                             "TABLE_TYPE" or "tableType" => "TABLE",
-                            "COLUMN_NAME" or "col_name" => "a",
+                            "COLUMN_NAME" or "col_name" => columnName,
                             "TYPE_NAME" or "columnType" => "INT",
                             "COLUMN_DEF" => "7",
                             "IS_AUTO_INCREMENT" => "YES",

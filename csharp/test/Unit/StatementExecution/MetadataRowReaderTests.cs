@@ -30,13 +30,36 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public void Catalogs_ApplyTheSamePatternForBothFormats(bool native)
+        public void Catalogs_OnlyFilterNativeResponses(bool native)
         {
             using var batch = Strings((native ? "TABLE_CAT" : "catalog",
                 new string?[] { "ma_catalog", "maxcatalog", "other" }));
             var result = new MetadataBatches(new List<RecordBatch> { batch }, native);
 
-            Assert.Equal(new[] { "ma_catalog" }, MetadataRowReader.Catalogs(result, @"ma\_%"));
+            string[] expected = native
+                ? new[] { "ma_catalog" }
+                : new[] { "ma_catalog", "maxcatalog", "other" };
+            Assert.Equal(expected, MetadataRowReader.Catalogs(result, @"ma\_%"));
+        }
+
+        [Theory]
+        [InlineData(false, "")]
+        [InlineData(true, "TABLE")]
+        public void ShowTables_EmptyTypeKeepsExistingCallSiteBehavior(bool normalizeEmptyTableType, string expectedType)
+        {
+            using var batch = Strings(
+                ("catalogName", new string?[] { "main" }),
+                ("namespace", new string?[] { "default" }),
+                ("tableName", new string?[] { "t" }),
+                ("tableType", new string?[] { "" }));
+            var result = new MetadataBatches(new List<RecordBatch> { batch }, false);
+
+            var row = Assert.Single(MetadataRowReader.Tables(
+                result, "main", normalizeEmptyTableType: normalizeEmptyTableType));
+            Assert.Equal(expectedType, row.TableType);
+            var filtered = MetadataRowReader.Tables(
+                result, "main", new[] { "TABLE" }, normalizeEmptyTableType: normalizeEmptyTableType);
+            Assert.Equal(normalizeEmptyTableType ? 1 : 0, filtered.Count);
         }
 
         [Fact]

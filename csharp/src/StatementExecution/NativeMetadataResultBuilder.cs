@@ -144,9 +144,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             {
                                 string? typeName = columns.String("TYPE_NAME", row);
                                 if (typeName != null)
-                                    value = name == "COLUMN_SIZE"
-                                        ? ColumnMetadataHelper.GetColumnSizeDefault(typeName)
-                                        : ColumnMetadataHelper.GetDecimalDigitsDefault(typeName);
+                                {
+                                    string baseName = ColumnMetadataHelper.GetBaseTypeName(typeName);
+                                    if (baseName is "DECIMAL" or "NUMERIC")
+                                        value = name == "COLUMN_SIZE"
+                                            ? ColumnMetadataHelper.GetColumnSizeDefault(typeName)
+                                            : ColumnMetadataHelper.GetDecimalDigitsDefault(typeName);
+                                    else if (name == "COLUMN_SIZE" && baseName is
+                                        "CHAR" or "NCHAR" or "VARCHAR" or "NVARCHAR" or "LONGVARCHAR" or "LONGNVARCHAR" or "STRING")
+                                        value = ColumnMetadataHelper.GetColumnSizeDefault(typeName);
+                                }
                             }
                             if (value.HasValue) int32.Append(checked((int)value.Value)); else int32.AppendNull();
                         }

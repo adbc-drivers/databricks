@@ -28,8 +28,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 {
     public class NativeMetadataResultBuilderTests
     {
-        [Fact]
-        public async Task GetColumns_NormalizesSizeAndScaleAndKeepsFlatOrdinalZeroBased()
+        [Theory]
+        [InlineData("DECIMAL(10,2)", 0, 0, 10, 2)]
+        [InlineData("INT", 10, 0, 10, 0)]
+        [InlineData("FLOAT", 7, 7, 7, 7)]
+        [InlineData("BINARY", 99, 3, 99, 3)]
+        [InlineData("VARCHAR(42)", 99, 3, 42, 3)]
+        [InlineData("CHAR(4)", 99, 3, 4, 3)]
+        public async Task GetColumns_OnlyNormalizesThriftPrecisionAndScale(
+            string typeName, int columnSize, int decimalDigits, int expectedSize, int expectedScale)
         {
             var target = MetadataSchemaFactory.CreateColumnMetadataSchema();
             Assert.Equal(24, target.FieldsList.Count);
@@ -46,13 +53,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 else if (field.Name == "TABLE_CAT")
                     arrays.Add(new StringArray.Builder().AppendNull().Build());
                 else if (field.DataType.TypeId == ArrowTypeId.String)
-                    arrays.Add(new StringArray.Builder().Append(field.Name == "TYPE_NAME" ? "DECIMAL(10,2)" : "value").Build());
+                    arrays.Add(new StringArray.Builder().Append(field.Name == "TYPE_NAME" ? typeName : "value").Build());
                 else if (field.DataType.TypeId == ArrowTypeId.Int8)
                     arrays.Add(new Int8Array.Builder().Append(0).Build());
                 else if (field.DataType.TypeId == ArrowTypeId.Int16)
                     arrays.Add(new Int16Array.Builder().Append(0).Build());
                 else
-                    arrays.Add(new Int32Array.Builder().Append(0).Build());
+                    arrays.Add(new Int32Array.Builder().Append(field.Name == "COLUMN_SIZE" ? columnSize
+                        : field.Name == "DECIMAL_DIGITS" ? decimalDigits : 0).Build());
             }
 
             using var nativeBatch = new RecordBatch(source, arrays.ToArray(), 1);
@@ -63,11 +71,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var batch = await reader.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
-            Assert.Equal(10, ((Int32Array)batch.Column(6)).GetValue(0));
-            Assert.Equal(2, ((Int32Array)batch.Column(8)).GetValue(0));
+            Assert.Equal(expectedSize, ((Int32Array)batch.Column(6)).GetValue(0));
+            Assert.Equal(expectedScale, ((Int32Array)batch.Column(8)).GetValue(0));
             Assert.Equal(0, ((Int32Array)batch.Column(16)).GetValue(0));
             Assert.Equal("main", ((StringArray)batch.Column(0)).GetString(0));
-            Assert.Equal("DECIMAL", ((StringArray)batch.Column(23)).GetString(0));
+            Assert.Equal(ColumnMetadataHelper.GetBaseTypeName(typeName), ((StringArray)batch.Column(23)).GetString(0));
         }
 
         [Fact]

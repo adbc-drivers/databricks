@@ -93,7 +93,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
     internal readonly struct ColumnRow
     {
         internal ColumnRow(string? catalog, string? schema, string? table, string name,
-            string typeName, bool nullable, int ordinal, string? columnDefault, bool isAutoIncrement)
+            string typeName, bool nullable, int ordinal, string? columnDefault, bool isAutoIncrement,
+            bool isNative = false)
         {
             Catalog = catalog;
             Schema = schema;
@@ -104,6 +105,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Ordinal = ordinal;
             Default = columnDefault;
             IsAutoIncrement = isAutoIncrement;
+            IsNative = isNative;
         }
 
         internal string? Catalog { get; }
@@ -115,6 +117,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal int Ordinal { get; }
         internal string? Default { get; }
         internal bool IsAutoIncrement { get; }
+        internal bool IsNative { get; }
     }
 
     internal static class MetadataRowReader
@@ -131,7 +134,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 for (int row = 0; row < batch.Length; row++)
                 {
                     string? catalog = result.IsNative ? native!.String("TABLE_CAT", row) : String(show, row);
-                    if (catalog != null && MatchesCatalogPattern(pattern, catalog))
+                    if (catalog != null && (!result.IsNative || MatchesCatalogPattern(pattern, catalog)))
                         yield return catalog;
                 }
             }
@@ -169,7 +172,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         }
 
         internal static List<TableRow> Tables(
-            MetadataBatches result, string? catalog, IReadOnlyCollection<string>? tableTypes = null)
+            MetadataBatches result, string? catalog, IReadOnlyCollection<string>? tableTypes = null,
+            bool normalizeEmptyTableType = true)
         {
             var rows = new List<TableRow>();
             foreach (var batch in result.Batches)
@@ -191,8 +195,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string? table = result.IsNative ? native!.String("TABLE_NAME", row) : String(tables, row);
                     if ((!result.IsNative && rowCatalog == null) || schema == null || table == null) continue;
                     if (result.IsNative && !MatchesCatalog(catalog, rowCatalog)) continue;
-                    string type = NativeMetadataResultBuilder.DefaultTableType(
-                        result.IsNative ? native!.String("TABLE_TYPE", row) : String(types, row));
+                    string? serverType = result.IsNative ? native!.String("TABLE_TYPE", row) : String(types, row);
+                    string type = result.IsNative || normalizeEmptyTableType
+                        ? NativeMetadataResultBuilder.DefaultTableType(serverType)
+                        : serverType ?? "TABLE";
                     if (tableTypes != null && !tableTypes.Contains(type)) continue;
                     rows.Add(new TableRow(rowCatalog ?? "", schema, table, type,
                         (result.IsNative ? native!.String("REMARKS", row) : String(remarks, row)) ?? ""));
@@ -239,7 +245,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     columns.String("TABLE_NAME", row), name, typeName, columns.Integer("NULLABLE", row) == 1,
                     checked((int)(columns.Integer("ORDINAL_POSITION", row) ?? 0)),
                     columns.String("COLUMN_DEF", row),
-                    string.Equals(columns.String("IS_AUTO_INCREMENT", row), "YES", StringComparison.OrdinalIgnoreCase));
+                    string.Equals(columns.String("IS_AUTO_INCREMENT", row), "YES", StringComparison.OrdinalIgnoreCase),
+                    isNative: true);
             }
         }
 
