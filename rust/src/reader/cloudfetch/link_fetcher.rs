@@ -65,7 +65,9 @@ use tracing::{debug, error};
 /// - Thrift uses `row_offset`
 ///
 /// Both parameters are passed to methods; implementations use the relevant one.
+// async-trait adds a redundant #[must_use] to the generated boxed futures.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait ChunkLinkFetcher: Send + Sync + std::fmt::Debug {
     /// Fetch the next batch of chunk links.
     ///
