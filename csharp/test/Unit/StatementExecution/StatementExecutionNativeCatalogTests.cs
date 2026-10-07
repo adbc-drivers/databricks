@@ -87,12 +87,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return raw.ToArray();
         }
 
-        private static HttpClient CreateHttpClient(bool overlappingNativeColumns = false)
+        private static HttpClient CreateHttpClient(bool overlappingNativeColumns = false, Field[]? columnFields = null)
         {
             byte[] catalogs = overlappingNativeColumns
                 ? ArrowStrings("TABLE_CAT", "foo_bar", "fooxbar")
                 : ArrowStrings("TABLE_CAT", "main", "other");
-            Field[] nativeColumnFields = MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Take(23).ToArray();
+            Field[] nativeColumnFields = columnFields ??
+                MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Take(23).ToArray();
             byte[] columns = overlappingNativeColumns
                 ? ArrowNativeColumns(nativeColumnFields)
                 : ArrowStrings("col_name", "a");
@@ -197,6 +198,36 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(2, batches.Count);
             Assert.Equal("main", batches[0].Catalog);
             Assert.Equal("other", batches[1].Catalog);
+        }
+
+        [Theory]
+        [InlineData("count", "expected 23 columns, found 22")]
+        [InlineData("name", "missing TABLE_CAT")]
+        [InlineData("type", "unexpected type or duplicate TABLE_SCHEM")]
+        public async Task ColumnFanout_MalformedNativeColumns_PropagatesValidationError(
+            string invalidSchema, string expectedError)
+        {
+            Field[] fields = MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Take(23).ToArray();
+            switch (invalidSchema)
+            {
+                case "count":
+                    fields = fields.Skip(1).ToArray();
+                    break;
+                case "name":
+                    fields[0] = new Field("UNKNOWN", fields[0].DataType, true);
+                    break;
+                case "type":
+                    fields[1] = new Field(fields[1].Name, Int32Type.Default, true);
+                    break;
+            }
+            using var http = CreateHttpClient(overlappingNativeColumns: true, columnFields: fields);
+            using var connection = CreateConnection(http);
+
+            var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
+                connection.ExecuteNativeShowColumnsAsync(null, null, null, null, CancellationToken.None));
+
+            Assert.StartsWith("Invalid native GetColumns result:", exception.Message);
+            Assert.Contains(expectedError, exception.Message);
         }
 
         [Fact]

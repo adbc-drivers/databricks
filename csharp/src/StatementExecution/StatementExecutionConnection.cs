@@ -1124,39 +1124,42 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     if (sourceCatalog == null) continue;
                     string sql = new ShowColumnsCommand(
                         sourceCatalog, schemaPattern, tablePattern, columnPattern).Build();
+                    List<RecordBatch> batches;
+                    bool isNative;
                     try
                     {
-                        var (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
+                        (batches, isNative) = await ExecuteNativeMetadataSqlAsync(
                             sql, MetadataOperation.GetColumns, cancellationToken).ConfigureAwait(false);
-                        foreach (var columns in batches)
-                        {
-                            if (!isNative)
-                            {
-                                results.Add((columns, false, sourceCatalog));
-                                continue;
-                            }
-
-                            // Native GetColumns can treat catalog names as LIKE patterns.
-                            var nativeColumns = new NativeMetadataColumns(
-                                columns, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
-                            int start = -1;
-                            for (int row = 0; row <= columns.Length; row++)
-                            {
-                                string? rowCatalog = row < columns.Length ? nativeColumns.String("TABLE_CAT", row) : null;
-                                bool matches = row < columns.Length && (rowCatalog == null ||
-                                    string.Equals(rowCatalog, sourceCatalog, StringComparison.OrdinalIgnoreCase));
-                                if (matches && start < 0) start = row;
-                                if (!matches && start >= 0)
-                                {
-                                    results.Add((columns.Slice(start, row - start), true, sourceCatalog));
-                                    start = -1;
-                                }
-                            }
-                        }
                     }
                     catch
                     {
                         // Skip catalogs we can't access (permission errors)
+                        continue;
+                    }
+                    foreach (var columns in batches)
+                    {
+                        if (!isNative)
+                        {
+                            results.Add((columns, false, sourceCatalog));
+                            continue;
+                        }
+
+                        // Native GetColumns can treat catalog names as LIKE patterns.
+                        var nativeColumns = new NativeMetadataColumns(
+                            columns, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
+                        int start = -1;
+                        for (int row = 0; row <= columns.Length; row++)
+                        {
+                            string? rowCatalog = row < columns.Length ? nativeColumns.String("TABLE_CAT", row) : null;
+                            bool matches = row < columns.Length && (rowCatalog == null ||
+                                string.Equals(rowCatalog, sourceCatalog, StringComparison.OrdinalIgnoreCase));
+                            if (matches && start < 0) start = row;
+                            if (!matches && start >= 0)
+                            {
+                                results.Add((columns.Slice(start, row - start), true, sourceCatalog));
+                                start = -1;
+                            }
+                        }
                     }
                 }
             }
