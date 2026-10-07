@@ -172,6 +172,41 @@ func TestParameterRowIteratorConvertsNamedValues(t *testing.T) {
 	}
 }
 
+func TestParameterRowIteratorPreservesTimestampInstants(t *testing.T) {
+	for _, timezone := range []string{"UTC", "Asia/Tokyo", "Europe/Amsterdam"} {
+		t.Run(timezone, func(t *testing.T) {
+			timestampType := &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: timezone}
+			schema := arrow.NewSchema([]arrow.Field{{Name: "timestamp", Type: timestampType}}, nil)
+			record, _, err := array.RecordFromJSON(memory.DefaultAllocator, schema, strings.NewReader(`[
+				{"timestamp": -9223372036854775808},
+				{"timestamp": 0},
+				{"timestamp": 9223372036854775807}
+			]`))
+			require.NoError(t, err)
+			defer record.Release()
+
+			stream, err := array.NewRecordReader(schema, []arrow.RecordBatch{record})
+			require.NoError(t, err)
+			iterator, err := newParameterRowIterator(stream, namedParameterBinding)
+			require.NoError(t, err)
+			defer iterator.Release()
+
+			for _, expected := range []string{
+				"1677-09-21T00:12:43.145224192Z",
+				"1970-01-01T00:00:00Z",
+				"2262-04-11T23:47:16.854775807Z",
+			} {
+				args, ok, err := iterator.Next()
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, dbsql.Parameter{
+					Name: "timestamp", Type: dbsql.SqlTimestamp, Value: expected,
+				}, args[0].Value)
+			}
+		})
+	}
+}
+
 func TestParameterRowIteratorPositionalMultipleBatches(t *testing.T) {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "ignored", Type: arrow.PrimitiveTypes.Int32}}, nil)
 	stream := newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3})

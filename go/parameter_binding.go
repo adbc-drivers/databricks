@@ -474,7 +474,8 @@ func arrowValueToParameter(
 			parameter.Value = value.Format("2006-01-02 15:04:05.999999999")
 		} else {
 			parameter.Type = dbsql.SqlTimestamp
-			parameter.Value = value.Format(time.RFC3339Nano)
+			// Historical timezone offsets can contain seconds, which RFC3339 cannot encode.
+			parameter.Value = value.UTC().Format(time.RFC3339Nano)
 		}
 	default:
 		return parameter, adbc.Error{
