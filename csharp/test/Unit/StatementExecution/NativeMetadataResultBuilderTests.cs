@@ -35,8 +35,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData("BINARY", 99, 3, 99, 3)]
         [InlineData("VARCHAR(42)", 99, 3, 42, 3)]
         [InlineData("CHAR(4)", 99, 3, 4, 3)]
+        [InlineData("DOUBLE", null, null, 0, 0)]
+        [InlineData("DOUBLE", 15, null, 15, 0)]
+        [InlineData("DOUBLE", null, 15, 0, 15)]
+        [InlineData("DECIMAL(10,2)", null, null, 10, 2)]
+        [InlineData("VARCHAR(42)", null, null, 42, 0)]
         public async Task GetColumns_OnlyNormalizesThriftPrecisionAndScale(
-            string typeName, int columnSize, int decimalDigits, int expectedSize, int expectedScale)
+            string typeName, int? columnSize, int? decimalDigits, int expectedSize, int expectedScale)
         {
             var target = MetadataSchemaFactory.CreateColumnMetadataSchema();
             Assert.Equal(24, target.FieldsList.Count);
@@ -58,6 +63,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     arrays.Add(new Int8Array.Builder().Append(0).Build());
                 else if (field.DataType.TypeId == ArrowTypeId.Int16)
                     arrays.Add(new Int16Array.Builder().Append(0).Build());
+                else if (field.Name == "BUFFER_LENGTH")
+                    arrays.Add(new Int32Array.Builder().AppendNull().Build());
                 else
                     arrays.Add(new Int32Array.Builder().Append(field.Name == "COLUMN_SIZE" ? columnSize
                         : field.Name == "DECIMAL_DIGITS" ? decimalDigits : 0).Build());
@@ -72,6 +79,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(batch);
             Assert.Equal(expectedSize, ((Int32Array)batch.Column(6)).GetValue(0));
+            Assert.True(batch.Column(7).IsNull(0));
             Assert.Equal(expectedScale, ((Int32Array)batch.Column(8)).GetValue(0));
             Assert.Equal(0, ((Int32Array)batch.Column(16)).GetValue(0));
             Assert.Equal("main", ((StringArray)batch.Column(0)).GetString(0));

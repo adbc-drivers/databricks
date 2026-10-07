@@ -142,6 +142,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                             long? value = columns.Integer(name, row);
                             if (operation == MetadataOperation.GetColumns && (name is "COLUMN_SIZE" or "DECIMAL_DIGITS"))
                             {
+                                // Thrift defaults null sizes and digits to zero before type-specific overrides.
+                                value ??= 0;
                                 string? typeName = columns.String("TYPE_NAME", row);
                                 if (typeName != null)
                                 {
