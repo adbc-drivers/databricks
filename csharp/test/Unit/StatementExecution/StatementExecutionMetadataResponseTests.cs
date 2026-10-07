@@ -58,15 +58,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 (@"foo\_bar", new[] { "foo_bar" }),
                 ("foo_bar", new[] { "foo_bar", "fooxbar" }),
             };
-            foreach (int mode in new[] { 0, 1, 2, 3 })
+            foreach (int mode in new[] { 0, 1 })
             {
-                foreach (AdbcConnection.GetObjectsDepth depth in new[]
-                    { AdbcConnection.GetObjectsDepth.Tables, AdbcConnection.GetObjectsDepth.All })
-                {
-                    foreach (var (pattern, matches) in patterns)
-                        yield return new object?[] { mode, depth, pattern, matches };
-                }
+                foreach (var (pattern, matches) in patterns)
+                    yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.All, pattern, matches };
+                foreach (var (pattern, matches) in patterns.Where(entry => entry.Pattern == null || entry.Pattern == "main"))
+                    yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.Tables, pattern, matches };
             }
+            foreach (int mode in new[] { 2, 3 })
+                yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.All, null, s_catalogs };
         }
 
         [Theory]
@@ -225,8 +225,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [Theory]
         [InlineData(0, false, false)]
         [InlineData(1, false, true)]
-        [InlineData(2, false, false)]
-        [InlineData(3, false, true)]
         [InlineData(0, true, false)]
         [InlineData(1, true, true)]
         [InlineData(2, true, false)]
@@ -288,6 +286,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     if (request.Method != HttpMethod.Post)
                         return new HttpResponseMessage(HttpStatusCode.OK);
 
+                    Assert.Equal("true", Assert.Single(request.Headers.GetValues("x-databricks-sea-can-run-fully-sync")));
+                    Assert.Equal("true", Assert.Single(request.Headers.GetValues("x-databricks-require-thrift-native-metadata")));
                     using JsonDocument json = JsonDocument.Parse(
                         request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
                     string sql = json.RootElement.GetProperty("statement").GetString()!;

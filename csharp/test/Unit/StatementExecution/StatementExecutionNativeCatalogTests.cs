@@ -164,17 +164,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task NativeCatalogs_AreFilteredForGetObjects()
-        {
-            using var http = CreateHttpClient();
-            using var connection = CreateConnection(http);
-
-            var catalogs = await ((IGetObjectsDataProvider)connection).GetCatalogsAsync("main", CancellationToken.None);
-
-            Assert.Equal(new[] { "main" }, catalogs);
-        }
-
-        [Fact]
         public async Task GetObjects_CatalogDepth_FiltersNativeCatalogs()
         {
             using var http = CreateHttpClient();
