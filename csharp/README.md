@@ -612,11 +612,10 @@ Run tests matching a pattern:
 dotnet test --filter "FullyQualifiedName~CloudFetch"
 ```
 
-For a native-capable warehouse, set `"requireNativeMetadata": true` in the test
-configuration and run `dotnet test --filter "FullyQualifiedName~SeaMetadataE2ETests.NativeMetadata_"`.
-These tests cover the six flat operations, `GetObjects`, and `GetTableSchema`, and
-fail if any metadata request falls back to SHOW. The REST E2E CI job enables this
-requirement; local configurations can leave it off for fallback-capable warehouses.
+Run `dotnet test --filter "FullyQualifiedName~SeaMetadataE2ETests.NativeMetadata_"`
+against a configured native-capable warehouse. These tests cover the six flat
+operations, `GetObjects`, and `GetTableSchema`, and always fail if any metadata
+request falls back to SHOW.
 
 #### Verbose Test Output
 

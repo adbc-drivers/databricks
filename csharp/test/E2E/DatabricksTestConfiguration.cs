@@ -78,8 +78,5 @@ namespace AdbcDrivers.Databricks.Tests
 
         [JsonPropertyName("protocol"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
         public string Protocol { get; set; } = string.Empty;
-
-        [JsonPropertyName("requireNativeMetadata"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public bool RequireNativeMetadata { get; set; }
     }
 }

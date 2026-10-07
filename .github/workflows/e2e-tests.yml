@@ -230,7 +230,6 @@ jobs:
             "query": "SELECT * FROM main.${PER_RUN_SCHEMA}.adbc_testing_table",
             "expectedResults": 12,
             "isCITesting": true,
-            "requireNativeMetadata": ${{ matrix.protocol == 'rest' }},
             "tracePropagationEnabled": "true",
             "traceParentHeaderName": "traceparent",
             "traceStateEnabled": "false",

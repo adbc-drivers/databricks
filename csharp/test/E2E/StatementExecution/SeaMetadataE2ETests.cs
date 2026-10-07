@@ -65,13 +65,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
         }
 
-        private void SkipIfNativeMetadataNotRequired()
-        {
-            SkipIfNotConfigured();
-            Skip.IfNot(TestConfiguration.RequireNativeMetadata,
-                "Set requireNativeMetadata=true in the test configuration for a native-capable warehouse.");
-        }
-
         private async Task<MetadataRecordingConnection> CreateMetadataRecordingConnection()
         {
             var parameters = GetDriverParameters(TestConfiguration);
@@ -250,7 +243,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         public async Task NativeMetadata_UsesNativeResponse(
             string command, string table, string? foreignTable, string expectedColumn, string expectedValue)
         {
-            SkipIfNativeMetadataNotRequired();
+            SkipIfNotConfigured();
 
             using var conn = CreateConnection(new Dictionary<string, string>(RestProtocol)
             {
@@ -266,7 +259,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task NativeMetadata_GetObjects_UsesNativeResponse()
         {
-            SkipIfNativeMetadataNotRequired();
+            SkipIfNotConfigured();
             using var connection = await CreateMetadataRecordingConnection();
             using var stream = connection.GetObjects(
                 AdbcConnection.GetObjectsDepth.All, TestCatalog, TestSchema, TestTable, null, null);
@@ -284,7 +277,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         [SkippableFact]
         public async Task NativeMetadata_GetTableSchema_UsesNativeResponse()
         {
-            SkipIfNativeMetadataNotRequired();
+            SkipIfNotConfigured();
             using var connection = await CreateMetadataRecordingConnection();
             var schema = connection.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
 
