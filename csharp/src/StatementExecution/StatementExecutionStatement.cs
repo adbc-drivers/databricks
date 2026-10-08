@@ -496,7 +496,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // This setting is deliberately not included in SEA session_confs.
             reader = new GeospatialTransformingStream(
                 reader,
-                _enableGeospatialSupport);
+                _enableGeospatialSupport,
+                _enableComplexDatatypeSupport);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
