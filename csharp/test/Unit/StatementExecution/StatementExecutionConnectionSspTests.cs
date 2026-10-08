@@ -133,6 +133,34 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.DoesNotContain("custom.param", body);
         }
 
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task OpenAsync_GeospatialRepresentationStaysClientSide(bool enabled)
+        {
+            var (httpClient, _, bodies) = CreateCapturingHttpClient();
+            var properties = BaseProperties();
+            properties[DatabricksParameters.EnableGeospatialSupport] =
+                enabled.ToString().ToLowerInvariant();
+
+            using var conn = new StatementExecutionConnection(properties, httpClient);
+            Assert.Equal(enabled, conn.EnableGeospatialSupport);
+            await conn.OpenAsync(CancellationToken.None);
+
+            Assert.Single(bodies);
+            Assert.DoesNotContain("EnableGeoSpatialSupport", bodies[0]);
+            Assert.DoesNotContain(DatabricksParameters.EnableGeospatialSupport, bodies[0]);
+            Assert.DoesNotContain("session_confs", bodies[0]);
+        }
+
+        [Fact]
+        public void GeospatialSupport_DefaultsToNativeMode()
+        {
+            var (httpClient, _, _) = CreateCapturingHttpClient();
+            using var conn = new StatementExecutionConnection(BaseProperties(), httpClient);
+            Assert.True(conn.EnableGeospatialSupport);
+        }
+
         [Fact]
         public async Task OpenAsync_InvalidSspPropertyName_IsFiltered()
         {
