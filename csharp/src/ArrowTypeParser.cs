@@ -57,9 +57,13 @@ namespace AdbcDrivers.Databricks
         ///   <item><description><c>true</c>: native nested Arrow types parsed from
         ///   the manifest's <c>type_text</c> (see <see cref="ParseComplexType"/>).</description></item>
         /// </list>
-        /// Primitives (including INTERVAL, which is always string-typed) ignore the flag.
+        /// Other primitives ignore the complex-type flag. GEOMETRY / GEOGRAPHY are
+        /// parsed as their canonical tagged Arrow structs; the result stream applies the
+        /// configured client representation later.
         /// </summary>
-        internal static IArrowType MapToArrowType(string typeText, bool enableComplexDatatypeSupport)
+        internal static IArrowType MapToArrowType(
+            string typeText,
+            bool enableComplexDatatypeSupport)
         {
             var baseType = ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant();
             if (baseType is "ARRAY" or "MAP" or "STRUCT")
@@ -75,7 +79,7 @@ namespace AdbcDrivers.Databricks
         /// Parses <paramref name="typeText"/> into a native Arrow type. Returns
         /// <see cref="StringType"/> on any parse failure — callers can rely on this,
         /// the method never throws. Exposed for tests; production callers should use
-        /// <see cref="MapToArrowType"/> which handles the user flag.
+        /// <see cref="MapToArrowType"/> which handles the complex-type option.
         /// </summary>
         internal static IArrowType ParseComplexType(string typeText)
         {
@@ -113,8 +117,18 @@ namespace AdbcDrivers.Databricks
                 // an Arrow NullArray; NullColumnSerializingStream converts it to an all-null StringArray
                 // so the declared StringType schema and the batch array agree (the output contract).
                 "NULL" or "VOID" => StringType.Default,
+                "GEOMETRY" or "GEOGRAPHY" => MapGeospatialType(typeText),
                 _ => StringType.Default,
             };
+        }
+
+        private static IArrowType MapGeospatialType(string typeText)
+        {
+            if (GeospatialArrowType.TryCreate(typeText, out StructType type))
+            {
+                return type;
+            }
+            return StringType.Default;
         }
 
         private static IArrowType ParseDecimalType(string typeText)

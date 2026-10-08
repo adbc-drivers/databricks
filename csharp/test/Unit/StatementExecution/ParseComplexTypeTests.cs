@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+using System.Collections.Generic;
 using AdbcDrivers.Databricks;
+using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Types;
 using Xunit;
 
@@ -148,6 +151,102 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 "STRUCT<name:STRING NOT NULL COLLATE utf8_binary COMMENT 'user name'>");
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<StringType>(s.Fields[0].DataType);
+        }
+
+        [Theory]
+        [InlineData("GEOMETRY", "geometry", "0")]
+        [InlineData("GEOMETRY(3857)", "geometry", "3857")]
+        [InlineData("GEOMETRY(ANY)", "geometry", "-1")]
+        [InlineData("GEOGRAPHY", "geography", "4326")]
+        [InlineData("GEOGRAPHY(4326)", "geography", "4326")]
+        public void GeospatialType_ReturnsTaggedNativeStruct(
+            string sqlType,
+            string familyKey,
+            string expectedSrid)
+        {
+            var type = Assert.IsType<StructType>(
+                ArrowTypeParser.MapToArrowType(
+                    sqlType,
+                    enableComplexDatatypeSupport: true));
+
+            Assert.Equal(2, type.Fields.Count);
+            Assert.Equal("srid", type.Fields[0].Name);
+            Assert.IsType<Int32Type>(type.Fields[0].DataType);
+            Assert.False(type.Fields[0].IsNullable);
+            Assert.Equal("wkb", type.Fields[1].Name);
+            Assert.IsType<BinaryType>(type.Fields[1].DataType);
+            Assert.False(type.Fields[1].IsNullable);
+            Assert.Equal("true", type.Fields[1].Metadata[familyKey]);
+            Assert.Equal(expectedSrid, type.Fields[1].Metadata["srid"]);
+        }
+
+        [Theory]
+        [InlineData("GEOMETRY(foo)")]
+        [InlineData("GEOGRAPHY()")]
+        [InlineData("GEOMETRY(2147483648)")]
+        [InlineData("GEOGRAPHY(4326) trailing")]
+        public void MalformedGeospatialType_FallsBackToString(string sqlType)
+        {
+            Assert.IsType<StringType>(
+                ArrowTypeParser.MapToArrowType(
+                    sqlType,
+                    enableComplexDatatypeSupport: true));
+        }
+
+        [Fact]
+        public void PartialGeospatialArrowTag_IsRejected()
+        {
+            var type = new StructType(new[]
+            {
+                new Field("srid", Int32Type.Default, nullable: false),
+                new Field(
+                    "wkb",
+                    BinaryType.Default,
+                    nullable: false,
+                    new Dictionary<string, string> { ["geometry"] = "true" }),
+            });
+
+            DatabricksException error = Assert.Throws<DatabricksException>(() =>
+                GeospatialArrowType.TryGetTag(type, out _));
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains("srid", error.Message, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void ConflictingGeospatialArrowTag_IsRejected()
+        {
+            var type = new StructType(new[]
+            {
+                new Field("srid", Int32Type.Default, nullable: false),
+                new Field(
+                    "wkb",
+                    BinaryType.Default,
+                    nullable: false,
+                    new Dictionary<string, string>
+                    {
+                        ["geometry"] = "true",
+                        ["geography"] = "true",
+                        ["srid"] = "4326",
+                    }),
+            });
+
+            DatabricksException error = Assert.Throws<DatabricksException>(() =>
+                GeospatialArrowType.TryGetTag(type, out _));
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains("exactly one", error.Message, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        [Fact]
+        public void NestedGeospatialType_UsesCanonicalTaggedTypes()
+        {
+            const string sqlType =
+                "STRUCT<geom:GEOMETRY(ANY),items:ARRAY<GEOGRAPHY(4326)>>";
+
+            StructType native = Assert.IsType<StructType>(
+                ArrowTypeParser.ParseComplexType(sqlType));
+            Assert.IsType<StructType>(native.Fields[0].DataType);
+            Assert.IsType<StructType>(
+                Assert.IsType<ListType>(native.Fields[1].DataType).ValueDataType);
         }
     }
 }
