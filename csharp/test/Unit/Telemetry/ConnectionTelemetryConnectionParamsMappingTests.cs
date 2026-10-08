@@ -99,6 +99,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public void EnableGeospatialSupport_UsesConfiguredRepresentation()
+        {
+            var props = new Dictionary<string, string>();
+
+            var disabled = ConnectionTelemetry.BuildDriverConnectionParams(
+                props, Host, DriverModeType.Thrift,
+                enableDirectResults: true,
+                enableComplexDatatypeSupport: false,
+                connectTimeoutMilliseconds: TimeoutMs,
+                enableGeospatialSupport: false);
+            Assert.False(disabled.EnableGeospatialSupport);
+
+            var enabled = ConnectionTelemetry.BuildDriverConnectionParams(
+                props, Host, DriverModeType.Thrift,
+                enableDirectResults: true,
+                enableComplexDatatypeSupport: false,
+                connectTimeoutMilliseconds: TimeoutMs,
+                enableGeospatialSupport: true);
+            Assert.True(enabled.EnableGeospatialSupport);
+        }
+
+        [Fact]
         public void OptionalFields_LeftUnset_WhenPropertiesAbsent()
         {
             var props = new Dictionary<string, string>

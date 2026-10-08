@@ -511,6 +511,16 @@ namespace AdbcDrivers.Databricks
         public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
 
         /// <summary>
+        /// Whether GEOMETRY and GEOGRAPHY results use their native Arrow representation.
+        /// When true, values are returned as struct&lt;srid:int32,wkb:binary&gt;; legacy
+        /// server-provided WKT / EWKT is converted locally. When false, native values are
+        /// rendered locally as WKT / EWKT strings. The default is true. This is a client-side
+        /// setting and is never forwarded to SEA.
+        /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
+        public const string EnableGeospatialSupport = "adbc.databricks.enable_geospatial_support";
+
+        /// <summary>
         /// Connection option (boolean, default false): opt in to statement-level catalog scoping.
         /// When enabled, a non-metadata statement whose catalog (adbc.get_metadata.target_catalog,
         /// i.e. CatalogName) differs from the session's current catalog causes the driver to issue

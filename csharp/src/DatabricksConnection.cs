@@ -79,6 +79,7 @@ namespace AdbcDrivers.Databricks
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
         private bool _enableComplexDatatypeSupport = false;
+        private bool _enableGeospatialSupport = true;
 
         // DirectQuery configuration
         private const long DefaultDirectResultMaxBytes = 10 * 1024 * 1024; // 10MB for direct query results size limit
@@ -219,6 +220,7 @@ namespace AdbcDrivers.Databricks
             _enableFastMetadataQuery = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableFastMetadataQuery, _enableFastMetadataQuery);
             _runAsyncInThrift = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableRunAsyncInThriftOp, _runAsyncInThrift);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableComplexDatatypeSupport, _enableComplexDatatypeSupport);
+            _enableGeospatialSupport = PropertyHelper.GetBooleanPropertyWithValidation(Properties, DatabricksParameters.EnableGeospatialSupport, _enableGeospatialSupport);
 
             if (Properties.ContainsKey(DatabricksParameters.MaxBytesPerFile))
             {
@@ -463,6 +465,11 @@ namespace AdbcDrivers.Databricks
         /// Whether to return complex types as native Arrow types (true) or JSON strings (false).
         /// </summary>
         internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
+
+        /// <summary>
+        /// Whether to return native SRID+WKB Arrow values for GEOMETRY / GEOGRAPHY.
+        /// </summary>
+        internal bool EnableGeospatialSupport => _enableGeospatialSupport;
 
         /// <summary>
         /// Gets a value indicating whether to retry requests that receive retryable responses (408, 502, 503, 504) .
@@ -852,7 +859,8 @@ namespace AdbcDrivers.Databricks
                 enableDirectResults: _enableDirectResults,
                 enableComplexDatatypeSupport: _enableComplexDatatypeSupport,
                 connectTimeoutMilliseconds: ConnectTimeoutMilliseconds,
-                activity: activity);
+                activity: activity,
+                enableGeospatialSupport: _enableGeospatialSupport);
         }
 
         // Since Databricks Namespace was introduced in newer versions, we fallback to USE SCHEMA to set default schema

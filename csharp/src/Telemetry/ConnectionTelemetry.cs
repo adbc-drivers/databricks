@@ -81,7 +81,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool enableDirectResults,
             bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
-            Activity? activity)
+            Activity? activity,
+            bool enableGeospatialSupport = true)
         {
             try
             {
@@ -126,7 +127,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 Proto.DriverConnectionParameters driverConnectionParams =
                     SafeBuildDriverConnectionParams(
                         properties, host, mode, enableDirectResults, enableComplexDatatypeSupport,
-                        connectTimeoutMilliseconds, activity);
+                        connectTimeoutMilliseconds, activity, enableGeospatialSupport);
                 string authType = SafeDetermineAuthType(properties, activity);
 
                 var session = new TelemetrySessionContext
@@ -442,13 +443,14 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool enableDirectResults,
             bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
-            Activity? activity)
+            Activity? activity,
+            bool enableGeospatialSupport = true)
         {
             try
             {
                 return BuildDriverConnectionParams(
                     properties, host, mode, enableDirectResults, enableComplexDatatypeSupport,
-                    connectTimeoutMilliseconds);
+                    connectTimeoutMilliseconds, enableGeospatialSupport);
             }
             catch (Exception ex)
             {
@@ -476,6 +478,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                     EnableDirectResults = enableDirectResults,
                     SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
                     EnableComplexDatatypeSupport = enableComplexDatatypeSupport,
+                    EnableGeospatialSupport = enableGeospatialSupport,
                     AutoCommit = true,
                 };
             }
@@ -636,7 +639,8 @@ namespace AdbcDrivers.Databricks.Telemetry
             Proto.DriverMode.Types.Type mode,
             bool enableDirectResults,
             bool enableComplexDatatypeSupport,
-            int connectTimeoutMilliseconds)
+            int connectTimeoutMilliseconds,
+            bool enableGeospatialSupport = true)
         {
             properties.TryGetValue(SparkParameters.Path, out string? httpPath);
             int port = ResolvePort(properties);
@@ -668,6 +672,7 @@ namespace AdbcDrivers.Databricks.Telemetry
                 SocketTimeout = connectTimeoutMilliseconds > 0 ? connectTimeoutMilliseconds / 1000 : 0,
                 EnableDirectResults = enableDirectResults,
                 EnableComplexDatatypeSupport = enableComplexDatatypeSupport,
+                EnableGeospatialSupport = enableGeospatialSupport,
                 AutoCommit = true,
                 AsyncPollIntervalMillis = asyncPollIntervalMillis,
             };

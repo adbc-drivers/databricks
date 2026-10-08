@@ -69,6 +69,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Complex type configuration
         private readonly bool _enableComplexDatatypeSupport;
+        private readonly bool _enableGeospatialSupport;
 
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
@@ -200,6 +201,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            _enableGeospatialSupport = connection.EnableGeospatialSupport;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
@@ -489,6 +491,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
             reader = new IntervalSerializingStream(reader);
 
+            // Reyden returns GEOMETRY / GEOGRAPHY as struct<srid,wkb>. Restore the
+            // canonical Arrow tags in native mode or render WKT / EWKT locally in string mode.
+            // This setting is deliberately not included in SEA session_confs.
+            reader = new GeospatialTransformingStream(
+                reader,
+                _enableGeospatialSupport);
+
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
             if (!_enableComplexDatatypeSupport)
@@ -684,7 +693,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// (<c>Spark:DataType:SqlName</c>) in its metadata. For Thrift results the server
         /// embeds this key directly in the Arrow IPC field metadata; for SEA results it may
         /// be absent from the IPC. By computing it here from the manifest type name and
-        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/> and
+        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/>,
+        /// <see cref="GeospatialTransformingStream"/>, and
         /// <see cref="ComplexTypeSerializingStream"/> a reliable detection signal regardless
         /// of result path. JDBC achieves the same effect by falling back to
         /// <c>ColumnInfo.typeText</c> (the raw manifest type string) when the IPC metadata
@@ -692,10 +702,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </para>
         ///
         /// <para>
-        /// INTERVAL, ARRAY, MAP, and STRUCT columns are mapped to <see cref="StringType"/>
-        /// because the stream wrappers convert the native Arrow arrays to strings. The
-        /// declared Arrow type and the actual array type in each batch must always agree;
-        /// this is the output contract.
+        /// INTERVAL and disabled ARRAY / MAP / STRUCT columns are mapped to
+        /// <see cref="StringType"/> because the stream wrappers convert their native Arrow
+        /// arrays to strings. GEOMETRY / GEOGRAPHY are mapped to their canonical tagged native
+        /// structs; <see cref="GeospatialTransformingStream"/> then applies the client-side
+        /// representation and keeps each output batch consistent with its exposed schema.
         /// </para>
         /// </summary>
         private Schema? TryGetSchemaFromManifest(ResultManifest manifest)
@@ -709,7 +720,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var typeText = column.TypeText ?? string.Empty;
-                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport);
+                var arrowType = ArrowTypeParser.MapToArrowType(
+                    typeText,
+                    _enableComplexDatatypeSupport);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = typeText

@@ -41,6 +41,7 @@ using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
+using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
 using static AdbcDrivers.Databricks.Result.DescTableExtendedResult;
@@ -65,6 +66,7 @@ namespace AdbcDrivers.Databricks
         private bool enablePKFK;
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
+        private bool enableGeospatialSupport;
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
@@ -129,6 +131,7 @@ namespace AdbcDrivers.Databricks
 
             runAsyncInThrift = connection.RunAsyncInThrift;
             enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            enableGeospatialSupport = connection.EnableGeospatialSupport;
 
             // Override the Apache base default (500ms) with Databricks-specific poll interval (100ms)
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
@@ -329,18 +332,21 @@ namespace AdbcDrivers.Databricks
         }
 
         /// <summary>
-        /// When <see cref="enableComplexDatatypeSupport"/> is <c>false</c>, wraps the
-        /// result stream with <see cref="ComplexTypeSerializingStream"/> so native ARRAY /
-        /// MAP / STRUCT arrays returned by the server (we always request
-        /// <c>ComplexTypesAsArrow=true</c>) are serialized to JSON strings client-side via
-        /// System.Text.Json. This guarantees valid JSON escaping — fixing the server-side
-        /// malformed-JSON bug for MAP values containing double quotes (PECO-3032 / D3).
-        /// When the flag is true the native stream is returned unchanged.
+        /// Applies client-side geospatial representation handling before the optional
+        /// complex-type JSON serializer.
         /// </summary>
         private QueryResult MaybeWrapComplexTypes(QueryResult result)
         {
-            if (enableComplexDatatypeSupport || result.Stream == null) return result;
-            return new QueryResult(result.RowCount, new ComplexTypeSerializingStream(result.Stream));
+            if (result.Stream == null) return result;
+
+            IArrowArrayStream stream = new GeospatialTransformingStream(
+                result.Stream,
+                enableGeospatialSupport);
+            if (!enableComplexDatatypeSupport)
+            {
+                stream = new ComplexTypeSerializingStream(stream);
+            }
+            return new QueryResult(result.RowCount, stream);
         }
 
         public override UpdateResult ExecuteUpdate()
