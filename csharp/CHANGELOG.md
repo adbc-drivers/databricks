@@ -20,6 +20,11 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Added
+
+- Support Reyden GEOMETRY and GEOGRAPHY Arrow results, including nested values,
+  native `struct<srid,wkb>` values by default, and client-side WKT/EWKT string mode.
+
 ## [1.1.10] - 2026-09-09
 
 ### Added

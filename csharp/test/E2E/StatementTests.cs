@@ -740,22 +740,18 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(geoType, geoBaseTypeName);
         }
 
-        // Issue #568 follow-up to #627: #627 fixed GEOMETRY/GEOGRAPHY only on the GetColumns
-        // *metadata* path and never exercised a geo *data* column. This verifies that selecting a
-        // geospatial value round-trips through the driver as a UTF-8 EWKT string, identically on
-        // Thrift and SEA. Databricks serializes a geo value to its EWKT text on the wire
-        // ("SRID=4326;POINT(30 10)"); since Arrow has no OTHER type (JDBC reports Types.OTHER),
-        // ArrowTypeParser maps the unmodeled GEOMETRY/GEOGRAPHY SQL type to StringType via its
-        // catch-all, so the declared schema is Utf8 and the wire StringArray already agrees with it
-        // (no serializing stream needed, unlike untyped NULL). Asserting the concrete EWKT value on
-        // whatever protocol the run is configured with makes a two-config CI run prove Thrift↔SEA
-        // parity, the guarantee #627 relied on but did not test for data.
+        // String mode preserves legacy server-rendered text and locally renders Reyden's native
+        // struct<srid,wkb> values to the same WKT / EWKT representation.
         [SkippableTheory]
         [InlineData("st_geomfromtext('POINT(30 10)', 4326)", "GEOMETRY(4326)")]
         [InlineData("to_geography('POINT(30 10)')", "GEOGRAPHY(ANY)")]
         public async Task GeospatialDataColumnReportsStringEwkt(string geoExpr, string expectedSqlName)
         {
-            using AdbcConnection connection = NewConnection();
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableGeospatialSupport] = "false",
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
             using var statement = connection.CreateStatement();
             statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
 
@@ -789,6 +785,119 @@ namespace AdbcDrivers.Databricks.Tests
                 totalRows += batch.Length;
             }
             Assert.Equal(1, totalRows);
+        }
+
+        // Reyden's native payload is preserved; legacy UTF-8 EWKT is converted locally to the
+        // same canonical Arrow representation.
+        [SkippableTheory]
+        [InlineData(
+            "st_geomfromtext('POINT(30 10)', 4326)",
+            "GEOMETRY(4326)",
+            "geometry",
+            "4326")]
+        [InlineData(
+            "to_geography('POINT(30 10)')",
+            "GEOGRAPHY(ANY)",
+            "geography",
+            "-1")]
+        public async Task GeospatialDataColumnReportsNativeArrow(
+            string geoExpr,
+            string expectedSqlName,
+            string familyMetadataKey,
+            string expectedTypeSrid)
+        {
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableGeospatialSupport] = "true",
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+            Field field = Assert.Single(reader!.Schema.FieldsList);
+            StructType type = Assert.IsType<StructType>(field.DataType);
+            Assert.Equal("srid", type.Fields[0].Name);
+            Assert.IsType<Int32Type>(type.Fields[0].DataType);
+            Assert.False(type.Fields[0].IsNullable);
+            Assert.Equal("wkb", type.Fields[1].Name);
+            Assert.IsType<BinaryType>(type.Fields[1].DataType);
+            Assert.False(type.Fields[1].IsNullable);
+            Assert.Equal("true", type.Fields[1].Metadata[familyMetadataKey]);
+            Assert.Equal(expectedTypeSrid, type.Fields[1].Metadata["srid"]);
+            Assert.Equal(expectedSqlName, field.Metadata["Spark:DataType:SqlName"]);
+
+            RecordBatch? batch = await reader.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray values = Assert.IsType<StructArray>(batch!.Column(0));
+            Assert.Equal(4326, Assert.IsType<Int32Array>(values.Fields[0]).GetValue(0)!.Value);
+            string wkt = GeospatialWkb.ToWkt(
+                Assert.IsType<BinaryArray>(values.Fields[1]).GetBytes(0));
+            Assert.Equal("POINT(30 10)", wkt);
+            Assert.Null(await reader.ReadNextRecordBatchAsync());
+        }
+
+        [SkippableTheory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task NestedGeospatialDataUsesConfiguredRepresentation(
+            bool enableGeospatialSupport)
+        {
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableComplexDatatypeSupport] = "true",
+                [DatabricksParameters.EnableGeospatialSupport] =
+                    enableGeospatialSupport.ToString().ToLowerInvariant(),
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery =
+                "SELECT named_struct(" +
+                "'geom', st_geomfromtext('POINT(30 10)', 4326), " +
+                "'geog', to_geography('POINT(30 10)')) AS nested_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+            StructType outerType = Assert.IsType<StructType>(
+                Assert.Single(reader!.Schema.FieldsList).DataType);
+
+            using RecordBatch? batch = await reader.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray outer = Assert.IsType<StructArray>(batch.Column(0));
+            Assert.Equal(1, outer.Length);
+
+            if (enableGeospatialSupport)
+            {
+                Assert.Equal("true", Assert.IsType<StructType>(outerType.Fields[0].DataType)
+                    .Fields[1].Metadata["geometry"]);
+                Assert.Equal("true", Assert.IsType<StructType>(outerType.Fields[1].DataType)
+                    .Fields[1].Metadata["geography"]);
+
+                for (int i = 0; i < 2; i++)
+                {
+                    StructArray geo = Assert.IsType<StructArray>(outer.Fields[i]);
+                    Assert.Equal(4326, Assert.IsType<Int32Array>(geo.Fields[0]).GetValue(0)!.Value);
+                    Assert.Equal(
+                        "POINT(30 10)",
+                        GeospatialWkb.ToWkt(
+                            Assert.IsType<BinaryArray>(geo.Fields[1]).GetBytes(0)));
+                }
+            }
+            else
+            {
+                Assert.All(outerType.Fields, field => Assert.IsType<StringType>(field.DataType));
+                Assert.Equal(
+                    "SRID=4326;POINT(30 10)",
+                    Assert.IsType<StringArray>(outer.Fields[0]).GetString(0));
+                Assert.Equal(
+                    "SRID=4326;POINT(30 10)",
+                    Assert.IsType<StringArray>(outer.Fields[1]).GetString(0));
+            }
+
+            Assert.Null(await reader.ReadNextRecordBatchAsync());
         }
 
         [SkippableFact]
