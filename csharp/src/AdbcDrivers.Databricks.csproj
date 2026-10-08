@@ -9,6 +9,7 @@
     <PackageReference Include="K4os.Compression.LZ4.Streams" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
     <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" />
+    <PackageReference Include="NetTopologySuite" />
     <PackageReference Include="Polly" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools">
