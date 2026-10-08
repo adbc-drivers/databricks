@@ -333,7 +333,9 @@ namespace AdbcDrivers.Databricks
 
         /// <summary>
         /// Applies client-side geospatial representation handling before the optional
-        /// complex-type JSON serializer.
+        /// complex-type JSON serializer. The ordering matters for nested geospatial values:
+        /// they must become GeoArrow WKB or EWKT strings before an outer complex
+        /// value is serialized.
         /// </summary>
         private QueryResult MaybeWrapComplexTypes(QueryResult result)
         {
@@ -341,7 +343,8 @@ namespace AdbcDrivers.Databricks
 
             IArrowArrayStream stream = new GeospatialTransformingStream(
                 result.Stream,
-                enableGeospatialSupport);
+                enableGeospatialSupport,
+                enableComplexDatatypeSupport);
             if (!enableComplexDatatypeSupport)
             {
                 stream = new ComplexTypeSerializingStream(stream);
