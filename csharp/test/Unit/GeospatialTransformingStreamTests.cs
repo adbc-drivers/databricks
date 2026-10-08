@@ -21,6 +21,7 @@ using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
+using Apache.Arrow.Scalars;
 using Apache.Arrow.Types;
 using Xunit;
 
@@ -87,7 +88,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 sqlType,
                 outputType,
                 physical,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
 
             StructType schemaType = Assert.IsType<StructType>(
                 stream.Schema.GetFieldByIndex(0).DataType);
@@ -116,7 +118,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(ANY)",
                 StringType.Default,
                 physical,
-                enableGeospatialSupport: false);
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
 
             Assert.IsType<StringType>(stream.Schema.GetFieldByIndex(0).DataType);
             RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
@@ -142,7 +145,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 new[] { slicedBatch });
             using var stream = new GeospatialTransformingStream(
                 source,
-                enableGeospatialSupport: false);
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
 
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
@@ -164,7 +168,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 sqlType,
                 ArrowTypeParser.MapToArrowType(sqlType, true),
                 physical,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
 
             StructType type = Assert.IsType<StructType>(
                 stream.Schema.GetFieldByIndex(0).DataType);
@@ -174,6 +179,260 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
             Assert.IsType<StructArray>(batch.Column(0));
+        }
+
+        [Fact]
+        public async Task NestedStruct_UsesNativeGeoWhenBothFeaturesEnabled()
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 3857 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            StructArray physical = OuterStruct("geom", geo);
+            const string sqlType = "STRUCT<geom:GEOMETRY(ANY)>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true),
+                physical,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray outer = Assert.IsType<StructArray>(batch.Column(0));
+            StructArray nested = Assert.IsType<StructArray>(outer.Fields[0]);
+            StructType nestedType = Assert.IsType<StructType>(nested.Data.DataType);
+            Assert.Equal("true", nestedType.Fields[1].Metadata["geometry"]);
+            Assert.Equal(3857, Assert.IsType<Int32Array>(nested.Fields[0]).GetValue(0)!.Value);
+        }
+
+        [Fact]
+        public async Task NestedStruct_ConvertsVoidAndIntervalSiblingsToDeclaredStrings()
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 3857 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            var months = new YearMonthIntervalArray.Builder();
+            months.Append(new YearMonthInterval(30));
+            YearMonthIntervalArray tenure = months.Build();
+            var missing = new NullArray(1);
+            var physicalType = new StructType(new[]
+            {
+                new Field("geom", geo.Data.DataType, nullable: true),
+                new Field("missing", missing.Data.DataType, nullable: true),
+                new Field("tenure", tenure.Data.DataType, nullable: true),
+            });
+            var physical = new StructArray(
+                physicalType,
+                1,
+                new IArrowArray[] { geo, missing, tenure },
+                ArrowBuffer.Empty);
+            const string sqlType =
+                "STRUCT<geom:GEOMETRY(ANY),missing:VOID,tenure:INTERVAL YEAR TO MONTH>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true),
+                physical,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray outer = Assert.IsType<StructArray>(batch.Column(0));
+            Assert.True(Assert.IsType<StringArray>(outer.Fields[1]).IsNull(0));
+            Assert.Equal("2-6", Assert.IsType<StringArray>(outer.Fields[2]).GetString(0));
+            Assert.True(stream.Schema.GetFieldByIndex(0).DataType.Equals(outer.Data.DataType));
+        }
+
+        [Fact]
+        public async Task NestedStruct_RejectsUnrelatedSiblingTypeMismatch()
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 3857 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            StringArray wrongValue = new StringArray.Builder().Append("not an int").Build();
+            var physicalType = new StructType(new[]
+            {
+                new Field("geom", geo.Data.DataType, nullable: true),
+                new Field("value", StringType.Default, nullable: true),
+            });
+            var physical = new StructArray(
+                physicalType,
+                1,
+                new IArrowArray[] { geo, wrongValue },
+                ArrowBuffer.Empty);
+            const string sqlType = "STRUCT<geom:GEOMETRY(ANY),value:INT>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true),
+                physical,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
+
+            DatabricksException error = await Assert.ThrowsAsync<DatabricksException>(async () =>
+                await stream.ReadNextRecordBatchAsync());
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains("g.value", error.Message);
+        }
+
+        [Fact]
+        public async Task NestedStruct_ConvertsReportedLegacyGeoTextInNativeMode()
+        {
+            StringArray geo = new StringArray.Builder()
+                .Append("SRID=4326;POINT(1 2)")
+                .Build();
+            Int32Array id = new Int32Array.Builder().Append(7).Build();
+            var physicalType = new StructType(new[]
+            {
+                new Field("geom", StringType.Default, nullable: true),
+                new Field("id", Int32Type.Default, nullable: true),
+            });
+            var physical = new StructArray(
+                physicalType,
+                1,
+                new IArrowArray[] { geo, id },
+                ArrowBuffer.Empty);
+            const string sqlType = "STRUCT<geom:GEOMETRY(ANY),id:INT>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                physicalType,
+                physical,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
+
+            StructType schemaType = Assert.IsType<StructType>(
+                stream.Schema.GetFieldByIndex(0).DataType);
+            StructType geoType = Assert.IsType<StructType>(schemaType.Fields[0].DataType);
+            Assert.Equal("true", geoType.Fields[1].Metadata["geometry"]);
+            Assert.Equal("-1", geoType.Fields[1].Metadata["srid"]);
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray result = Assert.IsType<StructArray>(batch.Column(0));
+            StructArray native = Assert.IsType<StructArray>(result.Fields[0]);
+            Assert.Equal(4326, Assert.IsType<Int32Array>(native.Fields[0]).GetValue(0));
+            Assert.Equal(
+                s_pointOneTwo,
+                Assert.IsType<BinaryArray>(native.Fields[1]).GetBytes(0).ToArray());
+        }
+
+        [Fact]
+        public async Task NestedStruct_BecomesEwktInsideOuterJsonWhenComplexSupportDisabled()
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 3857 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            StructArray physical = OuterStruct("geom", geo);
+            const string sqlType = "STRUCT<geom:GEOMETRY(ANY)>";
+            Schema schema = SchemaFor(sqlType, StringType.Default);
+            using IArrowArrayStream source = new StubArrowArrayStream(
+                schema,
+                new[] { PhysicalBatch(physical) });
+            using var geospatial = new GeospatialTransformingStream(
+                source,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: false);
+            using var stream = new ComplexTypeSerializingStream(geospatial);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StringArray values = Assert.IsType<StringArray>(batch.Column(0));
+            Assert.Equal("{\"geom\":\"SRID=3857;POINT(1 2)\"}", values.GetString(0));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task NestedArray_UsesConfiguredGeoRepresentation(bool enabled)
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 4326 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            StructType physicalGeoType = (StructType)geo.Data.DataType;
+            var offsets = new ArrowBuffer.Builder<int>();
+            offsets.Append(0);
+            offsets.Append(1);
+            var list = new ListArray(
+                new ListType(new Field("item", physicalGeoType, nullable: true)),
+                length: 1,
+                offsets.Build(),
+                geo,
+                ArrowBuffer.Empty);
+            const string sqlType = "ARRAY<GEOMETRY(ANY)>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true),
+                list,
+                enableGeospatialSupport: enabled,
+                enableComplexDatatypeSupport: true);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            ListArray output = Assert.IsType<ListArray>(batch.Column(0));
+            if (enabled)
+            {
+                StructArray item = Assert.IsType<StructArray>(output.Values);
+                StructType itemType = Assert.IsType<StructType>(item.Data.DataType);
+                Assert.Equal("true", itemType.Fields[1].Metadata["geometry"]);
+            }
+            else
+            {
+                Assert.Equal(
+                    "SRID=4326;POINT(1 2)",
+                    Assert.IsType<StringArray>(output.Values).GetString(0));
+            }
+        }
+
+        [Fact]
+        public async Task NestedMapValue_ConvertsToEwkt()
+        {
+            StructArray geo = NativeGeoArray(
+                new[] { 4326 },
+                new[] { s_pointOneTwo },
+                new[] { true });
+            StringArray keys = new StringArray.Builder().Append("home").Build();
+            var entriesType = new StructType(new[]
+            {
+                new Field("key", StringType.Default, nullable: false),
+                new Field("value", geo.Data.DataType, nullable: true),
+            });
+            var entries = new StructArray(
+                entriesType,
+                1,
+                new IArrowArray[] { keys, geo },
+                ArrowBuffer.Empty);
+            var offsets = new ArrowBuffer.Builder<int>();
+            offsets.Append(0);
+            offsets.Append(1);
+            var map = new MapArray(
+                new MapType(StringType.Default, geo.Data.DataType),
+                1,
+                offsets.Build(),
+                entries,
+                ArrowBuffer.Empty);
+            const string sqlType = "MAP<STRING,GEOGRAPHY(ANY)>";
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true),
+                map,
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
+
+            RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            MapArray output = Assert.IsType<MapArray>(batch.Column(0));
+            Assert.Equal(
+                "SRID=4326;POINT(1 2)",
+                Assert.IsType<StringArray>(output.Values).GetString(0));
         }
 
         [Fact]
@@ -187,7 +446,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(4326)",
                 StringType.Default,
                 text,
-                enableGeospatialSupport: false);
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
 
             RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
@@ -209,7 +469,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(ANY)",
                 StringType.Default,
                 text,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
 
             StructType type = Assert.IsType<StructType>(
                 stream.Schema.GetFieldByIndex(0).DataType);
@@ -238,7 +499,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOGRAPHY(ANY)",
                 StringType.Default,
                 text,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
 
             StructType type = Assert.IsType<StructType>(
                 stream.Schema.GetFieldByIndex(0).DataType);
@@ -264,7 +526,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOGRAPHY(ANY)",
                 StringType.Default,
                 text,
-                enableGeospatialSupport: false);
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
 
             Assert.IsType<StringType>(stream.Schema.GetFieldByIndex(0).DataType);
             RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
@@ -285,7 +548,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 sqlType,
                 StringType.Default,
                 text,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
 
             DatabricksException error = await Assert.ThrowsAsync<DatabricksException>(async () =>
                 await stream.ReadNextRecordBatchAsync());
@@ -304,7 +568,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(4326)",
                 StringType.Default,
                 physical,
-                enableGeospatialSupport: false);
+                enableGeospatialSupport: false,
+                enableComplexDatatypeSupport: true);
 
             DatabricksException error = await Assert.ThrowsAsync<DatabricksException>(async () =>
                 await stream.ReadNextRecordBatchAsync());
@@ -316,7 +581,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             string sqlType,
             IArrowType outputType,
             IArrowArray physical,
-            bool enableGeospatialSupport)
+            bool enableGeospatialSupport,
+            bool enableComplexDatatypeSupport)
         {
             Schema schema = SchemaFor(sqlType, outputType);
             var source = new StubArrowArrayStream(
@@ -324,7 +590,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 new[] { PhysicalBatch(physical) });
             return new GeospatialTransformingStream(
                 source,
-                enableGeospatialSupport);
+                enableGeospatialSupport,
+                enableComplexDatatypeSupport);
         }
 
         private static Schema SchemaFor(string sqlType, IArrowType outputType) =>
@@ -378,6 +645,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 new IArrowArray[] { sridBuilder.Build(), wkbBuilder.Build() },
                 nullCount == 0 ? ArrowBuffer.Empty : validity.Build(),
                 nullCount);
+        }
+
+        private static StructArray OuterStruct(string fieldName, IArrowArray child)
+        {
+            var type = new StructType(new[]
+            {
+                new Field(fieldName, child.Data.DataType, nullable: true),
+            });
+            return new StructArray(
+                type,
+                child.Length,
+                new[] { child },
+                ArrowBuffer.Empty);
         }
 
         private static byte[] FromHex(string hex)

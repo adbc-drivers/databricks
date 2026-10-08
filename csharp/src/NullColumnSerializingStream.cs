@@ -115,7 +115,7 @@ namespace AdbcDrivers.Databricks
             return new RecordBatch(_schema, arrays, batch.Length);
         }
 
-        private static StringArray SerializeNullToStringArray(IArrowArray array)
+        internal static StringArray SerializeNullToStringArray(IArrowArray array)
         {
             // An untyped-NULL column has no non-null values; emit an all-null StringArray of the
             // same length so the declared StringType schema and the batch array agree.
