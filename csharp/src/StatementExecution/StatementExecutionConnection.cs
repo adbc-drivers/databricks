@@ -88,6 +88,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private string _traceParentHeaderName = null!;
         private bool _traceStateEnabled;
         private bool _enableComplexDatatypeSupport;
+        private bool _enableGeospatialSupport;
 
         // Authentication support — assigned by ValidateProperties().
         private string? _identityFederationClientId;
@@ -396,6 +397,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
+            _enableGeospatialSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableGeospatialSupport, true);
 
             // Authentication configuration.
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))
@@ -1228,6 +1230,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // TracingConnection provides IActivityTracer implementation
         internal bool EnableComplexDatatypeSupport => _enableComplexDatatypeSupport;
+
+        internal bool EnableGeospatialSupport => _enableGeospatialSupport;
 
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";
         public override string AssemblyName => "AdbcDrivers.Databricks";
