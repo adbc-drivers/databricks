@@ -169,8 +169,6 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 	}
 	driverRows = nil // Prevent double close in defer
 
-	// Return -1 for rowsAffected (unknown) since we can't count without consuming
-	// The ADBC spec allows -1 to indicate "unknown number of rows affected"
 	return reader, nil
 }
 
