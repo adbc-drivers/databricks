@@ -15,6 +15,7 @@
  */
 
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2.Hive2;
 using Xunit;
 using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
@@ -200,6 +201,21 @@ namespace AdbcDrivers.Databricks.Tests
         public void GetDataTypeCode_HandlesTrimAndCase(string typeName, short expectedCode)
         {
             Assert.Equal(expectedCode, ColumnMetadataHelper.GetDataTypeCode(typeName));
+        }
+
+        [Theory]
+        [InlineData("DECIMAL(10,2)", 10, 2)]
+        [InlineData("DOUBLE", 8, 15)]
+        [InlineData("VARCHAR(42)", 42, 0)]
+        [InlineData("BINARY", 0, 0)]
+        public void PopulateTableInfo_PreservesComputedPrecisionAndScale(string typeName, int size, int digits)
+        {
+            var tableInfo = new TableInfo("TABLE");
+
+            ColumnMetadataHelper.PopulateTableInfoFromTypeName(tableInfo, "a", typeName, 0);
+
+            Assert.Equal(size, Assert.Single(tableInfo.Precision));
+            Assert.Equal((short)digits, Assert.Single(tableInfo.Scale));
         }
 
     }
