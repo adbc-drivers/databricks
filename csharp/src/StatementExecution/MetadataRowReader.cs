@@ -64,11 +64,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Results = results;
             IsNative = results.Any(result => result.Batches.Count > 0) &&
                 results.Where(result => result.Batches.Count > 0).All(result => result.IsNative);
-            Rows = MetadataRowReader.Columns(results, requireTableIdentifiers).ToList();
+            RowsByResult = MetadataRowReader.ColumnGroups(results, requireTableIdentifiers).ToList();
+            Rows = RowsByResult.SelectMany(rows => rows).ToList();
         }
 
         internal IReadOnlyList<MetadataBatches> Results { get; }
         internal bool IsNative { get; }
+        internal IReadOnlyList<IReadOnlyList<ColumnRow>> RowsByResult { get; }
         internal IReadOnlyList<ColumnRow> Rows { get; }
     }
 
@@ -346,10 +348,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal static IEnumerable<ColumnRow> Columns(IEnumerable<MetadataBatches> results,
             bool requireTableIdentifiers = false)
+            => ColumnGroups(results, requireTableIdentifiers).SelectMany(rows => rows);
+
+        internal static IEnumerable<IReadOnlyList<ColumnRow>> ColumnGroups(IEnumerable<MetadataBatches> results,
+            bool requireTableIdentifiers = false)
         {
             var positions = new Dictionary<string, int>();
             foreach (var result in results)
             {
+                var group = new List<ColumnRow>();
                 var rows = result.IsNative ? NativeColumns(result)
                     : result.Batches.SelectMany(batch => ShowColumns(batch, positions));
                 foreach (var row in rows)
@@ -360,8 +367,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     string key = $"{row.Catalog}.{row.Schema}.{row.Table}";
                     positions.TryGetValue(key, out int position);
                     positions[key] = position + 1;
-                    yield return row;
+                    group.Add(row);
                 }
+                yield return group;
             }
         }
 

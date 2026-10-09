@@ -1389,7 +1389,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                 var result = await _connection.ReadMetadataAsync(
                     sql, MetadataOperation.GetTables, cancellationToken, catalog,
-                    CatalogFilter.Exact(catalog)).ConfigureAwait(false);
+                    _escapePatternWildcards ? CatalogFilter.Exact(catalog) : CatalogFilter.Pattern(catalog)).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
 
                 // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
@@ -1477,28 +1477,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     () => new ColumnMetadataResult(System.Array.Empty<MetadataBatches>())).ConfigureAwait(false);
 
                 IsNativeMetadataResult = columns.IsNative;
-                if (IsNativeMetadataResult)
-                {
-                    return NativeMetadataResultBuilder.Build(
-                        columns.Results,
-                        MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
-                }
-
-                var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
-
-                foreach (var column in columns.Rows)
-                {
-                    if (column.Catalog == null || column.Schema == null || column.Table == null) continue;
-                    string key = $"{column.Catalog}.{column.Schema}.{column.Table}";
-                    if (!tableInfos.ContainsKey(key))
-                        tableInfos[key] = (column.Catalog, column.Schema, column.Table, new TableInfo("TABLE"));
-                    ColumnMetadataHelper.PopulateTableInfoFromTypeName(
-                        tableInfos[key].info, column.Name, column.TypeName, column.Ordinal, column.Nullable,
-                        columnDefault: column.Default, isAutoIncrement: column.IsAutoIncrement);
-                }
-
-                activity?.SetTag("result_tables", tableInfos.Count);
-                return FlatColumnsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
+                if (!columns.IsNative)
+                    activity?.SetTag("result_tables", columns.Rows
+                        .Where(column => column.Catalog != null && column.Schema != null && column.Table != null)
+                        .Select(column => $"{column.Catalog}.{column.Schema}.{column.Table}")
+                        .Distinct().Count());
+                return await FlatColumnsResultBuilder.BuildFlatColumnsResultAsync(
+                    columns, cancellationToken).ConfigureAwait(false);
             }, "GetColumns").ConfigureAwait(false);
         }
 

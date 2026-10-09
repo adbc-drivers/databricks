@@ -196,7 +196,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void MixedColumns_PreserveServerOrdinalsAndCountShowRows()
+        public async Task MixedColumns_PreserveServerOrdinalsAndCountShowRows()
         {
             using var native = NativeColumns("main");
             using var show = ShowColumns(("t", "b"));
@@ -209,6 +209,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.False(result.IsNative);
             Assert.Equal(new[] { 7, 1 }, result.Rows.Select(row => row.Ordinal));
             Assert.Equal(new[] { "a", "b" }, result.Rows.Select(row => row.Name));
+
+            var flat = await FlatColumnsResultBuilder.BuildFlatColumnsResultAsync(
+                result, System.Threading.CancellationToken.None);
+            using var stream = flat.Stream!;
+            using var output = (await stream.ReadNextRecordBatchAsync())!;
+            var positions = (Int32Array)output.Column("ORDINAL_POSITION");
+            Assert.Equal(new[] { 7, 1 }, Enumerable.Range(0, output.Length).Select(row => positions.GetValue(row)!.Value));
         }
 
         [Fact]

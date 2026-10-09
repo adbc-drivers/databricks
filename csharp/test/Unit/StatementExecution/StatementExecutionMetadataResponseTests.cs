@@ -169,10 +169,43 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.False(statement.IsNativeMetadataResult);
         }
 
-        [Fact]
-        public async Task GetColumns_MixedResponses_PreserveNativeAttributesAndFlatOrdinals()
+        [Theory]
+        [InlineData("main", false, "main")]
+        [InlineData("ma%", false, "main,marketing")]
+        [InlineData("MA%", false, "main,marketing")]
+        [InlineData("ma_n", false, "main")]
+        [InlineData("foo_bar", false, "foo_bar,fooxbar")]
+        [InlineData(@"foo\_bar", false, "foo_bar")]
+        [InlineData("ma%", true, "")]
+        [InlineData("foo_bar", true, "foo_bar")]
+        [InlineData("%", true, "")]
+        public async Task GetTables_NativeCatalogPatternsRespectLiteralMode(
+            string catalog, bool literal, string expectedCatalogs)
         {
-            using HttpClient http = CreateHttpClient(3, new List<string>());
+            var statements = new List<string>();
+            using HttpClient http = CreateHttpClient(1, statements);
+            using StatementExecutionConnection connection = CreateConnection(http);
+            using var statement = (StatementExecutionStatement)connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, catalog);
+            statement.SetOption(ApacheParameters.EscapePatternWildcards, literal.ToString());
+            statement.SqlQuery = "GetTables";
+            using var stream = statement.ExecuteQuery().Stream!;
+            using var batch = (await stream.ReadNextRecordBatchAsync())!;
+
+            Assert.True(statement.IsNativeMetadataResult);
+            Assert.Equal(expectedCatalogs.Length == 0 ? System.Array.Empty<string>() : expectedCatalogs.Split(','),
+                Enumerable.Range(0, batch.Length).Select(row => ((StringArray)batch.Column("TABLE_CAT")).GetString(row)));
+            Assert.Contains($"IN CATALOG `{catalog}`", Assert.Single(statements));
+        }
+
+        [Theory]
+        [InlineData("main")]
+        [InlineData("marketing")]
+        public async Task GetColumns_MixedResponses_PreserveNativeAttributesAndFlatOrdinals(string nativeCatalog)
+        {
+            using HttpClient http = CreateHttpClient(3, new List<string>(),
+                nativeColumnsCatalog: nativeCatalog, columnType: "STRUCT<a:INT>");
             using StatementExecutionConnection connection = CreateConnection(http);
             using StatementExecutionStatement statement = (StatementExecutionStatement)connection.CreateStatement();
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
@@ -186,12 +219,45 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var ordinals = (Int32Array)batch.Column("ORDINAL_POSITION");
             var defaults = (StringArray)batch.Column("COLUMN_DEF");
             var autoIncrement = (StringArray)batch.Column("IS_AUTO_INCREMENT");
+            Assert.Equal(s_catalogs, Enumerable.Range(0, batch.Length).Select(row => catalogs.GetString(row)));
+
+            using HttpClient nativeHttp = CreateHttpClient(1, new List<string>(), columnType: "STRUCT<a:INT>");
+            using var nativeConnection = CreateConnection(nativeHttp);
+            using var nativeStatement = nativeConnection.CreateStatement();
+            nativeStatement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            nativeStatement.SetOption(ApacheParameters.CatalogName, nativeCatalog);
+            nativeStatement.SetOption(ApacheParameters.EscapePatternWildcards, "true");
+            nativeStatement.SqlQuery = "GetColumns";
+            using var nativeStream = nativeStatement.ExecuteQuery().Stream!;
+            using var nativeBatch = (await nativeStream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(1, nativeBatch.Length);
+
             for (int row = 0; row < batch.Length; row++)
             {
                 Assert.Equal(0, ordinals.GetValue(row));
-                bool native = catalogs.GetString(row) == "main";
+                bool native = catalogs.GetString(row) == nativeCatalog;
                 Assert.Equal(native ? "7" : null, defaults.GetString(row));
                 Assert.Equal(native ? "YES" : "NO", autoIncrement.GetString(row));
+                Assert.Equal(native ? 4 : 0, ((Int32Array)batch.Column("COLUMN_SIZE")).GetValue(row));
+                Assert.Equal(native ? "server comment" : "", ((StringArray)batch.Column("REMARKS")).GetString(row));
+                if (!native) continue;
+                for (int column = 0; column < batch.ColumnCount; column++)
+                {
+                    switch (batch.Column(column))
+                    {
+                        case StringArray strings:
+                            Assert.Equal(((StringArray)nativeBatch.Column(column)).GetString(0), strings.GetString(row));
+                            break;
+                        case Int16Array numbers:
+                            Assert.Equal(((Int16Array)nativeBatch.Column(column)).GetValue(0), numbers.GetValue(row));
+                            break;
+                        case Int32Array numbers:
+                            Assert.Equal(((Int32Array)nativeBatch.Column(column)).GetValue(0), numbers.GetValue(row));
+                            break;
+                        default:
+                            throw new InvalidOperationException($"Unexpected metadata type: {batch.Column(column).Data.DataType}");
+                    }
+                }
             }
         }
 
@@ -280,7 +346,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         private static HttpClient CreateHttpClient(
-            int mode, List<string> statements, string[]? matchingCatalogs = null, bool prependEmptyShowColumn = false)
+            int mode, List<string> statements, string[]? matchingCatalogs = null, bool prependEmptyShowColumn = false,
+            string nativeColumnsCatalog = "main", string columnType = "INT")
         {
             Mock<HttpMessageHandler> handler = new Mock<HttpMessageHandler>();
             handler.Protected()
@@ -304,7 +371,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     string? requestedCatalog = allCatalogs
                         ? null : Regex.Match(sql, @" IN (?:CATALOG )?`((?:``|[^`])*)`").Groups[1].Value.Replace("``", "`");
                     bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables") ||
-                        (mode == 3 && (operation != "GetColumns" || requestedCatalog == "main"));
+                        (mode == 3 && (operation != "GetColumns" || requestedCatalog == nativeColumnsCatalog));
                     if (!native && !allCatalogs && !s_catalogs.Contains(requestedCatalog))
                     {
                         return Response(JsonSerializer.Serialize(new
@@ -322,13 +389,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     if (!native && operation == "GetCatalogs")
                         catalogs = matchingCatalogs ?? s_catalogs;
 
-                    using RecordBatch batch = CreateBatch(operation, native, catalogs, requestedCatalog);
+                    using RecordBatch batch = CreateBatch(operation, native, catalogs, requestedCatalog, columnType: columnType);
                     using MemoryStream raw = new MemoryStream();
                     using (ArrowStreamWriter writer = new ArrowStreamWriter(raw, batch.Schema))
                     {
                         if (!native && operation == "GetColumns" && prependEmptyShowColumn)
                         {
-                            using var empty = CreateBatch(operation, false, catalogs, requestedCatalog, columnName: "");
+                            using var empty = CreateBatch(operation, false, catalogs, requestedCatalog,
+                                columnName: "", columnType: columnType);
                             writer.WriteRecordBatch(empty);
                         }
                         writer.WriteRecordBatch(batch);
@@ -364,7 +432,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
 
         private static RecordBatch CreateBatch(
-            string operation, bool native, string[] catalogs, string? requestedCatalog, string columnName = "a")
+            string operation, bool native, string[] catalogs, string? requestedCatalog,
+            string columnName = "a", string columnType = "INT")
         {
             Schema schema;
             if (native)
@@ -403,8 +472,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                             "TABLE_NAME" or "tableName" => "t1",
                             "TABLE_TYPE" or "tableType" => "TABLE",
                             "COLUMN_NAME" or "col_name" => columnName,
-                            "TYPE_NAME" or "columnType" => "INT",
+                            "TYPE_NAME" or "columnType" => columnType,
                             "COLUMN_DEF" => "7",
+                            "REMARKS" => "server comment",
                             "IS_AUTO_INCREMENT" => "YES",
                             "isNullable" => "true",
                             _ => null,
@@ -413,7 +483,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     }
                     return (IArrowArray)strings.Build();
                 }
-                int number = field.Name == "NULLABLE" ? 1 : field.Name == "DATA_TYPE" ? 4 : 0;
+                int number = field.Name == "NULLABLE" ? 1 : field.Name is "DATA_TYPE" or "COLUMN_SIZE" ? 4 : 0;
                 return field.DataType.TypeId switch
                 {
                     ArrowTypeId.Int16 => (IArrowArray)new Int16Array.Builder().AppendRange(

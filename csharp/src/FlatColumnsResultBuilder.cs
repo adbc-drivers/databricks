@@ -15,7 +15,11 @@
  */
 
 using System.Collections.Generic;
-using AdbcDrivers.Databricks.StatementExecution;using AdbcDrivers.HiveServer2;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -29,6 +33,58 @@ namespace AdbcDrivers.Databricks
     /// </summary>
     internal static class FlatColumnsResultBuilder
     {
+        internal static async Task<QueryResult> BuildFlatColumnsResultAsync(
+            ColumnMetadataResult columns, CancellationToken cancellationToken)
+        {
+            var schema = MetadataSchemaFactory.CreateColumnMetadataSchema();
+            if (columns.IsNative)
+                return NativeMetadataResultBuilder.Build(columns.Results, schema, MetadataOperation.GetColumns);
+            if (!columns.Results.Any(result => result.IsNative && result.Batches.Count > 0))
+                return BuildFlatColumnsResult(columns.Rows);
+
+            // Normalize each response independently so SHOW fallback cannot discard native fields.
+            var batches = new List<RecordBatch>();
+            try
+            {
+                for (int index = 0; index < columns.Results.Count; index++)
+                {
+                    var result = columns.Results[index];
+                    var flat = result.IsNative
+                        ? NativeMetadataResultBuilder.Build(result, schema, MetadataOperation.GetColumns)
+                        : BuildFlatColumnsResult(columns.RowsByResult[index]);
+                    using var stream = flat.Stream!;
+                    var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                    if (batch != null) batches.Add(batch);
+                }
+
+                var arrays = Enumerable.Range(0, schema.FieldsList.Count)
+                    .Select(column => ArrowArrayFactory.BuildArray(ArrayDataConcatenator.Concatenate(
+                        batches.Select(batch => batch.Column(column).Data).ToList())!))
+                    .ToArray();
+                return new QueryResult(batches.Sum(batch => batch.Length), new HiveInfoArrowStream(schema, arrays));
+            }
+            finally
+            {
+                foreach (var batch in batches) batch.Dispose();
+            }
+        }
+
+        private static QueryResult BuildFlatColumnsResult(IEnumerable<ColumnRow> columns)
+        {
+            var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
+            foreach (var column in columns)
+            {
+                if (column.Catalog == null || column.Schema == null || column.Table == null) continue;
+                string key = $"{column.Catalog}.{column.Schema}.{column.Table}";
+                if (!tableInfos.ContainsKey(key))
+                    tableInfos[key] = (column.Catalog, column.Schema, column.Table, new TableInfo("TABLE"));
+                ColumnMetadataHelper.PopulateTableInfoFromTypeName(
+                    tableInfos[key].info, column.Name, column.TypeName, column.Ordinal, column.Nullable,
+                    columnDefault: column.Default, isAutoIncrement: column.IsAutoIncrement);
+            }
+            return BuildFlatColumnsResult(tableInfos.Values);
+        }
+
         internal static QueryResult BuildFlatColumnsResult(
             IEnumerable<(string catalog, string schema, string table, TableInfo info)> tables)
         {
