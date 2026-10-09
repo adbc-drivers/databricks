@@ -25,37 +25,49 @@ using Apache.Arrow;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
+    internal readonly struct CatalogFilter
+    {
+        private CatalogFilter(string? value, bool isPattern)
+        {
+            Value = value;
+            IsPattern = isPattern;
+        }
+
+        internal string? Value { get; }
+        internal bool IsPattern { get; }
+
+        internal static CatalogFilter Exact(string? catalog) => new(catalog, false);
+        internal static CatalogFilter Pattern(string? pattern) => new(pattern, true);
+    }
+
     internal sealed class MetadataBatches
     {
         internal MetadataBatches(List<RecordBatch> batches, bool isNative,
-            string? sourceCatalog = null, bool requireExactCatalog = false)
+            string? sourceCatalog = null, CatalogFilter catalogFilter = default)
         {
             Batches = batches;
             IsNative = isNative;
             SourceCatalog = sourceCatalog;
-            RequireExactCatalog = requireExactCatalog;
+            CatalogFilter = catalogFilter;
         }
 
         internal List<RecordBatch> Batches { get; }
         internal bool IsNative { get; }
         internal string? SourceCatalog { get; }
-        internal bool RequireExactCatalog { get; }
+        internal CatalogFilter CatalogFilter { get; }
     }
 
     internal sealed class ColumnMetadataResult
     {
-        internal ColumnMetadataResult(IReadOnlyList<MetadataBatches> results)
+        internal ColumnMetadataResult(IReadOnlyList<MetadataBatches> results, bool requireTableIdentifiers = false)
         {
-            Batches = results.SelectMany(result => result.Batches).ToList();
-            SourceCatalogs = results.SelectMany(result =>
-                Enumerable.Repeat(result.SourceCatalog, result.Batches.Count)).ToList();
-            IsNative = Batches.Count > 0 &&
+            Results = results;
+            IsNative = results.Any(result => result.Batches.Count > 0) &&
                 results.Where(result => result.Batches.Count > 0).All(result => result.IsNative);
-            Rows = MetadataRowReader.Columns(results).ToList();
+            Rows = MetadataRowReader.Columns(results, requireTableIdentifiers).ToList();
         }
 
-        internal IReadOnlyList<RecordBatch> Batches { get; }
-        internal IReadOnlyList<string?> SourceCatalogs { get; }
+        internal IReadOnlyList<MetadataBatches> Results { get; }
         internal bool IsNative { get; }
         internal IReadOnlyList<ColumnRow> Rows { get; }
     }
@@ -93,8 +105,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
     internal readonly struct ColumnRow
     {
         internal ColumnRow(string? catalog, string? schema, string? table, string name,
-            string typeName, bool nullable, int ordinal, string? columnDefault, bool isAutoIncrement,
-            bool isNative = false)
+            string typeName, bool nullable, int ordinal, string? columnDefault, bool isAutoIncrement)
         {
             Catalog = catalog;
             Schema = schema;
@@ -105,7 +116,6 @@ namespace AdbcDrivers.Databricks.StatementExecution
             Ordinal = ordinal;
             Default = columnDefault;
             IsAutoIncrement = isAutoIncrement;
-            IsNative = isNative;
         }
 
         internal string? Catalog { get; }
@@ -117,136 +127,258 @@ namespace AdbcDrivers.Databricks.StatementExecution
         internal int Ordinal { get; }
         internal string? Default { get; }
         internal bool IsAutoIncrement { get; }
-        internal bool IsNative { get; }
+    }
+
+    internal readonly struct PrimaryKeyRow
+    {
+        internal PrimaryKeyRow(string catalog, string schema, string table, string column, int sequence, string name)
+        {
+            Catalog = catalog;
+            Schema = schema;
+            Table = table;
+            Column = column;
+            Sequence = sequence;
+            Name = name;
+        }
+
+        internal string Catalog { get; }
+        internal string Schema { get; }
+        internal string Table { get; }
+        internal string Column { get; }
+        internal int Sequence { get; }
+        internal string Name { get; }
+    }
+
+    internal readonly struct ForeignKeyRow
+    {
+        internal ForeignKeyRow(string parentCatalog, string parentSchema, string parentTable, string parentColumn,
+            string catalog, string schema, string table, string column, int sequence,
+            int updateRule, int deleteRule, string name, string? parentName, int deferrability)
+        {
+            ParentCatalog = parentCatalog;
+            ParentSchema = parentSchema;
+            ParentTable = parentTable;
+            ParentColumn = parentColumn;
+            Catalog = catalog;
+            Schema = schema;
+            Table = table;
+            Column = column;
+            Sequence = sequence;
+            UpdateRule = updateRule;
+            DeleteRule = deleteRule;
+            Name = name;
+            ParentName = parentName;
+            Deferrability = deferrability;
+        }
+
+        internal string ParentCatalog { get; }
+        internal string ParentSchema { get; }
+        internal string ParentTable { get; }
+        internal string ParentColumn { get; }
+        internal string Catalog { get; }
+        internal string Schema { get; }
+        internal string Table { get; }
+        internal string Column { get; }
+        internal int Sequence { get; }
+        internal int UpdateRule { get; }
+        internal int DeleteRule { get; }
+        internal string Name { get; }
+        internal string? ParentName { get; }
+        internal int Deferrability { get; }
+    }
+
+    internal readonly struct NativeMetadataRow
+    {
+        internal NativeMetadataRow(NativeMetadataColumns columns, int index, string? sourceCatalog)
+        {
+            Columns = columns;
+            Index = index;
+            SourceCatalog = sourceCatalog;
+        }
+
+        private NativeMetadataColumns Columns { get; }
+        private int Index { get; }
+        internal string? SourceCatalog { get; }
+        internal string? String(string name) => Columns.String(name, Index);
+        internal long? Integer(string name) => Columns.Integer(name, Index);
     }
 
     internal static class MetadataRowReader
     {
-        internal static IEnumerable<string> Catalogs(MetadataBatches result, string? pattern = null)
+        internal static List<NativeMetadataRow> NativeRows(
+            IEnumerable<MetadataBatches> results, Schema schema, MetadataOperation operation,
+            IReadOnlyCollection<string>? tableTypes = null,
+            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
         {
+            string? catalogField = operation switch
+            {
+                MetadataOperation.GetCatalogs => "TABLE_CAT",
+                MetadataOperation.GetSchemas => "TABLE_CATALOG",
+                MetadataOperation.GetTables or MetadataOperation.GetColumns => "TABLE_CAT",
+                _ => null,
+            };
+            var rows = new List<NativeMetadataRow>();
+            foreach (var result in results)
+            {
+                // A wildcard scope cannot supply a missing native catalog identifier.
+                string? sourceCatalog = result.CatalogFilter.IsPattern
+                    ? LiteralCatalog(result.SourceCatalog) : result.SourceCatalog;
+                foreach (var batch in result.Batches)
+                {
+                    var columns = new NativeMetadataColumns(batch, schema, operation);
+                    for (int index = 0; index < batch.Length; index++)
+                    {
+                        var row = new NativeMetadataRow(columns, index, sourceCatalog);
+                        if (catalogField != null &&
+                            !MatchesCatalog(result.CatalogFilter, row.String(catalogField) ?? row.SourceCatalog))
+                            continue;
+                        if (operation == MetadataOperation.GetTables && tableTypes != null &&
+                            !tableTypes.Contains(DefaultTableType(row.String("TABLE_TYPE"))))
+                            continue;
+                        if (operation == MetadataOperation.GetCrossReference &&
+                            !MatchesParent(parentCatalog, parentSchema, parentTable,
+                                row.String("PKTABLE_CAT"), row.String("PKTABLE_SCHEM"), row.String("PKTABLE_NAME")))
+                            continue;
+                        rows.Add(row);
+                    }
+                }
+            }
+
+            // Thrift orders tables by type, catalog, schema, then name.
+            if (operation == MetadataOperation.GetTables)
+                rows.Sort((left, right) => CompareTables(
+                    (left.String("TABLE_CAT") ?? left.SourceCatalog, left.String("TABLE_SCHEM"),
+                        left.String("TABLE_NAME"), left.String("TABLE_TYPE")),
+                    (right.String("TABLE_CAT") ?? right.SourceCatalog, right.String("TABLE_SCHEM"),
+                        right.String("TABLE_NAME"), right.String("TABLE_TYPE"))));
+            return rows;
+        }
+
+        internal static IEnumerable<string> Catalogs(MetadataBatches result)
+        {
+            if (result.IsNative)
+            {
+                foreach (var row in NativeRows(new[] { result },
+                    MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs))
+                    if (row.String("TABLE_CAT") is string catalog) yield return catalog;
+                yield break;
+            }
+
             foreach (var batch in result.Batches)
             {
-                var native = result.IsNative
-                    ? new NativeMetadataColumns(batch, MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs)
-                    : null;
-                var show = result.IsNative ? null : TryGetColumn<StringArray>(batch, "catalog");
-                if (!result.IsNative && show == null) continue;
+                var catalogs = TryGetColumn<StringArray>(batch, "catalog");
+                if (catalogs == null) continue;
                 for (int row = 0; row < batch.Length; row++)
-                {
-                    string? catalog = result.IsNative ? native!.String("TABLE_CAT", row) : String(show, row);
-                    if (catalog != null && (!result.IsNative || MatchesCatalogPattern(pattern, catalog)))
-                        yield return catalog;
-                }
+                    if (String(catalogs, row) is string catalog) yield return catalog;
             }
         }
 
-        internal static IEnumerable<SchemaRow> Schemas(MetadataBatches result, string? catalog)
+        internal static IEnumerable<SchemaRow> Schemas(MetadataBatches result)
         {
+            if (result.IsNative)
+            {
+                foreach (var row in NativeRows(new[] { result },
+                    MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas))
+                    if (row.String("TABLE_SCHEM") is string schema)
+                        yield return new SchemaRow(row.String("TABLE_CATALOG") ?? row.SourceCatalog ?? "", schema);
+                yield break;
+            }
+
             foreach (var batch in result.Batches)
             {
-                if (result.IsNative)
-                {
-                    var native = new NativeMetadataColumns(
-                        batch, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas);
-                    for (int row = 0; row < batch.Length; row++)
-                    {
-                        string? schema = native.String("TABLE_SCHEM", row);
-                        string? rowCatalog = native.String("TABLE_CATALOG", row) ?? catalog;
-                        if (schema != null && MatchesCatalog(catalog, rowCatalog))
-                            yield return new SchemaRow(rowCatalog ?? "", schema);
-                    }
-                    continue;
-                }
-
                 // Scoped SHOW SCHEMAS omits the catalog column.
                 var schemas = batch.Column(0) as StringArray;
-                var catalogs = catalog == null ? batch.Column(1) as StringArray : null;
+                var catalogs = result.SourceCatalog == null ? batch.Column(1) as StringArray : null;
                 if (schemas == null) continue;
                 for (int row = 0; row < batch.Length; row++)
                 {
                     string? schema = String(schemas, row);
                     if (schema != null)
-                        yield return new SchemaRow(String(catalogs, row) ?? catalog ?? "", schema);
+                        yield return new SchemaRow(String(catalogs, row) ?? result.SourceCatalog ?? "", schema);
                 }
             }
         }
 
         internal static List<TableRow> Tables(
-            MetadataBatches result, string? catalog, IReadOnlyCollection<string>? tableTypes = null,
+            MetadataBatches result, IReadOnlyCollection<string>? tableTypes = null,
             bool normalizeEmptyTableType = true)
         {
             var rows = new List<TableRow>();
+            if (result.IsNative)
+            {
+                foreach (var row in NativeRows(new[] { result },
+                    MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables, tableTypes))
+                {
+                    string? schema = row.String("TABLE_SCHEM");
+                    string? table = row.String("TABLE_NAME");
+                    if (schema == null || table == null) continue;
+                    rows.Add(new TableRow(row.String("TABLE_CAT") ?? row.SourceCatalog ?? "", schema, table,
+                        DefaultTableType(row.String("TABLE_TYPE")), row.String("REMARKS") ?? ""));
+                }
+                return rows;
+            }
             foreach (var batch in result.Batches)
             {
-                var native = result.IsNative
-                    ? new NativeMetadataColumns(batch, MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables)
-                    : null;
-                var catalogs = result.IsNative ? null : TryGetColumn<StringArray>(batch, "catalogName");
-                var schemas = result.IsNative ? null : TryGetColumn<StringArray>(batch, "namespace");
-                var tables = result.IsNative ? null : TryGetColumn<StringArray>(batch, "tableName");
-                var types = result.IsNative ? null : TryGetColumn<StringArray>(batch, "tableType");
-                var remarks = result.IsNative ? null : TryGetColumn<StringArray>(batch, "remarks");
-                if (!result.IsNative && (catalogs == null || schemas == null || tables == null)) continue;
+                var catalogs = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemas = TryGetColumn<StringArray>(batch, "namespace");
+                var tables = TryGetColumn<StringArray>(batch, "tableName");
+                var types = TryGetColumn<StringArray>(batch, "tableType");
+                var remarks = TryGetColumn<StringArray>(batch, "remarks");
+                if (catalogs == null || schemas == null || tables == null) continue;
 
                 for (int row = 0; row < batch.Length; row++)
                 {
-                    string? rowCatalog = result.IsNative ? native!.String("TABLE_CAT", row) ?? catalog : String(catalogs, row);
-                    string? schema = result.IsNative ? native!.String("TABLE_SCHEM", row) : String(schemas, row);
-                    string? table = result.IsNative ? native!.String("TABLE_NAME", row) : String(tables, row);
-                    if ((!result.IsNative && rowCatalog == null) || schema == null || table == null) continue;
-                    if (result.IsNative && !MatchesCatalog(catalog, rowCatalog)) continue;
-                    string? serverType = result.IsNative ? native!.String("TABLE_TYPE", row) : String(types, row);
-                    string type = result.IsNative || normalizeEmptyTableType
-                        ? NativeMetadataResultBuilder.DefaultTableType(serverType)
+                    string? rowCatalog = String(catalogs, row);
+                    string? schema = String(schemas, row);
+                    string? table = String(tables, row);
+                    if (rowCatalog == null || schema == null || table == null) continue;
+                    string? serverType = String(types, row);
+                    string type = normalizeEmptyTableType
+                        ? DefaultTableType(serverType)
                         : serverType ?? "TABLE";
                     if (tableTypes != null && !tableTypes.Contains(type)) continue;
                     rows.Add(new TableRow(rowCatalog ?? "", schema, table, type,
-                        (result.IsNative ? native!.String("REMARKS", row) : String(remarks, row)) ?? ""));
+                        String(remarks, row) ?? ""));
                 }
             }
-            // Thrift orders tables by type, catalog, schema, then name.
-            if (result.IsNative) rows.Sort(CompareTables);
             return rows;
         }
 
-        internal static IEnumerable<ColumnRow> Columns(IEnumerable<MetadataBatches> results)
+        internal static IEnumerable<ColumnRow> Columns(IEnumerable<MetadataBatches> results,
+            bool requireTableIdentifiers = false)
         {
             var positions = new Dictionary<string, int>();
             foreach (var result in results)
             {
-                foreach (var batch in result.Batches)
+                var rows = result.IsNative ? NativeColumns(result)
+                    : result.Batches.SelectMany(batch => ShowColumns(batch, positions));
+                foreach (var row in rows)
                 {
-                    var rows = result.IsNative ? NativeColumns(batch, result) : ShowColumns(batch, positions);
-                    foreach (var row in rows)
-                    {
-                        string key = $"{row.Catalog}.{row.Schema}.{row.Table}";
-                        positions.TryGetValue(key, out int position);
-                        positions[key] = position + 1;
-                        yield return row;
-                    }
+                    // GetObjects skips incomplete SHOW rows before assigning ordinals.
+                    if (requireTableIdentifiers && (row.Catalog == null || row.Schema == null ||
+                        row.Table == null || string.IsNullOrEmpty(row.Name))) continue;
+                    string key = $"{row.Catalog}.{row.Schema}.{row.Table}";
+                    positions.TryGetValue(key, out int position);
+                    positions[key] = position + 1;
+                    yield return row;
                 }
             }
         }
 
-        private static IEnumerable<ColumnRow> NativeColumns(RecordBatch batch, MetadataBatches result)
+        private static IEnumerable<ColumnRow> NativeColumns(MetadataBatches result)
         {
-            var columns = new NativeMetadataColumns(
-                batch, MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
-            for (int row = 0; row < batch.Length; row++)
+            foreach (var row in NativeRows(new[] { result },
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns))
             {
-                string? catalog = columns.String("TABLE_CAT", row) ?? result.SourceCatalog;
-                // A quoted catalog can still expand as a native LIKE pattern.
-                if (result.RequireExactCatalog && !MatchesCatalog(result.SourceCatalog, catalog)) continue;
-                string? name = columns.String("COLUMN_NAME", row);
-                string? typeName = columns.String("TYPE_NAME", row);
+                string? name = row.String("COLUMN_NAME");
+                string? typeName = row.String("TYPE_NAME");
                 if (name == null || typeName == null) continue;
                 // Both decoders expose zero-based ordinals; GetObjects adds its required offset.
-                yield return new ColumnRow(catalog, columns.String("TABLE_SCHEM", row),
-                    columns.String("TABLE_NAME", row), name, typeName, columns.Integer("NULLABLE", row) == 1,
-                    checked((int)(columns.Integer("ORDINAL_POSITION", row) ?? 0)),
-                    columns.String("COLUMN_DEF", row),
-                    string.Equals(columns.String("IS_AUTO_INCREMENT", row), "YES", StringComparison.OrdinalIgnoreCase),
-                    isNative: true);
+                yield return new ColumnRow(row.String("TABLE_CAT") ?? row.SourceCatalog, row.String("TABLE_SCHEM"),
+                    row.String("TABLE_NAME"), name, typeName, row.Integer("NULLABLE") == 1,
+                    checked((int)(row.Integer("ORDINAL_POSITION") ?? 0)),
+                    row.String("COLUMN_DEF"),
+                    string.Equals(row.String("IS_AUTO_INCREMENT"), "YES", StringComparison.OrdinalIgnoreCase));
             }
         }
 
@@ -274,18 +406,104 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        internal static int CompareTables(TableRow left, TableRow right)
-            => CompareTables(
-                (left.Catalog, left.Schema, left.Table, left.TableType),
-                (right.Catalog, right.Schema, right.Table, right.TableType));
+        internal static IEnumerable<PrimaryKeyRow> PrimaryKeys(
+            MetadataBatches result, string catalog, string schema, string table)
+        {
+            if (result.IsNative)
+            {
+                foreach (var row in NativeRows(new[] { result },
+                    MetadataSchemaFactory.CreatePrimaryKeysSchema(), MetadataOperation.GetPrimaryKeys))
+                    if (row.String("COLUMN_NAME") is string column)
+                        yield return new PrimaryKeyRow(row.String("TABLE_CAT") ?? catalog,
+                            row.String("TABLE_SCHEM") ?? schema, row.String("TABLE_NAME") ?? table,
+                            column, checked((int)(row.Integer("KEQ_SEQ") ?? 0)), row.String("PK_NAME") ?? "");
+                yield break;
+            }
+
+            int sequence = 0;
+            foreach (var batch in result.Batches)
+            {
+                var columns = TryGetColumn<StringArray>(batch, "col_name");
+                var names = TryGetColumn<StringArray>(batch, "constraintName");
+                var sequences = TryGetColumn<Int32Array>(batch, "keySeq");
+                var catalogs = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemas = TryGetColumn<StringArray>(batch, "namespace");
+                var tables = TryGetColumn<StringArray>(batch, "tableName");
+                if (columns == null) continue;
+                for (int row = 0; row < batch.Length; row++)
+                    if (String(columns, row) is string column)
+                        yield return new PrimaryKeyRow(String(catalogs, row) ?? catalog,
+                            String(schemas, row) ?? schema, String(tables, row) ?? table,
+                            column, Integer(sequences, row) ?? ++sequence, String(names, row) ?? "");
+            }
+        }
+
+        internal static IEnumerable<ForeignKeyRow> ForeignKeys(
+            MetadataBatches result, string? parentCatalog, string? parentSchema, string? parentTable,
+            string catalog, string schema, string table)
+        {
+            if (result.IsNative)
+            {
+                foreach (var row in NativeRows(new[] { result },
+                    MetadataSchemaFactory.CreateCrossReferenceSchema(), MetadataOperation.GetCrossReference,
+                    parentCatalog: parentCatalog, parentSchema: parentSchema, parentTable: parentTable))
+                    if (row.String("FKCOLUMN_NAME") is string column)
+                        yield return new ForeignKeyRow(row.String("PKTABLE_CAT") ?? parentCatalog ?? "",
+                            row.String("PKTABLE_SCHEM") ?? parentSchema ?? "", row.String("PKTABLE_NAME") ?? parentTable ?? "",
+                            row.String("PKCOLUMN_NAME") ?? "", row.String("FKTABLE_CAT") ?? catalog,
+                            row.String("FKTABLE_SCHEM") ?? schema, row.String("FKTABLE_NAME") ?? table, column,
+                            checked((int)(row.Integer("KEQ_SEQ") ?? 0)),
+                            checked((int)(row.Integer("UPDATE_RULE") ?? 0)),
+                            checked((int)(row.Integer("DELETE_RULE") ?? 0)), row.String("FK_NAME") ?? "",
+                            row.String("PK_NAME"), checked((int)(row.Integer("DEFERRABILITY") ?? 5)));
+                yield break;
+            }
+
+            int sequence = 0;
+            foreach (var batch in result.Batches)
+            {
+                var parentCatalogs = TryGetColumn<StringArray>(batch, "parentCatalogName");
+                var parentSchemas = TryGetColumn<StringArray>(batch, "parentNamespace");
+                var parentTables = TryGetColumn<StringArray>(batch, "parentTableName");
+                var parentColumns = TryGetColumn<StringArray>(batch, "parentColName");
+                var catalogs = TryGetColumn<StringArray>(batch, "catalogName");
+                var schemas = TryGetColumn<StringArray>(batch, "namespace");
+                var tables = TryGetColumn<StringArray>(batch, "tableName");
+                var columns = TryGetColumn<StringArray>(batch, "col_name");
+                var names = TryGetColumn<StringArray>(batch, "constraintName");
+                var sequences = TryGetColumn<Int32Array>(batch, "keySeq");
+                var updateRules = TryGetColumn<Int32Array>(batch, "updateRule");
+                var deleteRules = TryGetColumn<Int32Array>(batch, "deleteRule");
+                var deferrabilities = TryGetColumn<Int32Array>(batch, "deferrability");
+                if (columns == null) continue;
+                for (int row = 0; row < batch.Length; row++)
+                {
+                    string? column = String(columns, row);
+                    if (column == null) continue;
+                    string? rowParentCatalog = String(parentCatalogs, row);
+                    string? rowParentSchema = String(parentSchemas, row);
+                    string? rowParentTable = String(parentTables, row);
+                    // Match raw server identifiers before applying output fallbacks.
+                    if (!MatchesParent(parentCatalog, parentSchema, parentTable,
+                        rowParentCatalog, rowParentSchema, rowParentTable)) continue;
+                    yield return new ForeignKeyRow(rowParentCatalog ?? parentCatalog ?? "",
+                        rowParentSchema ?? parentSchema ?? "", rowParentTable ?? parentTable ?? "",
+                        String(parentColumns, row) ?? "", String(catalogs, row) ?? catalog,
+                        String(schemas, row) ?? schema, String(tables, row) ?? table, column,
+                        Integer(sequences, row) ?? ++sequence, Integer(updateRules, row) ?? 0,
+                        Integer(deleteRules, row) ?? 0, String(names, row) ?? "", null,
+                        Integer(deferrabilities, row) ?? 5);
+                }
+            }
+        }
 
         internal static int CompareTables(
             (string? Catalog, string? Schema, string? Table, string? TableType) left,
             (string? Catalog, string? Schema, string? Table, string? TableType) right)
         {
             int order = StringComparer.Ordinal.Compare(
-                NativeMetadataResultBuilder.DefaultTableType(left.TableType),
-                NativeMetadataResultBuilder.DefaultTableType(right.TableType));
+                DefaultTableType(left.TableType),
+                DefaultTableType(right.TableType));
             if (order != 0) return order;
             order = StringComparer.Ordinal.Compare(left.Catalog, right.Catalog);
             if (order != 0) return order;
@@ -293,11 +511,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             return order != 0 ? order : StringComparer.Ordinal.Compare(left.Table, right.Table);
         }
 
-        internal static bool MatchesCatalog(string? requested, string? actual)
-            => requested == null || string.Equals(requested, actual, StringComparison.OrdinalIgnoreCase);
+        internal static bool MatchesCatalog(CatalogFilter filter, string? actual)
+            => filter.Value == null || (actual != null && (filter.IsPattern
+                ? MatchesCatalogPattern(filter.Value, actual)
+                : string.Equals(filter.Value, actual, StringComparison.OrdinalIgnoreCase)));
+
+        private static bool MatchesParent(string? catalog, string? schema, string? table,
+            string? actualCatalog, string? actualSchema, string? actualTable)
+            => MatchesCatalog(CatalogFilter.Exact(catalog), actualCatalog) &&
+                MatchesCatalog(CatalogFilter.Exact(schema), actualSchema) &&
+                MatchesCatalog(CatalogFilter.Exact(table), actualTable);
+
+        internal static string DefaultTableType(string? value) => string.IsNullOrEmpty(value) ? "TABLE" : value!;
 
         private static string? String(StringArray? values, int row)
             => values == null || values.IsNull(row) ? null : values.GetString(row);
+
+        private static int? Integer(Int32Array? values, int row)
+            => values == null || values.IsNull(row) ? null : values.GetValue(row);
 
         private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
         {
@@ -309,6 +540,29 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 return null;
             }
+        }
+
+        private static string? LiteralCatalog(string? pattern)
+        {
+            if (pattern == null) return null;
+            var literal = new StringBuilder();
+            bool escaped = false;
+            foreach (char character in pattern)
+            {
+                if (!escaped)
+                {
+                    if (character is '%' or '_') return null;
+                    if (character == '\\')
+                    {
+                        escaped = true;
+                        continue;
+                    }
+                }
+                literal.Append(character);
+                escaped = false;
+            }
+            if (escaped) literal.Append('\\');
+            return literal.ToString();
         }
 
         private static bool MatchesCatalogPattern(string? pattern, string catalog)

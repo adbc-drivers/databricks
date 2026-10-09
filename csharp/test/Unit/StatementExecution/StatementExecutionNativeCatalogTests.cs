@@ -185,8 +185,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             var result = await connection.ReadColumnsAsync(null, null, null, null, CancellationToken.None);
 
-            Assert.Equal(2, result.Batches.Count);
-            Assert.Equal(new[] { "main", "other" }, result.SourceCatalogs);
+            Assert.Equal(2, result.Results.Count);
+            Assert.Equal(new[] { "main", "other" }, result.Results.Select(response => response.SourceCatalog));
         }
 
         [Theory]
@@ -249,14 +249,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var columns = await connection.ReadColumnsAsync(null, null, null, null, CancellationToken.None);
 
             Assert.True(columns.IsNative);
-            Assert.Equal(2, columns.Batches.Count);
-            Assert.All(columns.Batches, batch => Assert.Equal(2, batch.Length));
+            Assert.Equal(2, columns.Results.Count);
+            Assert.All(columns.Results, response => Assert.Equal(2, Assert.Single(response.Batches).Length));
             Assert.Equal(new[] { "foo_bar", "fooxbar" }, columns.Rows.Select(row => row.Catalog));
 
             var result = NativeMetadataResultBuilder.Build(
-                columns.Batches,
-                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns,
-                sourceCatalogs: columns.SourceCatalogs, requireExactSourceCatalog: true);
+                columns.Results,
+                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
             using var stream = result.Stream!;
             Assert.Equal(2, result.RowCount);
 

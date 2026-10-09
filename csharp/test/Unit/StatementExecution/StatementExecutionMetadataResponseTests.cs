@@ -21,6 +21,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
@@ -60,10 +61,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             };
             foreach (int mode in new[] { 0, 1 })
             {
-                foreach (var (pattern, matches) in patterns)
-                    yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.All, pattern, matches };
-                foreach (var (pattern, matches) in patterns.Where(entry => entry.Pattern == null || entry.Pattern == "main"))
-                    yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.Tables, pattern, matches };
+                foreach (var depth in new[] { AdbcConnection.GetObjectsDepth.All, AdbcConnection.GetObjectsDepth.Tables })
+                    foreach (var (pattern, matches) in patterns)
+                        yield return new object?[] { mode, depth, pattern, matches };
             }
             foreach (int mode in new[] { 2, 3 })
                 yield return new object?[] { mode, AdbcConnection.GetObjectsDepth.All, null, s_catalogs };
@@ -71,7 +71,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
         [Theory]
         [MemberData(nameof(CatalogPatterns))]
-        public async Task GetObjects_PreservesExistingCatalogScope(
+        public async Task GetObjects_NativeCatalogPatternsPreserveChildrenAndShowScopes(
             int mode, AdbcConnection.GetObjectsDepth depth, string? pattern, string[] expectedCatalogs)
         {
             List<string> statements = new List<string>();
@@ -86,7 +86,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 catalogs.Select(catalog => catalog.Name).OrderBy(name => name));
             foreach (AdbcCatalog catalog in catalogs)
             {
-                if (pattern != null && !string.Equals(pattern, catalog.Name, StringComparison.OrdinalIgnoreCase))
+                if (mode == 0 && pattern != null &&
+                    !string.Equals(pattern, catalog.Name, StringComparison.OrdinalIgnoreCase))
                 {
                     Assert.Empty(catalog.DbSchemas!);
                     continue;
@@ -107,6 +108,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             int catalogQueries = pattern == null && depth == AdbcConnection.GetObjectsDepth.All ? 2 : 1;
             Assert.Equal(catalogQueries,
                 statements.Count(sql => sql.StartsWith("SHOW CATALOGS", StringComparison.Ordinal)));
+            Assert.Single(statements, sql => sql.StartsWith("SHOW SCHEMAS", StringComparison.Ordinal));
+            Assert.Single(statements, sql => sql.StartsWith("SHOW TABLES", StringComparison.Ordinal));
+            int columnQueries = depth != AdbcConnection.GetObjectsDepth.All ? 0
+                : pattern == null ? s_catalogs.Length : 1;
+            Assert.Equal(columnQueries,
+                statements.Count(sql => sql.StartsWith("SHOW COLUMNS", StringComparison.Ordinal)));
             if (pattern != null)
             {
                 string scope = $"`{pattern.ToLowerInvariant()}`";
@@ -295,8 +302,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     string operation = request.Headers.GetValues("x-databricks-metadata-operation-type").Single();
                     bool allCatalogs = sql.Contains("IN ALL CATALOGS") || operation == "GetCatalogs";
                     string? requestedCatalog = allCatalogs
-                        ? null : s_catalogs.SingleOrDefault(catalog => sql.Contains($"`{catalog}`"));
-                    if (!allCatalogs && requestedCatalog == null)
+                        ? null : Regex.Match(sql, @" IN (?:CATALOG )?`((?:``|[^`])*)`").Groups[1].Value.Replace("``", "`");
+                    bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables") ||
+                        (mode == 3 && (operation != "GetColumns" || requestedCatalog == "main"));
+                    if (!native && !allCatalogs && !s_catalogs.Contains(requestedCatalog))
                     {
                         return Response(JsonSerializer.Serialize(new
                         {
@@ -309,13 +318,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                             },
                         }));
                     }
-                    bool native = mode == 1 || (mode == 2 && operation is "GetCatalogs" or "GetTables") ||
-                        (mode == 3 && (operation != "GetColumns" || requestedCatalog == "main"));
-                    string[] catalogs = requestedCatalog == null ? s_catalogs : new[] { requestedCatalog };
+                    string[] catalogs = native || requestedCatalog == null ? s_catalogs : new[] { requestedCatalog };
                     if (!native && operation == "GetCatalogs")
                         catalogs = matchingCatalogs ?? s_catalogs;
-                    if (native && requestedCatalog != null && operation is "GetTables" or "GetColumns")
-                        catalogs = catalogs.Concat(new[] { requestedCatalog == "other" ? "main" : "other" }).ToArray();
 
                     using RecordBatch batch = CreateBatch(operation, native, catalogs, requestedCatalog);
                     using MemoryStream raw = new MemoryStream();
@@ -393,8 +398,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     {
                         string? value = field.Name switch
                         {
-                            "TABLE_CAT" or "catalog" or "catalogName" => catalog,
-                            "TABLE_CATALOG" => requestedCatalog == null ? catalog : null,
+                            "TABLE_CAT" or "TABLE_CATALOG" or "catalog" or "catalogName" => catalog,
                             "TABLE_SCHEM" or "databaseName" or "namespace" => "default",
                             "TABLE_NAME" or "tableName" => "t1",
                             "TABLE_TYPE" or "tableType" => "TABLE",

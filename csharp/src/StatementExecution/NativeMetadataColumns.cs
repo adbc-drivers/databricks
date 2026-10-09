@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AdbcDrivers.HiveServer2;
 using Apache.Arrow;
 using Apache.Arrow.Types;
@@ -28,13 +29,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal NativeMetadataColumns(RecordBatch batch, Schema schema, MetadataOperation operation)
         {
-            int count = schema.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
+            var fields = schema.FieldsList.Where(field =>
+                operation != MetadataOperation.GetColumns || field.Name != "BASE_TYPE_NAME").ToList();
+            int count = fields.Count;
             if (batch.ColumnCount != count)
                 throw new DatabricksException($"Invalid native {operation} result: expected {count} columns, found {batch.ColumnCount}");
 
-            for (int i = 0; i < count; i++)
+            foreach (var expected in fields)
             {
-                Field expected = schema.FieldsList[i];
                 int index = batch.Schema.GetFieldIndex(expected.Name);
                 if (index < 0)
                     throw new DatabricksException($"Invalid native {operation} result: missing {expected.Name}");
@@ -50,9 +52,25 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
         }
 
-        internal string? String(string name, int row) => NativeMetadataResultBuilder.ReadString(_columns[name], row);
+        internal string? String(string name, int row)
+        {
+            var array = (StringArray)_columns[name];
+            return array.IsNull(row) ? null : array.GetString(row);
+        }
 
-        internal long? Integer(string name, int row) => NativeMetadataResultBuilder.ReadInteger(_columns[name], row);
+        internal long? Integer(string name, int row)
+        {
+            var array = _columns[name];
+            if (array.IsNull(row)) return null;
+            return array switch
+            {
+                Int8Array values => values.GetValue(row),
+                Int16Array values => values.GetValue(row),
+                Int32Array values => values.GetValue(row),
+                Int64Array values => values.GetValue(row),
+                _ => throw new DatabricksException($"Expected a native metadata integer, found {array.GetType().Name}")
+            };
+        }
 
         private static bool IsInteger(ArrowTypeId type) => type is
             ArrowTypeId.Int8 or ArrowTypeId.Int16 or ArrowTypeId.Int32 or ArrowTypeId.Int64;

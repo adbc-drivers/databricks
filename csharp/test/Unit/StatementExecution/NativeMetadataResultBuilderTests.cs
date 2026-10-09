@@ -43,9 +43,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         public async Task GetColumns_OnlyNormalizesThriftPrecisionAndScale(
             string typeName, int? columnSize, int? decimalDigits, int expectedSize, int expectedScale)
         {
-            var target = MetadataSchemaFactory.CreateColumnMetadataSchema();
+            var target = new Schema(MetadataSchemaFactory.CreateColumnMetadataSchema().FieldsList.Reverse(), null);
             Assert.Equal(24, target.FieldsList.Count);
-            var fields = target.FieldsList.Take(23).Select(field =>
+            var fields = target.FieldsList.Where(field => field.Name != "BASE_TYPE_NAME").Select(field =>
                 field.Name == "ORDINAL_POSITION"
                     ? new Field(field.Name, Int64Type.Default, true)
                     : field).ToArray();
@@ -72,24 +72,24 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             using var nativeBatch = new RecordBatch(source, arrays.ToArray(), 1);
             var result = NativeMetadataResultBuilder.Build(
-                new[] { nativeBatch }, target, MetadataOperation.GetColumns,
-                sourceCatalogs: new[] { "main" });
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, "main"),
+                target, MetadataOperation.GetColumns);
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
-            Assert.Equal(expectedSize, ((Int32Array)batch.Column(6)).GetValue(0));
-            Assert.True(batch.Column(7).IsNull(0));
-            Assert.Equal(expectedScale, ((Int32Array)batch.Column(8)).GetValue(0));
-            Assert.Equal(0, ((Int32Array)batch.Column(16)).GetValue(0));
-            Assert.Equal("main", ((StringArray)batch.Column(0)).GetString(0));
-            Assert.Equal(ColumnMetadataHelper.GetBaseTypeName(typeName), ((StringArray)batch.Column(23)).GetString(0));
+            Assert.Equal(expectedSize, ((Int32Array)batch.Column("COLUMN_SIZE")).GetValue(0));
+            Assert.True(batch.Column("BUFFER_LENGTH").IsNull(0));
+            Assert.Equal(expectedScale, ((Int32Array)batch.Column("DECIMAL_DIGITS")).GetValue(0));
+            Assert.Equal(0, ((Int32Array)batch.Column("ORDINAL_POSITION")).GetValue(0));
+            Assert.Equal("main", ((StringArray)batch.Column("TABLE_CAT")).GetString(0));
+            Assert.Equal(ColumnMetadataHelper.GetBaseTypeName(typeName), ((StringArray)batch.Column("BASE_TYPE_NAME")).GetString(0));
         }
 
         [Fact]
         public async Task GetTables_DefaultsEmptyTypeBeforeFilteringAndFillsRequestedCatalog()
         {
-            var schema = MetadataSchemaFactory.CreateTablesSchema();
+            var schema = new Schema(MetadataSchemaFactory.CreateTablesSchema().FieldsList.Reverse(), null);
             var arrays = schema.FieldsList.Select(field => (IArrowArray)(field.Name switch
             {
                 "TABLE_CAT" => new StringArray.Builder().AppendNull().Build(),
@@ -99,14 +99,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
 
             var result = NativeMetadataResultBuilder.Build(
-                new[] { nativeBatch }, schema, MetadataOperation.GetTables,
-                requestedCatalog: "main", tableTypes: new[] { "TABLE" });
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, "main", CatalogFilter.Exact("main")),
+                schema, MetadataOperation.GetTables, tableTypes: new[] { "TABLE" });
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
             Assert.Equal(1, result.RowCount);
-            Assert.Equal("main", ((StringArray)batch!.Column(0)).GetString(0));
-            Assert.Equal("TABLE", ((StringArray)batch.Column(3)).GetString(0));
+            Assert.Equal("main", ((StringArray)batch!.Column("TABLE_CAT")).GetString(0));
+            Assert.Equal("TABLE", ((StringArray)batch.Column("TABLE_TYPE")).GetString(0));
+        }
+
+        [Fact]
+        public async Task GetSchemas_FillsMissingCatalogByFieldName()
+        {
+            var schema = new Schema(MetadataSchemaFactory.CreateSchemasSchema().FieldsList.Reverse(), null);
+            using var nativeBatch = new RecordBatch(schema, new IArrowArray[]
+            {
+                new StringArray.Builder().AppendNull().Build(),
+                new StringArray.Builder().Append("default").Build(),
+            }, 1);
+            var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true,
+                "main", CatalogFilter.Exact("main"));
+
+            var result = NativeMetadataResultBuilder.Build(response, schema, MetadataOperation.GetSchemas);
+            using var reader = result.Stream!;
+            using var batch = (await reader.ReadNextRecordBatchAsync())!;
+
+            Assert.Equal("main", ((StringArray)batch.Column("TABLE_CATALOG")).GetString(0));
+            Assert.Equal("default", ((StringArray)batch.Column("TABLE_SCHEM")).GetString(0));
+            var decoded = Assert.Single(MetadataRowReader.Schemas(response));
+            Assert.Equal("main", decoded.Catalog);
+            Assert.Equal("default", decoded.Schema);
         }
 
         [Theory]
@@ -147,11 +170,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }).ToArray();
             using var nativeBatch = new RecordBatch(schema, arrays, tables.Length);
             string[]? tableTypes = filterTypes ? new[] { "TABLE" } : null;
-            var decoded = MetadataRowReader.Tables(
-                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), catalog, tableTypes);
+            var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true,
+                catalog, CatalogFilter.Exact(catalog));
+            var decoded = MetadataRowReader.Tables(response, tableTypes);
             var result = NativeMetadataResultBuilder.Build(
-                new[] { nativeBatch }, schema, MetadataOperation.GetTables,
-                requestedCatalog: catalog, tableTypes: tableTypes);
+                response, schema, MetadataOperation.GetTables, tableTypes: tableTypes);
             using var reader = result.Stream!;
             using var batch = (await reader.ReadNextRecordBatchAsync())!;
             var names = (StringArray)batch.Column("TABLE_NAME");
@@ -199,8 +222,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var nativeBatch = new RecordBatch(source, arrays, 2);
 
             var result = NativeMetadataResultBuilder.Build(
-                new[] { nativeBatch }, target, operation,
-                requestedCatalog: requestedCatalog, requireExactCatalog: requireExactCatalog);
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, requestedCatalog,
+                    CatalogFilter.Exact(requireExactCatalog ? requestedCatalog : null)),
+                target, operation);
 
             Assert.Equal(expectedRows, result.RowCount);
         }
@@ -230,7 +254,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }).ToArray();
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
 
-            var result = NativeMetadataResultBuilder.Build(new[] { nativeBatch }, schema, operation);
+            var result = NativeMetadataResultBuilder.Build(
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), schema, operation);
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
@@ -260,7 +285,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
 
             Assert.Throws<DatabricksException>(() => NativeMetadataResultBuilder.Build(
-                new[] { nativeBatch }, target, MetadataOperation.GetColumns));
+                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), target, MetadataOperation.GetColumns));
         }
     }
 }

@@ -16,7 +16,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
@@ -28,87 +27,40 @@ namespace AdbcDrivers.Databricks.StatementExecution
     internal static class NativeMetadataResultBuilder
     {
         internal static QueryResult Build(
-            IReadOnlyList<RecordBatch> batches, Schema schema, MetadataOperation operation,
-            string? requestedCatalog = null, IReadOnlyCollection<string>? tableTypes = null,
-            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null,
-            IReadOnlyList<string?>? sourceCatalogs = null, bool requireExactCatalog = false,
-            bool requireExactSourceCatalog = false)
+            MetadataBatches result, Schema schema, MetadataOperation operation,
+            IReadOnlyCollection<string>? tableTypes = null,
+            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
+            => Build(new[] { result }, schema, operation, tableTypes, parentCatalog, parentSchema, parentTable);
+
+        internal static QueryResult Build(
+            IReadOnlyList<MetadataBatches> results, Schema schema, MetadataOperation operation,
+            IReadOnlyCollection<string>? tableTypes = null,
+            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
         {
-            // C# exposes BASE_TYPE_NAME after the 23 Thrift GetColumns fields.
-            int sourceColumns = schema.FieldsList.Count - (operation == MetadataOperation.GetColumns ? 1 : 0);
-            if (sourceCatalogs != null && sourceCatalogs.Count != batches.Count)
-                throw new ArgumentException("Each native batch must have a source catalog", nameof(sourceCatalogs));
-            string? catalogField = operation switch
-            {
-                MetadataOperation.GetSchemas => "TABLE_CATALOG",
-                MetadataOperation.GetTables or MetadataOperation.GetColumns => "TABLE_CAT",
-                _ => null,
-            };
-            var rows = new List<(NativeMetadataColumns Columns, int Index, string? Catalog)>();
-            for (int batchIndex = 0; batchIndex < batches.Count; batchIndex++)
-            {
-                var batch = batches[batchIndex];
-                var columns = new NativeMetadataColumns(batch, schema, operation);
-                string? sourceCatalog = sourceCatalogs?[batchIndex] ?? requestedCatalog;
-
-                for (int row = 0; row < batch.Length; row++)
-                {
-                    if (operation == MetadataOperation.GetColumns && requireExactSourceCatalog &&
-                        !MetadataRowReader.MatchesCatalog(sourceCatalog, columns.String("TABLE_CAT", row) ?? sourceCatalog))
-                        continue;
-                    // Native metadata can expand wildcard characters in a quoted catalog.
-                    if (catalogField != null && requestedCatalog != null &&
-                        (operation == MetadataOperation.GetTables || requireExactCatalog) &&
-                        !MetadataRowReader.MatchesCatalog(requestedCatalog, columns.String(catalogField, row) ?? sourceCatalog))
-                        continue;
-                    if (operation == MetadataOperation.GetTables && tableTypes != null &&
-                        !tableTypes.Contains(DefaultTableType(columns.String("TABLE_TYPE", row))))
-                        continue;
-
-                    if (operation == MetadataOperation.GetCrossReference &&
-                        (!Matches(parentCatalog, columns.String(schema.FieldsList[0].Name, row)) ||
-                         !Matches(parentSchema, columns.String(schema.FieldsList[1].Name, row)) ||
-                         !Matches(parentTable, columns.String(schema.FieldsList[2].Name, row))))
-                        continue;
-
-                    rows.Add((columns, row, sourceCatalog));
-                }
-            }
-
-            if (operation == MetadataOperation.GetTables)
-            {
-                rows.Sort((left, right) => MetadataRowReader.CompareTables(
-                    (left.Columns.String("TABLE_CAT", left.Index) ?? left.Catalog,
-                     left.Columns.String("TABLE_SCHEM", left.Index),
-                     left.Columns.String("TABLE_NAME", left.Index),
-                     left.Columns.String("TABLE_TYPE", left.Index)),
-                    (right.Columns.String("TABLE_CAT", right.Index) ?? right.Catalog,
-                     right.Columns.String("TABLE_SCHEM", right.Index),
-                     right.Columns.String("TABLE_NAME", right.Index),
-                     right.Columns.String("TABLE_TYPE", right.Index))));
-            }
-
+            var rows = MetadataRowReader.NativeRows(
+                results, schema, operation, tableTypes, parentCatalog, parentSchema, parentTable);
             var arrays = new List<IArrowArray>(schema.FieldsList.Count);
-            for (int column = 0; column < schema.FieldsList.Count; column++)
+            foreach (var field in schema.FieldsList)
             {
-                switch (schema.FieldsList[column].DataType.TypeId)
+                switch (field.DataType.TypeId)
                 {
                     case ArrowTypeId.String:
                         var strings = new StringArray.Builder();
-                        foreach (var (columns, row, sourceCatalog) in rows)
+                        foreach (var row in rows)
                         {
-                            string? typeName = column == sourceColumns && operation == MetadataOperation.GetColumns
-                                ? columns.String("TYPE_NAME", row)
-                                : null;
-                            string? value = column == sourceColumns && operation == MetadataOperation.GetColumns
-                                ? typeName == null ? null : ColumnMetadataHelper.GetBaseTypeName(typeName)
-                                : columns.String(schema.FieldsList[column].Name, row);
-                            if (column == 1 && operation == MetadataOperation.GetSchemas)
-                                value ??= sourceCatalog ?? "";
-                            if (column == 0 && (operation == MetadataOperation.GetTables || operation == MetadataOperation.GetColumns))
-                                value ??= sourceCatalog ?? "";
-                            if (column == 3 && operation == MetadataOperation.GetTables)
-                                value = DefaultTableType(value);
+                            string? value;
+                            if (operation == MetadataOperation.GetColumns && field.Name == "BASE_TYPE_NAME")
+                            {
+                                string? typeName = row.String("TYPE_NAME");
+                                value = typeName == null ? null : ColumnMetadataHelper.GetBaseTypeName(typeName);
+                            }
+                            else
+                                value = row.String(field.Name);
+                            if ((field.Name == "TABLE_CATALOG" && operation == MetadataOperation.GetSchemas) ||
+                                (field.Name == "TABLE_CAT" && operation is MetadataOperation.GetTables or MetadataOperation.GetColumns))
+                                value ??= row.SourceCatalog ?? "";
+                            if (field.Name == "TABLE_TYPE" && operation == MetadataOperation.GetTables)
+                                value = MetadataRowReader.DefaultTableType(value);
                             if (value == null) strings.AppendNull(); else strings.Append(value);
                         }
                         arrays.Add(strings.Build());
@@ -116,94 +68,55 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
                     case ArrowTypeId.Int8:
                         var int8 = new Int8Array.Builder();
-                        foreach (var (columns, row, _) in rows)
-                        {
-                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
-                            if (value.HasValue) int8.Append(checked((sbyte)value.Value)); else int8.AppendNull();
-                        }
-                        arrays.Add(int8.Build());
+                        arrays.Add(BuildIntegers(rows, field.Name, operation,
+                            value => int8.Append(value.HasValue ? checked((sbyte)value.Value) : (sbyte?)null),
+                            () => int8.Build()));
                         break;
 
                     case ArrowTypeId.Int16:
                         var int16 = new Int16Array.Builder();
-                        foreach (var (columns, row, _) in rows)
-                        {
-                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
-                            if (value.HasValue) int16.Append(checked((short)value.Value)); else int16.AppendNull();
-                        }
-                        arrays.Add(int16.Build());
+                        arrays.Add(BuildIntegers(rows, field.Name, operation,
+                            value => int16.Append(value.HasValue ? checked((short)value.Value) : (short?)null),
+                            () => int16.Build()));
                         break;
 
                     case ArrowTypeId.Int32:
                         var int32 = new Int32Array.Builder();
-                        foreach (var (columns, row, _) in rows)
-                        {
-                            string name = schema.FieldsList[column].Name;
-                            long? value = columns.Integer(name, row);
-                            if (operation == MetadataOperation.GetColumns && (name is "COLUMN_SIZE" or "DECIMAL_DIGITS"))
-                            {
-                                // Thrift defaults null sizes and digits to zero before type-specific overrides.
-                                value ??= 0;
-                                string? typeName = columns.String("TYPE_NAME", row);
-                                if (typeName != null)
-                                {
-                                    string baseName = ColumnMetadataHelper.GetBaseTypeName(typeName);
-                                    if (baseName is "DECIMAL" or "NUMERIC")
-                                        value = name == "COLUMN_SIZE"
-                                            ? ColumnMetadataHelper.GetColumnSizeDefault(typeName)
-                                            : ColumnMetadataHelper.GetDecimalDigitsDefault(typeName);
-                                    else if (name == "COLUMN_SIZE" && baseName is
-                                        "CHAR" or "NCHAR" or "VARCHAR" or "NVARCHAR" or "LONGVARCHAR" or "LONGNVARCHAR" or "STRING")
-                                        value = ColumnMetadataHelper.GetColumnSizeDefault(typeName);
-                                }
-                            }
-                            if (value.HasValue) int32.Append(checked((int)value.Value)); else int32.AppendNull();
-                        }
-                        arrays.Add(int32.Build());
+                        arrays.Add(BuildIntegers(rows, field.Name, operation,
+                            value => int32.Append(value.HasValue ? checked((int)value.Value) : (int?)null),
+                            () => int32.Build()));
                         break;
 
                     case ArrowTypeId.Int64:
                         var int64 = new Int64Array.Builder();
-                        foreach (var (columns, row, _) in rows)
-                        {
-                            long? value = columns.Integer(schema.FieldsList[column].Name, row);
-                            if (value.HasValue) int64.Append(value.Value); else int64.AppendNull();
-                        }
-                        arrays.Add(int64.Build());
+                        arrays.Add(BuildIntegers(rows, field.Name, operation,
+                            value => int64.Append(value), () => int64.Build()));
                         break;
 
                     default:
-                        throw new DatabricksException($"Unsupported native metadata field type: {schema.FieldsList[column].DataType}");
+                        throw new DatabricksException($"Unsupported native metadata field type: {field.DataType}");
                 }
             }
 
             return new QueryResult(rows.Count, new HiveInfoArrowStream(schema, arrays.ToArray()));
         }
 
-        internal static string? ReadString(IArrowArray array, int row)
+        private static IArrowArray BuildIntegers(
+            IReadOnlyList<NativeMetadataRow> rows, string field, MetadataOperation operation,
+            Action<long?> append, Func<IArrowArray> build)
         {
-            if (array.IsNull(row)) return null;
-            return array is StringArray strings
-                ? strings.GetString(row)
-                : throw new DatabricksException($"Expected a native metadata string, found {array.GetType().Name}");
-        }
-
-        internal static long? ReadInteger(IArrowArray array, int row)
-        {
-            if (array.IsNull(row)) return null;
-            return array switch
+            foreach (var row in rows)
             {
-                Int8Array values => values.GetValue(row),
-                Int16Array values => values.GetValue(row),
-                Int32Array values => values.GetValue(row),
-                Int64Array values => values.GetValue(row),
-                _ => throw new DatabricksException($"Expected a native metadata integer, found {array.GetType().Name}")
-            };
+                long? value = row.Integer(field);
+                if (operation == MetadataOperation.GetColumns && (field is "COLUMN_SIZE" or "DECIMAL_DIGITS"))
+                {
+                    var precisionAndScale = ColumnMetadataHelper.NormalizePrecisionAndScale(
+                        row.String("TYPE_NAME"), row.Integer("COLUMN_SIZE"), row.Integer("DECIMAL_DIGITS"));
+                    value = field == "COLUMN_SIZE" ? precisionAndScale.ColumnSize : precisionAndScale.DecimalDigits;
+                }
+                append(value);
+            }
+            return build();
         }
-
-        private static bool Matches(string? requested, string? actual)
-            => requested == null || (actual != null && string.Equals(requested, actual, StringComparison.OrdinalIgnoreCase));
-
-        internal static string DefaultTableType(string? value) => string.IsNullOrEmpty(value) ? "TABLE" : value!;
     }
 }

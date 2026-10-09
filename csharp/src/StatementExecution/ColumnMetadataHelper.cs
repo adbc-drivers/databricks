@@ -184,6 +184,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             };
         }
 
+        internal static (long ColumnSize, long DecimalDigits) NormalizePrecisionAndScale(
+            string? typeName, long? columnSize, long? decimalDigits)
+        {
+            if (typeName != null)
+            {
+                string baseName = GetBaseTypeName(typeName);
+                if (baseName is "DECIMAL" or "NUMERIC")
+                {
+                    columnSize = GetColumnSizeDefault(typeName);
+                    decimalDigits = GetDecimalDigitsDefault(typeName);
+                }
+                else if (s_charBaseTypes.Contains(baseName))
+                    columnSize = GetColumnSizeDefault(typeName);
+            }
+            // Thrift defaults null sizes and digits to zero before type-specific overrides.
+            return (columnSize ?? 0, decimalDigits ?? 0);
+        }
+
         internal static int? GetBufferLength(string typeName)
         {
             string baseName = GetBaseTypeName(typeName);
@@ -249,9 +267,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
             tableInfo.TypeName.Add(typeName);
             tableInfo.ColType.Add(GetDataTypeCode(typeName));
             tableInfo.BaseTypeName.Add(GetBaseTypeName(typeName));
-            tableInfo.Precision.Add(GetColumnSizeDefault(typeName));
-            int? scale = GetDecimalDigitsDefault(typeName);
-            tableInfo.Scale.Add(scale.HasValue ? (short)scale.Value : null);
+            var precisionAndScale = NormalizePrecisionAndScale(
+                typeName, GetColumnSizeDefault(typeName), GetDecimalDigitsDefault(typeName));
+            tableInfo.Precision.Add(checked((int)precisionAndScale.ColumnSize));
+            tableInfo.Scale.Add((short)precisionAndScale.DecimalDigits);
             tableInfo.OrdinalPosition.Add(ordinalPosition);
             tableInfo.Nullable.Add(isNullable ? (short)1 : (short)0);
             tableInfo.IsNullable.Add(isNullable ? "YES" : "NO");
