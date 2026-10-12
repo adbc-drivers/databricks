@@ -24,6 +24,7 @@ using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Http;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
+using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow;
@@ -803,7 +804,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     && schemaMap.TryGetValue(column.Schema!, out var tableMap)
                     && tableMap.TryGetValue(column.Table!, out var tableInfo))
                     ColumnMetadataHelper.PopulateTableInfoFromTypeName(
-                        tableInfo, column.Name, column.TypeName, checked(column.Ordinal + 1), column.Nullable,
+                        tableInfo, column.Name, column.TypeName,
+                        checked(column.Ordinal + MetadataRowReader.GetObjectsOrdinalOffset), column.Nullable,
                         columnDefault: column.Default, isAutoIncrement: column.IsAutoIncrement);
             }
         }
