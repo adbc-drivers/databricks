@@ -186,6 +186,9 @@ namespace AdbcDrivers.Databricks.Reader
                 }
                 catch (Exception ex)
                 {
+                    // Thrift wraps canceled HTTP requests in TTransportException.
+                    if (ct.IsCancellationRequested) return;
+
                     consecutiveFailures++;
 
                     // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
