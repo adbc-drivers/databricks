@@ -135,9 +135,7 @@ namespace AdbcDrivers.Databricks.Reader
                     TOperationHandle? operationHandle = _response.OperationHandle;
                     if (operationHandle == null) return;
 
-                    ct.ThrowIfCancellationRequested();
-                    // Stopping must not interrupt serialization into Thrift's shared transport buffer.
-                    using CancellationTokenSource timeoutCts = new CancellationTokenSource();
+                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
                     TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
@@ -188,6 +186,9 @@ namespace AdbcDrivers.Databricks.Reader
                 }
                 catch (Exception ex)
                 {
+                    // Thrift wraps canceled HTTP requests in TTransportException.
+                    if (ct.IsCancellationRequested) return;
+
                     consecutiveFailures++;
 
                     // Log the error but continue polling. Transient errors (e.g. ObjectDisposedException
