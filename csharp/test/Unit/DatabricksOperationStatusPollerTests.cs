@@ -22,6 +22,9 @@
 */
 
 using System;
+using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader;
@@ -30,6 +33,10 @@ using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
 using Moq;
+using Thrift;
+using Thrift.Protocol;
+using Thrift.Transport;
+using Thrift.Transport.Client;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -308,6 +315,149 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.True(pollCount > 0, "Should have polled at least once");
             _mockClient.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        }
+
+        [Theory]
+        [InlineData(1, false)]
+        [InlineData(4, false)]
+        [InlineData(10, false)]
+        [InlineData(20, false)]
+        [InlineData(1, true)]
+        [InlineData(4, true)]
+        [InlineData(10, true)]
+        [InlineData(20, true)]
+        public async Task StoppingDuringSerializationPreservesCloseOperation(int pauseAfterWrite, bool cancelExternally)
+        {
+            _operationHandle.OperationId.Secret = new byte[16];
+            _operationHandle.HasResultSet = true;
+            var server = new Mock<TCLIService.IAsync>(MockBehavior.Strict);
+            server.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TGetOperationStatusResp
+                {
+                    Status = new TStatus(TStatusCode.SUCCESS_STATUS),
+                    OperationState = TOperationState.FINISHED_STATE
+                });
+            server.Setup(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TCloseOperationResp { Status = new TStatus(TStatusCode.SUCCESS_STATUS) });
+
+            using var httpClient = new HttpClient(new ThriftHandler(server.Object))
+            {
+                BaseAddress = new Uri("http://localhost/")
+            };
+            using var transport = new PausingHttpTransport(httpClient, pauseAfterWrite);
+            using var client = new ThreadSafeClient(new TCLIService.Client(new TBinaryProtocol(transport)));
+            _mockStatement.Setup(s => s.Client).Returns(client);
+            using var cancellation = new CancellationTokenSource();
+            using var poller = new DatabricksOperationStatusPoller(_mockStatement.Object, _mockResponse.Object);
+
+            poller.Start(cancellation.Token);
+            try
+            {
+                await WaitForSignal(transport.Paused.Task);
+                if (cancelExternally)
+                {
+                    cancellation.Cancel();
+                }
+                else
+                {
+                    poller.Stop();
+                }
+            }
+            finally
+            {
+                transport.Resume.TrySetResult(true);
+                poller.Dispose();
+            }
+
+            await client.CloseOperation(new TCloseOperationReq(_operationHandle));
+
+            server.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.Once);
+            server.Verify(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task StoppedPollStillHonorsRequestTimeout()
+        {
+            var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var timedOut = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .Returns(async (TGetOperationStatusReq request, CancellationToken token) =>
+                {
+                    started.TrySetResult(token);
+                    try
+                    {
+                        await Task.Delay(Timeout.Infinite, token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        timedOut.TrySetResult(true);
+                        throw;
+                    }
+                    return new TGetOperationStatusResp();
+                });
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object, _mockResponse.Object, requestTimeoutSeconds: 3);
+
+            poller.Start();
+            await WaitForSignal(started.Task);
+            CancellationToken requestToken = await started.Task;
+            poller.Stop();
+            Assert.False(requestToken.IsCancellationRequested);
+            await WaitForSignal(timedOut.Task);
+            poller.Dispose();
+
+            _mockClient.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        private static async Task WaitForSignal(Task task)
+        {
+            Assert.Same(task, await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(10))));
+            await task;
+        }
+
+        private sealed class PausingHttpTransport : THttpTransport
+        {
+            private readonly int _pauseAfterWrite;
+            private int _writes;
+
+            public TaskCompletionSource<bool> Paused { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource<bool> Resume { get; } = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public PausingHttpTransport(HttpClient client, int pauseAfterWrite)
+                : base(client, new TConfiguration())
+            {
+                _pauseAfterWrite = pauseAfterWrite;
+            }
+
+            public override async Task WriteAsync(byte[] buffer, int offset, int length, CancellationToken cancellationToken)
+            {
+                await base.WriteAsync(buffer, offset, length, cancellationToken);
+                if (++_writes == _pauseAfterWrite)
+                {
+                    Paused.TrySetResult(true);
+                    await Resume.Task;
+                }
+            }
+        }
+
+        private sealed class ThriftHandler : HttpMessageHandler
+        {
+            private readonly TCLIService.AsyncProcessor _processor;
+
+            public ThriftHandler(TCLIService.IAsync server)
+            {
+                _processor = new TCLIService.AsyncProcessor(server);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                using var input = new MemoryStream(await request.Content!.ReadAsByteArrayAsync());
+                using var output = new MemoryStream();
+                using var transport = new TStreamTransport(input, output, new TConfiguration());
+                Assert.True(await _processor.ProcessAsync(new TBinaryProtocol(transport), new TBinaryProtocol(transport), cancellationToken));
+                Assert.Equal(input.Length, input.Position);
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(output.ToArray()) };
+            }
         }
     }
 }

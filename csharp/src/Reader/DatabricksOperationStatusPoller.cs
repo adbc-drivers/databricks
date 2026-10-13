@@ -135,7 +135,9 @@ namespace AdbcDrivers.Databricks.Reader
                     TOperationHandle? operationHandle = _response.OperationHandle;
                     if (operationHandle == null) return;
 
-                    using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    ct.ThrowIfCancellationRequested();
+                    // Stopping must not interrupt serialization into Thrift's shared transport buffer.
+                    using CancellationTokenSource timeoutCts = new CancellationTokenSource();
                     timeoutCts.CancelAfter(TimeSpan.FromSeconds(_requestTimeoutSeconds));
 
                     TGetOperationStatusReq request = new TGetOperationStatusReq(operationHandle);
