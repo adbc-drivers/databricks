@@ -21,7 +21,7 @@ using AdbcDrivers.HiveServer2;
 using Apache.Arrow;
 using Apache.Arrow.Types;
 
-namespace AdbcDrivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Native
 {
     internal sealed class NativeMetadataColumns
     {
@@ -74,5 +74,57 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         private static bool IsInteger(ArrowTypeId type) => type is
             ArrowTypeId.Int8 or ArrowTypeId.Int16 or ArrowTypeId.Int32 or ArrowTypeId.Int64;
+    }
+
+    internal readonly struct NativeMetadataRow
+    {
+        internal NativeMetadataRow(NativeMetadataColumns columns, int index, string? sourceCatalog)
+        {
+            Columns = columns;
+            Index = index;
+            SourceCatalog = sourceCatalog;
+        }
+
+        private NativeMetadataColumns Columns { get; }
+        private int Index { get; }
+        internal string? SourceCatalog { get; }
+        internal string? String(string name) => Columns.String(name, Index);
+        internal long? Integer(string name) => Columns.Integer(name, Index);
+
+        internal static List<NativeMetadataRow> Read(MetadataBatches result, Schema schema, MetadataOperation operation)
+            => Read(new[] { result }, schema, operation);
+
+        // Validates each batch against the Thrift schema and keeps rows in the requested catalog.
+        internal static List<NativeMetadataRow> Read(
+            IEnumerable<MetadataBatches> results, Schema schema, MetadataOperation operation)
+        {
+            string? catalogField = operation switch
+            {
+                MetadataOperation.GetCatalogs => "TABLE_CAT",
+                MetadataOperation.GetSchemas => "TABLE_CATALOG",
+                MetadataOperation.GetTables or MetadataOperation.GetColumns => "TABLE_CAT",
+                _ => null,
+            };
+            var rows = new List<NativeMetadataRow>();
+            foreach (var result in results)
+            {
+                // A wildcard scope cannot supply a missing native catalog identifier.
+                string? sourceCatalog = result.CatalogFilter.IsPattern
+                    ? CatalogFilter.Literal(result.SourceCatalog) : result.SourceCatalog;
+                foreach (var batch in result.Batches)
+                {
+                    var columns = new NativeMetadataColumns(batch, schema, operation);
+                    for (int index = 0; index < batch.Length; index++)
+                    {
+                        var row = new NativeMetadataRow(columns, index, sourceCatalog);
+                        // Native metadata expands a quoted catalog as LIKE, so re-apply the requested filter.
+                        if (catalogField == null ||
+                            result.CatalogFilter.Matches(row.String(catalogField) ?? row.SourceCatalog))
+                            rows.Add(row);
+                    }
+                }
+            }
+            return rows;
+        }
     }
 }

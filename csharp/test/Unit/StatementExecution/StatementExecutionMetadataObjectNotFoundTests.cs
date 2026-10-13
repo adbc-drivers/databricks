@@ -28,6 +28,7 @@ using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -761,7 +762,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData("COMPARATOR_TESTS", "comparator_tests")]   // case-insensitive match
         public void ExactCatalogFilter_NullOrEqual_ReturnsTrue(string? requested, string rowValue)
         {
-            Assert.True(MetadataRowReader.MatchesCatalog(CatalogFilter.Exact(requested), rowValue));
+            Assert.True(CatalogFilter.Exact(requested).Matches(rowValue));
         }
 
         [Theory]
@@ -770,7 +771,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData("comparator_tests", null)]   // specified vs NULL server column → filters out
         public void ExactCatalogFilter_SpecifiedNonMatching_ReturnsFalse(string requested, string? rowValue)
         {
-            Assert.False(MetadataRowReader.MatchesCatalog(CatalogFilter.Exact(requested), rowValue));
+            Assert.False(CatalogFilter.Exact(requested).Matches(rowValue));
         }
 
         // Exercise parent filtering through the HTTP metadata path, not just the predicate.
