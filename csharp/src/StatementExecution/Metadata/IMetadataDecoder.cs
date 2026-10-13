@@ -26,8 +26,8 @@ namespace AdbcDrivers.Databricks.StatementExecution.Metadata
 
         IEnumerable<SchemaRow> Schemas(MetadataBatches result);
 
-        // Table types are defaulted but not filtered.
-        IEnumerable<TableRow> Tables(MetadataBatches result);
+        // Keeps rows whose defaulted table type is in tableTypes; null keeps all.
+        IEnumerable<TableRow> Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes);
 
         IEnumerable<ColumnRow> Columns(MetadataBatches result);
     }

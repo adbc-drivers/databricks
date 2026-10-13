@@ -16,16 +16,15 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using AdbcDrivers.HiveServer2.Hive2;
 
 namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Native
 {
     internal sealed partial class MetadataDecoder
     {
-        public IEnumerable<TableRow> Tables(MetadataBatches result)
+        public IEnumerable<TableRow> Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes)
         {
-            foreach (var row in TableRows(result, tableTypes: null))
+            foreach (var row in TableRows(result, tableTypes))
             {
                 string? schema = row.String("TABLE_SCHEM");
                 string? table = row.String("TABLE_NAME");
@@ -39,10 +38,10 @@ namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Native
             MetadataBatches result, IReadOnlyCollection<string>? tableTypes)
         {
             var rows = NativeMetadataRow.Read(result,
-                    MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables)
-                .Where(row => MetadataRowReader.MatchesTableType(
-                    tableTypes, MetadataRowReader.DefaultTableType(row.String("TABLE_TYPE"))))
-                .ToList();
+                MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables);
+            if (tableTypes != null)
+                rows.RemoveAll(row => !MetadataRowReader.MatchesTableType(
+                    tableTypes, MetadataRowReader.DefaultTableType(row.String("TABLE_TYPE"))));
             rows.Sort(CompareTables);
             return rows;
         }

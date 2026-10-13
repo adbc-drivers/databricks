@@ -172,16 +172,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution.Metadata
         }
 
         [Theory]
-        [InlineData(false, new[] { 0, 0, 1 })]
-        [InlineData(true, new[] { 0, 1 })]
+        [InlineData(false, new[] { 0, 1, 2 })]
+        [InlineData(true, new[] { 0, 1 })] // Numbering before the skip would give { 0, 2 }.
         public void Columns_GetObjectsSkipsIncompleteRowsBeforeNumbering(bool requireTableIdentifiers, int[] expected)
         {
-            using var batch = Strings(
-                ("catalogName", new string?[] { "main", "main", "main" }),
-                ("namespace", new string?[] { "default", "default", "default" }),
-                ("tableName", new string?[] { "t", null, "t" }),
-                ("col_name", new string?[] { "a", "x", "c" }),
-                ("columnType", new string?[] { "INT", "INT", "INT" }));
+            using var batch = ShowColumns(("t", "a"), ("t", ""), ("t", "c"));
 
             var result = new ColumnMetadataResult(new[]
             {

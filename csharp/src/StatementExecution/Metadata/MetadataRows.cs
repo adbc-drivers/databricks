@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+using System;
+
 namespace AdbcDrivers.Databricks.StatementExecution.Metadata
 {
     internal readonly struct SchemaRow
@@ -72,7 +74,8 @@ namespace AdbcDrivers.Databricks.StatementExecution.Metadata
         internal string TypeName { get; }
         internal bool Nullable { get; }
         // Zero-based; see MetadataRowReader.GetObjectsOrdinalOffset.
-        internal int Ordinal => _ordinal ?? 0;
+        internal int Ordinal => _ordinal
+            ?? throw new InvalidOperationException("Column rows must be read through MetadataRowReader");
         internal bool HasOrdinal => _ordinal.HasValue;
         internal string? Default { get; }
         internal bool IsAutoIncrement { get; }

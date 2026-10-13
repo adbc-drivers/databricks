@@ -19,6 +19,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Types;
 using Xunit;
 using static AdbcDrivers.Databricks.Tests.Unit.StatementExecution.Metadata.MetadataFixtures;
@@ -139,6 +140,100 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution.Metadata
             Assert.Null(row.ParentName);
             Assert.Equal(2, Legacy.MetadataDecoder.Instance.ForeignKeys(
                 result, null, null, null, "foreign", "default", "orders").Count());
+        }
+
+        [Fact]
+        public async Task Catalogs_BuildThriftColumns()
+        {
+            using var batch = Strings(("catalog", new string?[] { "main", "other" }));
+
+            var rows = await Rows(Builder.Catalogs(new MetadataBatches(new List<RecordBatch> { batch }, false)));
+
+            Assert.Equal(new[] { new[] { ("TABLE_CAT", (object?)"main") }, new[] { ("TABLE_CAT", (object?)"other") } }, rows);
+        }
+
+        [Fact]
+        public async Task Schemas_BuildThriftColumns()
+        {
+            using var batch = Strings(
+                ("databaseName", new string?[] { "default", "sales" }),
+                ("catalog", new string?[] { "main", "other" }));
+
+            var rows = await Rows(Builder.Schemas(new MetadataBatches(new List<RecordBatch> { batch }, false)));
+
+            Assert.Equal(new[]
+            {
+                new[] { ("TABLE_SCHEM", (object?)"default"), ("TABLE_CATALOG", "main") },
+                new[] { ("TABLE_SCHEM", (object?)"sales"), ("TABLE_CATALOG", "other") },
+            }, rows);
+        }
+
+        [Fact]
+        public async Task PrimaryKeys_BuildThriftColumnsFromServerValues()
+        {
+            using var batch = Row(("col_name", "id"), ("constraintName", "pk_orders"), ("keySeq", 2),
+                ("catalogName", "main"), ("namespace", "sales"), ("tableName", "orders"));
+
+            var rows = await Rows(Builder.PrimaryKeys(
+                new MetadataBatches(new List<RecordBatch> { batch }, false), "x", "y", "z"));
+
+            Assert.Equal(new (string, object?)[]
+            {
+                ("TABLE_CAT", "main"), ("TABLE_SCHEM", "sales"), ("TABLE_NAME", "orders"),
+                ("COLUMN_NAME", "id"), ("KEQ_SEQ", 2), ("PK_NAME", "pk_orders"),
+            }, Assert.Single(rows));
+        }
+
+        [Fact]
+        public async Task ForeignKeys_BuildThriftColumnsFromServerValues()
+        {
+            using var batch = Row(("parentCatalogName", "p_cat"), ("parentNamespace", "p_schema"),
+                ("parentTableName", "p_table"), ("parentColName", "p_col"), ("catalogName", "f_cat"),
+                ("namespace", "f_schema"), ("tableName", "f_table"), ("col_name", "f_col"),
+                ("constraintName", "fk_name"), ("keySeq", 2), ("updateRule", 3), ("deleteRule", 4),
+                ("deferrability", 6));
+
+            var rows = await Rows(Builder.ForeignKeys(new MetadataBatches(new List<RecordBatch> { batch }, false),
+                "p_cat", "p_schema", "p_table", "x", "y", "z"));
+
+            Assert.Equal(new (string, object?)[]
+            {
+                ("PKTABLE_CAT", "p_cat"), ("PKTABLE_SCHEM", "p_schema"), ("PKTABLE_NAME", "p_table"),
+                ("PKCOLUMN_NAME", "p_col"), ("FKTABLE_CAT", "f_cat"), ("FKTABLE_SCHEM", "f_schema"),
+                ("FKTABLE_NAME", "f_table"), ("FKCOLUMN_NAME", "f_col"), ("KEQ_SEQ", 2), ("UPDATE_RULE", 3),
+                ("DELETE_RULE", 4), ("FK_NAME", "fk_name"), ("PK_NAME", null), ("DEFERRABILITY", 6),
+            }, Assert.Single(rows));
+        }
+
+        private static IMetadataResultBuilder Builder => Legacy.MetadataResultBuilder.Instance;
+
+        // A one-row SHOW result; int values become Int32 columns, everything else strings.
+        private static RecordBatch Row(params (string Name, object Value)[] columns)
+        {
+            var schema = new Schema(columns.Select(column => new Field(column.Name,
+                column.Value is int ? Int32Type.Default : StringType.Default, true)), null);
+            var arrays = columns.Select(column => column.Value is int number
+                ? (IArrowArray)new Int32Array.Builder().Append(number).Build()
+                : new StringArray.Builder().Append((string)column.Value).Build()).ToArray();
+            return new RecordBatch(schema, arrays, 1);
+        }
+
+        // Each row as (column, value) pairs in schema order.
+        private static async Task<List<(string, object?)[]>> Rows(QueryResult result)
+        {
+            using var stream = result.Stream!;
+            using var batch = (await stream.ReadNextRecordBatchAsync())!;
+            return Enumerable.Range(0, batch.Length).Select(row => batch.Schema.FieldsList.Select((field, index) =>
+            {
+                var array = batch.Column(index);
+                object? value = array.IsNull(row) ? null : array switch
+                {
+                    StringArray strings => strings.GetString(row),
+                    Int32Array integers => integers.GetValue(row),
+                    _ => throw new System.InvalidOperationException(field.Name),
+                };
+                return (field.Name, value);
+            }).ToArray()).ToList();
         }
     }
 }

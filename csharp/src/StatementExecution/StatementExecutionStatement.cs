@@ -1298,7 +1298,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     sql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
                 var catalogs = MetadataRowReader.ResultBuilder(result).Catalogs(result);
-                activity?.SetTag("result_count", catalogs.RowCount);
+                activity?.SetTag("result_count", (int)catalogs.RowCount);
                 return catalogs;
             }, "GetCatalogs").ConfigureAwait(false);
         }
@@ -1327,7 +1327,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     CatalogFilter.Exact(_escapePatternWildcards ? catalog : null)).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
                 var schemas = MetadataRowReader.ResultBuilder(result).Schemas(result);
-                activity?.SetTag("result_count", schemas.RowCount);
+                activity?.SetTag("result_count", (int)schemas.RowCount);
                 return schemas;
             }, "GetSchemas").ConfigureAwait(false);
         }
@@ -1376,7 +1376,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     : null;
 
                 var tables = MetadataRowReader.ResultBuilder(result).Tables(result, tableTypeFilter);
-                activity?.SetTag("result_count", tables.RowCount);
+                activity?.SetTag("result_count", (int)tables.RowCount);
                 return tables;
             }, "GetTables").ConfigureAwait(false);
         }
@@ -1657,7 +1657,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     sql, MetadataOperation.GetPrimaryKeys, cancellationToken).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
                 var keys = MetadataRowReader.ResultBuilder(result).PrimaryKeys(result, catalog!, schema!, table!);
-                activity?.SetTag("result_count", keys.RowCount);
+                activity?.SetTag("result_count", (int)keys.RowCount);
                 return keys;
             }, "GetPrimaryKeys").ConfigureAwait(false);
         }
@@ -1740,7 +1740,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 IsNativeMetadataResult = result.IsNative;
                 var refs = MetadataRowReader.ResultBuilder(result).ForeignKeys(
                     result, pkCatalog, pkSchema, pkTable, fkCatalog!, fkSchema!, fkTable!);
-                activity?.SetTag("result_count", refs.RowCount);
+                activity?.SetTag("result_count", (int)refs.RowCount);
                 return refs;
             }, "GetCrossReference").ConfigureAwait(false);
         }

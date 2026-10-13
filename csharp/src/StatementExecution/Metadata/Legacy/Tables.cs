@@ -15,13 +15,16 @@
  */
 
 using System.Collections.Generic;
+using System.Linq;
 using Apache.Arrow;
 
 namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Legacy
 {
     internal sealed partial class MetadataDecoder
     {
-        public IEnumerable<TableRow> Tables(MetadataBatches result) => ShowTables(result, normalizeEmptyTableType: true);
+        public IEnumerable<TableRow> Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes)
+            => ShowTables(result, normalizeEmptyTableType: true)
+                .Where(row => MetadataRowReader.MatchesTableType(tableTypes, row.TableType));
 
         // GetObjects reports an empty SHOW table type as TABLE; flat GetTables keeps it.
         internal static IEnumerable<TableRow> ShowTables(MetadataBatches result, bool normalizeEmptyTableType)

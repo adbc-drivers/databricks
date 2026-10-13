@@ -31,7 +31,8 @@ namespace AdbcDrivers.Databricks.StatementExecution.Metadata
         // GetObjects ordinals are one-based on both formats, like Thrift's PositionRequiredOffset.
         internal const int GetObjectsOrdinalOffset = 1;
 
-        internal static IMetadataDecoder Decoder(MetadataBatches result)
+        // Private so SHOW column rows are always numbered by ColumnGroups.
+        private static IMetadataDecoder Decoder(MetadataBatches result)
             => result.IsNative ? Native.MetadataDecoder.Instance : Legacy.MetadataDecoder.Instance;
 
         internal static IMetadataResultBuilder ResultBuilder(MetadataBatches result) => ResultBuilder(result.IsNative);
@@ -44,7 +45,7 @@ namespace AdbcDrivers.Databricks.StatementExecution.Metadata
         internal static IEnumerable<SchemaRow> Schemas(MetadataBatches result) => Decoder(result).Schemas(result);
 
         internal static List<TableRow> Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes = null)
-            => Decoder(result).Tables(result).Where(row => MatchesTableType(tableTypes, row.TableType)).ToList();
+            => Decoder(result).Tables(result, tableTypes).ToList();
 
         internal static IEnumerable<ColumnRow> Columns(IEnumerable<MetadataBatches> results,
             bool requireTableIdentifiers = false)
