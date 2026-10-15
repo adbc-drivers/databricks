@@ -50,6 +50,19 @@ namespace AdbcDrivers.Databricks
                 var reader = new WKBReader { IsStrict = true };
                 Geometry geometry = reader.Read(wkb.ToArray());
 
+                // NTS infers output dimensions from non-NaN coordinates, so empty
+                // points lose Z/M. The validated WKB header retains that information.
+                if (geometry.IsEmpty && (geometry is Point or LineString or Polygon
+                    || geometry.NumGeometries == 0))
+                {
+                    uint type = ReadUInt32(wkb.Slice(1, 4), littleEndian: wkb[0] == 1);
+                    uint isoDimension = (type & 0x0fffffff) / 1000;
+                    bool hasZ = (type & EwkbZFlag) != 0 || isoDimension is 1 or 3;
+                    bool hasM = (type & EwkbMFlag) != 0 || isoDimension is 2 or 3;
+                    string dimension = hasZ ? (hasM ? " ZM" : " Z") : (hasM ? " M" : "");
+                    return geometry.GeometryType.ToUpperInvariant() + dimension + " EMPTY";
+                }
+
                 var writer = new WKTWriter(4)
                 {
                     OutputOrdinates = Ordinates.XYZM,
