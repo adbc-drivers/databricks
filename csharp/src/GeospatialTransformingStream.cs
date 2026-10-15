@@ -51,14 +51,58 @@ namespace AdbcDrivers.Databricks
         private readonly IArrowArrayStream _inner;
         private readonly ColumnPlan?[] _plans;
         private readonly Schema _schema;
+        private RecordBatch? _firstBatch;
+
+        internal static async ValueTask<GeospatialTransformingStream> CreateAsync(
+            IArrowArrayStream inner,
+            bool enableGeospatialSupport,
+            bool enableComplexDatatypeSupport,
+            CancellationToken cancellationToken = default)
+        {
+            var stream = new GeospatialTransformingStream(
+                inner, enableGeospatialSupport, enableComplexDatatypeSupport);
+            if (System.Array.TrueForAll(stream._plans, plan => plan == null))
+                return stream;
+
+            // SEA's reported schema is manifest-derived, not the IPC schema. Read
+            // one batch before publishing the output schema so non-geo siblings
+            // retain their physical units/timezones. Keep it for the first read.
+            RecordBatch? firstBatch = null;
+            try
+            {
+                firstBatch = await inner.ReadNextRecordBatchAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (firstBatch == null)
+                    return stream;
+                var reconciled = new GeospatialTransformingStream(
+                    inner, enableGeospatialSupport, enableComplexDatatypeSupport, firstBatch);
+                for (int i = 0; i < stream._plans.Length; i++)
+                {
+                    if (stream._plans[i] != null && reconciled._plans[i] == null)
+                        throw ShapeMismatch(inner.Schema.GetFieldByIndex(i).Name,
+                            firstBatch.Column(i).Data.DataType, stream._plans[i]!.LogicalType);
+                }
+                return reconciled;
+            }
+            catch
+            {
+                firstBatch?.Dispose();
+                inner.Dispose();
+                throw;
+            }
+        }
 
         internal GeospatialTransformingStream(
             IArrowArrayStream inner,
             bool enableGeospatialSupport,
-            bool enableComplexDatatypeSupport)
+            bool enableComplexDatatypeSupport,
+            RecordBatch? firstBatch = null)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
             _plans = new ColumnPlan?[inner.Schema.FieldsList.Count];
+            _firstBatch = firstBatch;
+            if (firstBatch != null && firstBatch.ColumnCount != _plans.Length)
+                throw new DatabricksException("Geospatial result column count changed", AdbcStatusCode.InvalidData);
 
             var fields = new List<Field>(inner.Schema.FieldsList.Count);
             for (int i = 0; i < inner.Schema.FieldsList.Count; i++)
@@ -68,6 +112,7 @@ namespace AdbcDrivers.Databricks
                     field,
                     enableGeospatialSupport,
                     enableComplexDatatypeSupport,
+                    firstBatch?.Column(i).Data.DataType,
                     out Field outputField);
                 _plans[i] = plan;
                 fields.Add(outputField);
@@ -80,9 +125,10 @@ namespace AdbcDrivers.Databricks
         public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(
             CancellationToken cancellationToken = default)
         {
-            RecordBatch? batch = await _inner
-                .ReadNextRecordBatchAsync(cancellationToken)
-                .ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            RecordBatch? batch = _firstBatch;
+            _firstBatch = null;
+            batch ??= await _inner.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
             if (batch == null)
                 return null;
 
@@ -106,12 +152,18 @@ namespace AdbcDrivers.Databricks
                 : new RecordBatch(_schema, rewritten, batch.Length);
         }
 
-        public void Dispose() => _inner.Dispose();
+        public void Dispose()
+        {
+            _firstBatch?.Dispose();
+            _firstBatch = null;
+            _inner.Dispose();
+        }
 
         private static ColumnPlan? CreatePlan(
             Field field,
             bool enableGeospatialSupport,
             bool enableComplexDatatypeSupport,
+            IArrowType? physicalType,
             out Field outputField)
         {
             string? typeText = null;
@@ -141,9 +193,10 @@ namespace AdbcDrivers.Databricks
             // representation. When an outer complex value will be serialized, the manifest
             // exposes StringType, so its parsed logical shape is the only available
             // description of the incoming native attachment.
-            IArrowType reportedType = serializesOuterComplexValue
-                ? logicalType
-                : field.DataType;
+            IArrowType reportedType = physicalType
+                ?? (serializesOuterComplexValue && field.DataType.TypeId == ArrowTypeId.String
+                    ? logicalType
+                    : field.DataType);
             Field rewriteField = RewriteGeospatialField(
                 WithType(field, logicalType),
                 WithType(field, reportedType),
@@ -151,7 +204,7 @@ namespace AdbcDrivers.Databricks
                 out bool containsGeo);
             if (!containsGeo)
             {
-                outputField = field;
+                outputField = physicalType == null ? field : WithType(field, physicalType);
                 return null;
             }
 
@@ -275,27 +328,29 @@ namespace AdbcDrivers.Databricks
                         path,
                         parentValidity);
                 default:
-                    return RewriteLeaf(source, outputType, path);
+                    return RewriteLeaf(source, logicalType, outputType, path);
             }
         }
 
         private static ArrayData RewriteLeaf(
             ArrayData source,
+            IArrowType logicalType,
             IArrowType outputType,
             string path)
         {
+            // SQL TIMESTAMP has no Arrow unit or timezone qualifier. The physical
+            // timestamp is authoritative, but other type/decimal mismatches still
+            // indicate malformed data and must not be silently passed through.
+            bool compatible = LeafTypesMatch(source.DataType, logicalType)
+                || (source.DataType is TimestampType && logicalType is TimestampType)
+                || (logicalType.TypeId == ArrowTypeId.String
+                    && source.DataType.TypeId is ArrowTypeId.Null or ArrowTypeId.Interval
+                        or ArrowTypeId.Duration or ArrowTypeId.LargeString);
+            if (!compatible)
+                throw ShapeMismatch(path, source.DataType, logicalType);
+
             if (LeafTypesMatch(source.DataType, outputType))
                 return source;
-
-            // Databricks' logical TIMESTAMP type does not carry Arrow timezone
-            // metadata. Preserve the values when the physical unit matches, while
-            // retyping the array so that it agrees with the manifest-derived schema.
-            if (source.DataType is TimestampType sourceTimestamp
-                && outputType is TimestampType outputTimestamp
-                && sourceTimestamp.Unit == outputTimestamp.Unit)
-            {
-                return Retype(source, outputType, source.Children);
-            }
 
             IArrowArray sourceArray = ArrowArrayFactory.BuildArray(source);
             if (outputType.TypeId == ArrowTypeId.String)
@@ -877,6 +932,10 @@ namespace AdbcDrivers.Databricks
                     }
                 default:
                     containsGeo = false;
+                    if (logicalField.DataType.TypeId == ArrowTypeId.String
+                        && reportedField.DataType.TypeId is ArrowTypeId.Null or ArrowTypeId.Interval
+                            or ArrowTypeId.Duration or ArrowTypeId.LargeString)
+                        return WithType(reportedField, StringType.Default);
                     return reportedField;
             }
 

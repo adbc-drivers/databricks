@@ -509,10 +509,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // Reyden returns GEOMETRY / GEOGRAPHY as struct<srid,wkb>. Convert it to
             // GeoArrow WKB in native mode or render WKT / EWKT locally in string mode.
             // This setting is deliberately not included in SEA session_confs.
-            reader = new GeospatialTransformingStream(
+            reader = await GeospatialTransformingStream.CreateAsync(
                 reader,
                 _enableGeospatialSupport,
-                _enableComplexDatatypeSupport);
+                _enableComplexDatatypeSupport,
+                cancellationToken).ConfigureAwait(false);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
