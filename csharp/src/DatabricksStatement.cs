@@ -277,7 +277,7 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
+            if (ctx == null) return MaybeWrapComplexTypesAsync(base.ExecuteQuery()).GetAwaiter().GetResult();
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
@@ -290,7 +290,7 @@ namespace AdbcDrivers.Databricks
                 // would mask those types, so keep the real reader here and wrap only on return.
                 _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                return MaybeWrapComplexTypesAsync(result).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -308,7 +308,7 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
+            if (ctx == null) return await MaybeWrapComplexTypesAsync(await base.ExecuteQueryAsync()).ConfigureAwait(false);
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
@@ -319,7 +319,7 @@ namespace AdbcDrivers.Databricks
                 // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
                 _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                return await MaybeWrapComplexTypesAsync(result).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -337,14 +337,14 @@ namespace AdbcDrivers.Databricks
         /// they must become GeoArrow WKB or EWKT strings before an outer complex
         /// value is serialized.
         /// </summary>
-        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        private async ValueTask<QueryResult> MaybeWrapComplexTypesAsync(QueryResult result)
         {
             if (result.Stream == null) return result;
 
-            IArrowArrayStream stream = new GeospatialTransformingStream(
+            IArrowArrayStream stream = await GeospatialTransformingStream.CreateAsync(
                 result.Stream,
                 enableGeospatialSupport,
-                enableComplexDatatypeSupport);
+                enableComplexDatatypeSupport).ConfigureAwait(false);
             if (!enableComplexDatatypeSupport)
             {
                 stream = new ComplexTypeSerializingStream(stream);
