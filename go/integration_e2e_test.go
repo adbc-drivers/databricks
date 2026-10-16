@@ -31,7 +31,7 @@ import (
 	"time"
 
 	"github.com/adbc-drivers/databricks/go"
-	"github.com/adbc-drivers/driverbase-go/validation"
+	"github.com/adbc-drivers/driverbase-go/testutil"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
@@ -52,7 +52,7 @@ func TestE2E(t *testing.T) {
 
 func (suite *E2ETests) TestSimpleQuery() {
 	ctx := context.Background()
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT 1 as test_column"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT 1 as test_column"))
 	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
 	suite.Require().NoError(err)
 	defer reader.Release()
@@ -81,7 +81,7 @@ func (suite *E2ETests) TestNamedParameters() {
 	builder.Release()
 	defer record.Release()
 
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT :number AS number, :text AS text"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT :number AS number, :text AS text"))
 	suite.Require().NoError(suite.stmt.Bind(ctx, record))
 	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
 	suite.Require().NoError(err)
@@ -117,7 +117,7 @@ func (suite *E2ETests) TestNullableParameters() {
 	]`))
 	suite.Require().NoError(err)
 	defer record.Release()
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT ?, ?"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT ?, ?"))
 	suite.Require().NoError(suite.stmt.Prepare(ctx))
 	suite.Require().NoError(suite.stmt.Bind(ctx, record))
 	reader, _, err := suite.stmt.ExecuteQuery(ctx)
@@ -147,7 +147,7 @@ func (suite *E2ETests) TestParameterizedExpressions() {
 	]`))
 	suite.Require().NoError(err)
 	defer record.Release()
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT 1 + :value"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT 1 + :value"))
 	suite.Require().NoError(suite.stmt.Bind(ctx, record))
 	reader, _, err := suite.stmt.ExecuteQuery(ctx)
 	suite.Require().NoError(err)
@@ -190,11 +190,11 @@ func (suite *E2ETests) TestMetadataOperations() {
 	// Test basic metadata queries
 	suite.T().Run("ShowCatalogs", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
-		err = stmt.SetSqlQuery("SHOW CATALOGS")
+		err = stmt.SetSqlQuery(context.Background(), "SHOW CATALOGS")
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -213,12 +213,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowSchemas", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
 		query := fmt.Sprintf("SHOW SCHEMAS IN %s", catalog)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(context.Background(), query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -237,12 +237,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowTables", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
 		query := fmt.Sprintf("SHOW TABLES IN %s.%s", catalog, schema)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(context.Background(), query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -287,23 +287,23 @@ func (suite *E2ETests) TestConnectionOptions() {
 			maps.Copy(opts, suite.Quirks.DatabaseOptions())
 			maps.Copy(opts, tt.options)
 
-			db, err := driver.NewDatabase(opts)
+			db, err := driver.NewDatabaseWithContext(context.Background(), opts)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), db)
+			defer testutil.CheckedCloseWithContext(suite.T(), db, context.Background())
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 
 			conn, err := db.Open(ctx)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), conn)
+			defer testutil.CheckedCloseWithContext(suite.T(), conn, context.Background())
 
 			// Execute a simple query to verify the connection works
-			stmt, err := conn.NewStatement()
+			stmt, err := conn.NewStatement(context.Background())
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), stmt)
+			defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
-			err = stmt.SetSqlQuery("SELECT 1")
+			err = stmt.SetSqlQuery(context.Background(), "SELECT 1")
 			require.NoError(t, err)
 
 			reader, _, err := stmt.ExecuteQuery(ctx)
