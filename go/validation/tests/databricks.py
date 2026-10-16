@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import re
 from pathlib import Path
 
@@ -30,6 +31,7 @@ class DatabricksQuirks(model.DriverQuirks):
         connection_set_current_catalog=False,
         connection_set_current_schema=False,
         connection_transactions=False,
+        get_objects=True,
         get_objects_constraints_check=False,
         get_objects_constraints_foreign=False,
         get_objects_constraints_primary=False,
@@ -92,4 +94,9 @@ class DatabricksQuirks(model.DriverQuirks):
         return quirks.split_statement(statement, dialect=self.name)
 
 
-QUIRKS = [DatabricksQuirks()]
+@functools.cache
+def get_quirks(version: str) -> DatabricksQuirks:
+    quirks = DatabricksQuirks()
+    if version not in {"latest", quirks.short_version}:
+        raise ValueError(f"Unsupported Databricks version: {version}")
+    return quirks
