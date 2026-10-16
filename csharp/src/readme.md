@@ -133,9 +133,24 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.enable_pk_fk` | Whether to enable primary key foreign key metadata calls | `true` |
 | `adbc.databricks.use_desc_table_extended` | Whether to use DESC TABLE EXTENDED to get extended column metadata when supported by DBR | `true` (SEA/REST), `false` (Thrift) |
 | `adbc.databricks.enable_run_async_thrift` | Whether to enable RunAsync flag in Thrift operations | `true` |
+| `adbc.databricks.enable_geospatial_support` | Whether GEOMETRY/GEOGRAPHY use GeoArrow WKB values. Set to `false` for WKT/EWKT strings. The driver converts between Reyden and legacy server representations locally; the setting is not sent to SEA. | `true` |
 | `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
 | `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
 | `adbc.apache.connection.polltime_ms` | The time in milliseconds between each poll for query execution status. Databricks default is 100ms (Apache default: 500ms) | `100` |
+
+Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
+`adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
+returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
+
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
 
 ### Tracing Properties
 
@@ -193,6 +208,8 @@ The following table depicts how the Databricks ADBC driver converts a Databricks
 | DECIMAL              | Decimal128 | SqlDecimal |
 | DOUBLE               | Double     | double |
 | FLOAT                | Float      | float |
+| GEOGRAPHY            | GeoArrow WKB / String | byte[] / string |
+| GEOMETRY             | GeoArrow WKB / String | byte[] / string |
 | INT                  | Int32      | int |
 | INTERVAL_DAY_TIME+   | String     | string |
 | INTERVAL_YEAR_MONTH+ | String     | string |

@@ -222,6 +222,7 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
 | `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | Not Supported (Thrift-only concept) |
 | `adbc.databricks.enable_complex_datatype_support` | Return native Arrow types for ARRAY/MAP/STRUCT | `false` | `false` |
+| `adbc.databricks.enable_geospatial_support` | Return GEOMETRY/GEOGRAPHY as GeoArrow WKB (`false` returns WKT/EWKT strings); the driver converts between Reyden and legacy server representations locally | `true` | `true` |
 | `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | Not Supported (no fetch-handle to keep warm) |
 | `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | Not Supported |
 | `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` | `true` |
@@ -234,6 +235,20 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | Not Supported |
 | `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
+
+Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
+`adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
+returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
+
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
 
 **Performance Notes:**
 - Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
@@ -390,6 +405,8 @@ The driver automatically converts Databricks/Spark types to Apache Arrow types:
 | DECIMAL | Decimal128/Decimal256 | decimal | With `scalar` conversion |
 | DOUBLE | Double | double | |
 | FLOAT | Float | float | Converted to Float instead of Double |
+| GEOGRAPHY | GeoArrow WKB / String | byte[] / string | Controlled by `adbc.databricks.enable_geospatial_support` |
+| GEOMETRY | GeoArrow WKB / String | byte[] / string | Controlled by `adbc.databricks.enable_geospatial_support` |
 | INT | Int32 | int | |
 | SMALLINT | Int16 | short | |
 | STRING | String | string | |
