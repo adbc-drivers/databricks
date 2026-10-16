@@ -14,6 +14,10 @@
 
 driver = "databricks"
 
+[additional-runtime-dependencies]
+# The open crate uses Windows shell/COM APIs to launch the OAuth browser.
+windows = ["OLE32.DLL", "SHELL32.DLL"]
+
 [lang]
 lang = "rust"
 features = ["ffi"]

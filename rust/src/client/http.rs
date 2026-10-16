@@ -86,7 +86,6 @@ pub struct TlsConfig {
     /// Default: false.
     pub allow_self_signed: Option<bool>,
     /// Don't verify that the certificate hostname matches the server.
-    /// Requires the `native-tls` backend.
     /// Default: false.
     pub allow_hostname_mismatch: Option<bool>,
     /// Path to a PEM-encoded CA certificate file to add to the trust store.
@@ -171,6 +170,7 @@ impl DatabricksHttpClient {
         retry_configs: HashMap<RequestCategory, RetryConfig>,
     ) -> Result<Self> {
         let mut builder = Client::builder()
+            .use_rustls_tls()
             .connect_timeout(config.connect_timeout)
             .timeout(config.read_timeout)
             .pool_max_idle_per_host(config.max_connections_per_host)
@@ -203,11 +203,19 @@ impl DatabricksHttpClient {
                     cert_path, e
                 ))
             })?;
-            let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
+            let certs = reqwest::Certificate::from_pem_bundle(&pem).map_err(|e| {
                 DatabricksErrorHelper::invalid_argument()
                     .message(format!("Invalid PEM certificate '{}': {}", cert_path, e))
             })?;
-            builder = builder.add_root_certificate(cert);
+            if certs.is_empty() {
+                return Err(DatabricksErrorHelper::invalid_argument().message(format!(
+                    "Invalid PEM certificate '{}': no certificates found",
+                    cert_path
+                )));
+            }
+            for cert in certs {
+                builder = builder.add_root_certificate(cert);
+            }
             debug!("Added custom CA certificate from: {}", cert_path);
         }
 
@@ -786,14 +794,20 @@ lGrv15pBcePj
 
     #[test]
     fn test_http_client_with_invalid_pem() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), "not a valid PEM certificate").unwrap();
-        let mut config = HttpClientConfig::default();
-        config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
-        let result = DatabricksHttpClient::new(config, default_retry_configs());
-        assert!(result.is_err());
-        let err_msg = format!("{:?}", result.unwrap_err());
-        assert!(err_msg.contains("Invalid PEM certificate"));
+        for pem in [
+            "",
+            "not a valid PEM certificate",
+            "-----BEGIN CERTIFICATE-----\n!invalid!\n-----END CERTIFICATE-----",
+        ] {
+            let tmp = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(tmp.path(), pem).unwrap();
+            let mut config = HttpClientConfig::default();
+            config.tls.trusted_certificate_path = Some(tmp.path().to_string_lossy().to_string());
+            let result = DatabricksHttpClient::new(config, default_retry_configs());
+            assert!(result.is_err());
+            let err_msg = format!("{:?}", result.unwrap_err());
+            assert!(err_msg.contains("Invalid PEM certificate"));
+        }
     }
 
     #[test]

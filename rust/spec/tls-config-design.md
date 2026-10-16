@@ -30,14 +30,14 @@ The C# driver already supports TLS configuration via `adbc.http_options.tls.*` p
 
 ### reqwest's Default TLS Behavior
 
-The driver uses `reqwest` 0.12 with both **native-tls** (OpenSSL on Linux) and **rustls** backends compiled in. By default:
+The driver uses `reqwest` 0.12.28 or later with **rustls** and native certificate roots. This avoids a runtime dependency on OpenSSL on Linux. By default:
 
 - TLS is always enabled for `https://` URIs (Databricks endpoints always use HTTPS)
 - Server certificates are validated against the system trust store
 - Hostname verification is enforced
 - Self-signed certificates are rejected
 
-There is currently no way to configure any of this behavior via ADBC parameters.
+The ADBC parameters below configure certificate and hostname validation.
 
 ### Existing Architecture
 
@@ -86,7 +86,7 @@ This matches the Simba ODBC driver's `AllowSelfSignedCert` option. An earlier de
 
 Allows the server certificate's Common Name (CN) or Subject Alternative Name (SAN) to not match the hostname being connected to. This is useful when connecting through a proxy that rewrites hostnames.
 
-**Implementation note:** `reqwest::ClientBuilder::danger_accept_invalid_hostnames()` is only available with the **native-tls** backend. Since the project currently compiles both backends, we need to ensure native-tls is used when this option is set. We will add the `native-tls` feature to reqwest to guarantee `danger_accept_invalid_hostnames()` is available at compile time.
+**Implementation note:** `reqwest::ClientBuilder::danger_accept_invalid_hostnames()` supports the Rustls backend in the Reqwest version used by this driver. Disabling hostname verification still requires a trusted certificate unless `allow_self_signed` is also enabled.
 
 #### `tls.trusted_certificate_path`
 
@@ -197,13 +197,16 @@ Also add corresponding `get_option_string` and `get_option_double` (for bools as
 
 ### Cargo.toml Changes
 
-Add the `native-tls` feature to reqwest to guarantee `danger_accept_invalid_hostnames()` is available:
+Disable Reqwest's default TLS backend and select Rustls with native roots, retaining the other default HTTP features:
 
 ```toml
-reqwest = { version = "0.12", features = ["json", "gzip", "stream", "native-tls"] }
+reqwest = { version = "0.12.28", default-features = false, features = [
+    "charset", "http2", "system-proxy", "json", "gzip", "stream",
+    "rustls-tls-native-roots",
+] }
 ```
 
-This is a no-op in terms of binary behavior (native-tls is already compiled in as a transitive dependency), but ensures the method is available at the `reqwest::ClientBuilder` API level.
+OAuth uses the same HTTP client. Its default TLS feature is disabled to avoid adding a separate bundled root store. Rustls handles certificate verification on every platform; native roots and custom PEM certificates remain supported, but platform TLS policies and certificate acceptance can differ from the previous backend.
 
 ## Validation
 
@@ -255,7 +258,7 @@ The Rust driver uses `databricks.http.tls.*` while the C# driver uses `adbc.http
 
 - **Certificate revocation mode**: reqwest does not expose CRL/OCSP configuration. The C# driver supports this via `adbc.http_options.tls.revocation_mode` because .NET's `HttpClientHandler` natively supports it. Can be revisited if reqwest adds support.
 - **Client certificates (mTLS)**: Not needed per current requirements. Could be added later via `reqwest::ClientBuilder::identity()`.
-- **TLS version pinning**: Not needed. reqwest/native-tls negotiate the highest supported version automatically.
+- **TLS version pinning**: Not needed. Reqwest/Rustls negotiate the highest supported version automatically.
 
 ## Files Changed
 
@@ -263,7 +266,7 @@ The Rust driver uses `databricks.http.tls.*` while the C# driver uses `adbc.http
 |------|--------|
 | `rust/src/client/http.rs` | Add `TlsConfig` struct, update `HttpClientConfig`, update `DatabricksHttpClient::new()`, add unit tests |
 | `rust/src/database.rs` | Parse and get TLS options in `set_option`/`get_option_string`/`get_option_int` |
-| `rust/Cargo.toml` | Add `native-tls` feature to reqwest |
+| `rust/Cargo.toml` | Use Rustls with native certificate roots |
 | `rust/tests/tls_e2e.rs` | E2E TLS test cases (marked `#[ignore]`) |
 | `.github/workflows/rust-e2e.yml` | Add TLS job with mitmproxy sidecar |
 | `rust/spec/tls-config-design.md` | This design doc |
