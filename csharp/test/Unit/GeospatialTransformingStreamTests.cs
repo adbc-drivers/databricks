@@ -218,7 +218,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(ANY)",
                 physical.Data.DataType,
                 physical,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
             Field field = stream.Schema.GetFieldByIndex(0);
             Assert.Equal("geoarrow.wkb", field.Metadata["ARROW:extension:name"]);
             Assert.False(field.Metadata.ContainsKey("ARROW:extension:metadata"));
