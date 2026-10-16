@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using NetTopologySuite.Geometries;
 using NetTopologySuite.IO;
@@ -48,26 +49,9 @@ namespace AdbcDrivers.Databricks
             try
             {
                 var reader = new WKBReader { IsStrict = true };
-                Geometry geometry = reader.Read(wkb.ToArray());
-
-                // NTS infers output dimensions from non-NaN coordinates, so empty
-                // points lose Z/M. The validated WKB header retains that information.
-                if (geometry.IsEmpty && (geometry is Point or LineString or Polygon
-                    || geometry.NumGeometries == 0))
-                {
-                    uint type = ReadUInt32(wkb.Slice(1, 4), littleEndian: wkb[0] == 1);
-                    uint isoDimension = (type & 0x0fffffff) / 1000;
-                    bool hasZ = (type & EwkbZFlag) != 0 || isoDimension is 1 or 3;
-                    bool hasM = (type & EwkbMFlag) != 0 || isoDimension is 2 or 3;
-                    string dimension = hasZ ? (hasM ? " ZM" : " Z") : (hasM ? " M" : "");
-                    return geometry.GeometryType.ToUpperInvariant() + dimension + " EMPTY";
-                }
-
-                var writer = new WKTWriter(4)
-                {
-                    OutputOrdinates = Ordinates.XYZM,
-                };
-                return Compact(writer.Write(geometry));
+                byte[] bytes = wkb.ToArray();
+                Geometry geometry = reader.Read(bytes);
+                return new WkbWktWriter(bytes, geometry.PrecisionModel).Write(geometry);
             }
             catch (ParseException ex)
             {
@@ -161,6 +145,159 @@ namespace AdbcDrivers.Databricks
             internal int Dimensions { get; }
 
             internal uint EwkbFlags { get; }
+        }
+
+        // NTS's WKTWriter infers dimensions from non-NaN coordinates, losing Z/M
+        // on empty members and collections. Pair the validated geometry tree with
+        // its WKB headers so every node retains its encoded dimensions.
+        private sealed class WkbWktWriter
+        {
+            private readonly byte[] _input;
+            private readonly StringBuilder _output = new StringBuilder();
+            private readonly OrdinateFormat _ordinateFormat;
+            private int _offset;
+
+            internal WkbWktWriter(byte[] input, PrecisionModel precisionModel)
+            {
+                _input = input;
+                _ordinateFormat = new OrdinateFormat(
+                    Math.Max(0, precisionModel.MaximumSignificantDigits));
+            }
+
+            internal string Write(Geometry geometry)
+            {
+                WriteGeometry(geometry, tagged: true);
+                if (_offset != _input.Length)
+                {
+                    throw new FormatException(
+                        $"Malformed WKB: {_input.Length - _offset} trailing bytes");
+                }
+                return _output.ToString();
+            }
+
+            private void WriteGeometry(Geometry geometry, bool tagged)
+            {
+                if (_input.Length - _offset < 5)
+                    throw new FormatException("Malformed WKB: geometry header is truncated");
+
+                byte byteOrder = _input[_offset++];
+                if (byteOrder > 1)
+                    throw new FormatException($"Malformed WKB: invalid byte order {byteOrder}");
+                bool littleEndian = byteOrder == 1;
+                uint rawType = ReadUInt32(littleEndian);
+                WkbType isoType = DecodeIsoWkbType(
+                    rawType & ~(EwkbZFlag | EwkbMFlag | EwkbSridFlag));
+                uint flags = isoType.EwkbFlags | (rawType & (EwkbZFlag | EwkbMFlag));
+                bool hasZ = (flags & EwkbZFlag) != 0;
+                bool hasM = (flags & EwkbMFlag) != 0;
+                var type = new WkbType(isoType.BaseType, 2 + (hasZ ? 1 : 0) + (hasM ? 1 : 0), flags);
+                if ((rawType & EwkbSridFlag) != 0)
+                    ReadUInt32(littleEndian);
+
+                if (tagged)
+                {
+                    _output.Append(geometry.GeometryType.ToUpperInvariant());
+                    _output.Append(hasZ ? (hasM ? " ZM" : " Z") : (hasM ? " M" : ""));
+                    bool emptyBody = geometry is GeometryCollection
+                        ? geometry.NumGeometries == 0
+                        : geometry.IsEmpty;
+                    if (hasZ || hasM || emptyBody)
+                        _output.Append(' ');
+                }
+
+                switch (geometry)
+                {
+                    case Point point:
+                        SkipBytes((ulong)type.Dimensions * sizeof(double));
+                        WriteSequence(point.CoordinateSequence, type);
+                        break;
+                    case LineString line:
+                        SkipSequence(littleEndian, type.Dimensions);
+                        WriteSequence(line.CoordinateSequence, type);
+                        break;
+                    case Polygon polygon:
+                        uint rings = ReadUInt32(littleEndian);
+                        for (uint ring = 0; ring < rings; ring++)
+                            SkipSequence(littleEndian, type.Dimensions);
+                        if (polygon.IsEmpty)
+                        {
+                            _output.Append("EMPTY");
+                            break;
+                        }
+                        _output.Append('(');
+                        WriteSequence(polygon.ExteriorRing.CoordinateSequence, type);
+                        for (int ring = 0; ring < polygon.NumInteriorRings; ring++)
+                        {
+                            _output.Append(',');
+                            WriteSequence(polygon.GetInteriorRingN(ring).CoordinateSequence, type);
+                        }
+                        _output.Append(')');
+                        break;
+                    case GeometryCollection collection:
+                        uint children = ReadUInt32(littleEndian);
+                        if (children == 0)
+                        {
+                            _output.Append("EMPTY");
+                            break;
+                        }
+                        _output.Append('(');
+                        for (int child = 0; child < collection.NumGeometries; child++)
+                        {
+                            if (child != 0)
+                                _output.Append(',');
+                            WriteGeometry(collection.GetGeometryN(child), tagged: type.BaseType == 7);
+                        }
+                        _output.Append(')');
+                        break;
+                    default:
+                        throw new FormatException("Unsupported WKB geometry type");
+                }
+            }
+
+            private void WriteSequence(CoordinateSequence sequence, WkbType type)
+            {
+                if (sequence.Count == 0)
+                {
+                    _output.Append("EMPTY");
+                    return;
+                }
+                _output.Append('(');
+                for (int i = 0; i < sequence.Count; i++)
+                {
+                    if (i != 0)
+                        _output.Append(',');
+                    _output.Append(_ordinateFormat.Format(sequence.GetX(i)));
+                    _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetY(i)));
+                    if ((type.EwkbFlags & EwkbZFlag) != 0)
+                        _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetZ(i)));
+                    if ((type.EwkbFlags & EwkbMFlag) != 0)
+                        _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetM(i)));
+                }
+                _output.Append(')');
+            }
+
+            private uint ReadUInt32(bool littleEndian)
+            {
+                if (_input.Length - _offset < 4)
+                    throw new FormatException("Malformed WKB: truncated uint32");
+                uint value = GeospatialWkb.ReadUInt32(
+                    new ReadOnlySpan<byte>(_input, _offset, 4), littleEndian);
+                _offset += 4;
+                return value;
+            }
+
+            private void SkipSequence(bool littleEndian, int dimensions)
+            {
+                uint points = ReadUInt32(littleEndian);
+                SkipBytes((ulong)points * (ulong)dimensions * sizeof(double));
+            }
+
+            private void SkipBytes(ulong count)
+            {
+                if (count > (ulong)(_input.Length - _offset))
+                    throw new FormatException("Malformed WKB: payload is truncated");
+                _offset += (int)count;
+            }
         }
 
         private sealed class WkbToEwkbRewriter
@@ -367,18 +504,5 @@ namespace AdbcDrivers.Databricks
                 output[i] = (byte)(value >> shift);
             }
         }
-
-        private static string Compact(string wkt) =>
-            wkt.Replace("POINT (", "POINT(")
-                .Replace("LINESTRING (", "LINESTRING(")
-                .Replace("POLYGON (", "POLYGON(")
-                .Replace("MULTIPOINT (", "MULTIPOINT(")
-                .Replace("MULTILINESTRING (", "MULTILINESTRING(")
-                .Replace("MULTIPOLYGON (", "MULTIPOLYGON(")
-                .Replace("GEOMETRYCOLLECTION (", "GEOMETRYCOLLECTION(")
-                .Replace(", ", ",")
-                .Replace(" ZM(", " ZM (")
-                .Replace(" Z(", " Z (")
-                .Replace(" M(", " M (");
     }
 }

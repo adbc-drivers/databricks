@@ -495,7 +495,9 @@ namespace AdbcDrivers.Databricks
             IArrowArray values = ArrowArrayFactory.BuildArray(source);
             var output = new BinaryArray.Builder();
             ValidateParentValidity(parentValidity, values.Length, path);
-            int defaultSrid = tag.Srid >= 0 ? tag.Srid : 0;
+            int defaultSrid = tag.Srid >= 0
+                ? tag.Srid
+                : tag.Family == GeospatialArrowType.Family.Geography ? 4326 : 0;
 
             for (int row = 0; row < values.Length; row++)
             {
