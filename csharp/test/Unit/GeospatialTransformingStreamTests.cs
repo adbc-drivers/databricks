@@ -259,6 +259,24 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Theory]
+        [InlineData(0)]
+        [InlineData(4326)]
+        public async Task StringMode_RetainsEmptyCollectionDimensionsAndSrid(int srid)
+        {
+            const string wkt = "GEOMETRYCOLLECTION ZM (POINT ZM EMPTY,MULTIPOINT ZM (EMPTY,EMPTY))";
+            byte[] wkb = GeospatialWkb.ToWkb(wkt, 0, out _);
+            StructArray physical = NativeGeoArray(
+                new[] { srid }, new[] { wkb }, new[] { true });
+
+            using GeospatialTransformingStream stream = CreateStream(
+                "GEOMETRY(ANY)", StringType.Default, physical, enableGeospatialSupport: false);
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            string expected = srid == 0 ? wkt : $"SRID={srid};{wkt}";
+            Assert.Equal(expected, Assert.IsType<StringArray>(batch.Column(0)).GetString(0));
+        }
+
+        [Theory]
         [InlineData(true)]
         [InlineData(false)]
         public async Task EmptyResult_StillExposesConfiguredGeospatialSchema(bool enabled)
@@ -497,12 +515,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.True(values.IsNull(2));
         }
 
-        [Fact]
-        public async Task LegacyAnyGeographyTextWithoutSrid_UsesUnknownSrid()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task LegacyAnyGeographyTextWithoutSrid_UsesWgs84(bool large)
         {
-            StringArray text = new StringArray.Builder()
-                .Append("POINT(1 2)")
-                .Build();
+            IArrowArray text = large
+                ? new LargeStringArray.Builder().Append("POINT(1 2)").AppendNull().Build()
+                : new StringArray.Builder().Append("POINT(1 2)").AppendNull().Build();
 
             using GeospatialTransformingStream stream = CreateStream(
                 "GEOGRAPHY(ANY)",
@@ -520,8 +540,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.NotNull(batch);
             BinaryArray values = Assert.IsType<BinaryArray>(batch.Column(0));
             Assert.Equal(
-                GeospatialWkb.ToEwkb(s_pointOneTwo, 0),
+                GeospatialWkb.ToEwkb(s_pointOneTwo, 4326),
                 values.GetBytes(0).ToArray());
+            Assert.True(values.IsNull(1));
         }
 
         [Fact]
