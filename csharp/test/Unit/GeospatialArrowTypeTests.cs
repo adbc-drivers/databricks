@@ -26,10 +26,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit
     {
         [Theory]
         [InlineData("GEOMETRY", "geometry", "0")]
+        [InlineData("GEOMETRY(0)", "geometry", "0")]
         [InlineData("GEOMETRY(3857)", "geometry", "3857")]
         [InlineData("GEOMETRY(ANY)", "geometry", "-1")]
         [InlineData("GEOGRAPHY", "geography", "4326")]
         [InlineData("GEOGRAPHY(4326)", "geography", "4326")]
+        [InlineData("GEOGRAPHY(ANY)", "geography", "-1")]
         public void TryCreate_ReturnsTaggedInternalStruct(
             string sqlType,
             string familyKey,
@@ -46,6 +48,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.False(type.Fields[1].IsNullable);
             Assert.Equal("true", type.Fields[1].Metadata[familyKey]);
             Assert.Equal(expectedSrid, type.Fields[1].Metadata["srid"]);
+            Assert.True(GeospatialArrowType.ResolveTag(type, out _));
         }
 
         [Theory]
@@ -53,6 +56,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData("GEOGRAPHY()")]
         [InlineData("GEOMETRY(-1)")]
         [InlineData("GEOGRAPHY(-2)")]
+        [InlineData("GEOGRAPHY(0)")]
+        [InlineData("GEOGRAPHY(3857)")]
+        [InlineData("GEOGRAPHY(2147483647)")]
         [InlineData("GEOMETRY(2147483648)")]
         [InlineData("GEOGRAPHY(4326) trailing")]
         public void TryCreate_RejectsMalformedType(string sqlType)
@@ -112,21 +118,108 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Theory]
+        [InlineData("0")]
+        [InlineData("3857")]
+        [InlineData("2147483647")]
+        public void UnsupportedFixedGeographySridArrowTag_IsRejected(string srid)
+        {
+            StructType type = TaggedType(new Dictionary<string, string>
+            {
+                ["geography"] = "true",
+                ["srid"] = srid,
+            });
+
+            DatabricksException error = Assert.Throws<DatabricksException>(() =>
+                GeospatialArrowType.ResolveTag(type, out _));
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains("4326", error.Message);
+        }
+
+        [Theory]
+        [InlineData("geometry", "false", "4326", "must be true")]
+        [InlineData("geography", "false", "4326", "must be true")]
+        [InlineData("geometry", "true", "not-an-integer", "invalid type-level srid")]
+        [InlineData("geometry", "true", "2147483648", "invalid type-level srid")]
+        [InlineData(null, null, "4326", "exactly one")]
+        public void MalformedArrowTag_IsRejected(
+            string? familyKey,
+            string? familyValue,
+            string srid,
+            string expectedError)
+        {
+            var metadata = new Dictionary<string, string> { ["srid"] = srid };
+            if (familyKey != null)
+                metadata[familyKey] = familyValue!;
+
+            DatabricksException error = Assert.Throws<DatabricksException>(() =>
+                GeospatialArrowType.ResolveTag(TaggedType(metadata), out _));
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains(expectedError, error.Message);
+        }
+
+        [Fact]
+        public void NearMissTransportShapes_AreNotGeospatial()
+        {
+            StructType canonical = TaggedType(new Dictionary<string, string>
+            {
+                ["geometry"] = "true",
+                ["srid"] = "4326",
+            });
+            Field srid = canonical.Fields[0];
+            Field wkb = canonical.Fields[1];
+            var nearMisses = new[]
+            {
+                new StructType(new[]
+                {
+                    srid,
+                    new Field("wkb", LargeBinaryType.Default, nullable: false, wkb.Metadata),
+                }),
+                new StructType(new[] { wkb, srid }),
+                new StructType(new[] { srid, wkb, new Field("extra", Int32Type.Default, false) }),
+            };
+
+            foreach (StructType type in nearMisses)
+            {
+                Assert.False(GeospatialArrowType.IsStructShape(type));
+                Assert.False(GeospatialArrowType.ResolveTag(type, out _));
+            }
+        }
+
+        [Theory]
         [InlineData("GEOMETRY(103192)", "{\"crs\":\"103192\",\"crs_type\":\"srid\"}")]
         [InlineData("GEOGRAPHY(4326)", "{\"crs\":\"4326\",\"crs_type\":\"srid\",\"edges\":\"spherical\"}")]
-        public void GeoArrowMetadata_TreatsSridAsOpaque(
+        [InlineData("GEOMETRY", null)]
+        [InlineData("GEOMETRY(0)", null)]
+        [InlineData("GEOMETRY(ANY)", null)]
+        [InlineData("GEOGRAPHY(ANY)", "{\"edges\":\"spherical\"}")]
+        public void GeoArrowMetadata_ReplacesStaleMetadataForSridAndFamily(
             string sqlType,
-            string expectedMetadata)
+            string? expectedMetadata)
         {
             Assert.True(GeospatialArrowType.TryCreate(sqlType, out StructType type));
             Assert.True(GeospatialArrowType.ResolveTag(type, out GeospatialArrowType.Tag tag));
+            var sourceMetadata = new Dictionary<string, string>
+            {
+                ["ARROW:extension:name"] = "stale.extension",
+                ["ARROW:extension:metadata"] = "{\"crs\":\"stale\"}",
+                ["custom"] = "preserved",
+            };
 
             Field output = GeospatialArrowType.CreateGeoArrowField(
-                new Field("geo", type, nullable: true),
+                new Field("geo", type, nullable: true, sourceMetadata),
                 tag);
 
+            Assert.Equal("geo", output.Name);
+            Assert.True(output.IsNullable);
+            Assert.IsType<BinaryType>(output.DataType);
             Assert.Equal("geoarrow.wkb", output.Metadata["ARROW:extension:name"]);
-            Assert.Equal(expectedMetadata, output.Metadata["ARROW:extension:metadata"]);
+            Assert.Equal("preserved", output.Metadata["custom"]);
+            if (expectedMetadata == null)
+                Assert.False(output.Metadata.ContainsKey("ARROW:extension:metadata"));
+            else
+                Assert.Equal(expectedMetadata, output.Metadata["ARROW:extension:metadata"]);
+            Assert.Equal("stale.extension", sourceMetadata["ARROW:extension:name"]);
+            Assert.Equal("{\"crs\":\"stale\"}", sourceMetadata["ARROW:extension:metadata"]);
         }
 
         private static StructType TaggedType(Dictionary<string, string> metadata) =>

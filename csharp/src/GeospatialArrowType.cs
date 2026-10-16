@@ -104,7 +104,8 @@ namespace AdbcDrivers.Databricks
         /// Fixed positive SRIDs are advertised as opaque database SRIDs. Databricks
         /// supports CRS authorities other than EPSG, and the manifest exposes only the
         /// integer SRID. ANY has no column CRS because its SRID varies by row; those
-        /// rows carry EWKB instead.
+        /// rows carry EWKB instead. GeoArrow readers may reject EWKB or ignore its
+        /// embedded SRID; preserving those bytes does not guarantee reader support.
         /// </summary>
         internal static Field CreateGeoArrowField(Field source, Tag tag)
         {
@@ -196,6 +197,11 @@ namespace AdbcDrivers.Databricks
                 throw InvalidTag("type-level srid must be -1 (ANY) or nonnegative");
             }
 
+            if (geography && srid != -1 && srid != 4326)
+            {
+                throw InvalidTag("GEOGRAPHY type-level srid must be -1 (ANY) or 4326");
+            }
+
             tag = new Tag(geometry ? Family.Geometry : Family.Geography, srid);
             return true;
         }
@@ -224,7 +230,8 @@ namespace AdbcDrivers.Databricks
                     NumberStyles.Integer,
                     CultureInfo.InvariantCulture,
                     out srid)
-                && srid >= 0;
+                && srid >= 0
+                && (family != Family.Geography || srid == 4326);
         }
 
         private static bool MetadataIsTrue(
