@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # This workflow runs in the context of the base repository after the
-# "Rust Test" workflow completes. It downloads the coverage artifact
+# "Rust Coverage" workflow completes. It downloads the coverage artifact
 # and posts the coverage report as a PR comment. This two-workflow
 # approach is necessary because fork PRs do not receive write
 # permissions on the GITHUB_TOKEN.
@@ -22,7 +22,7 @@ name: Rust Coverage Report
 
 on:
   workflow_run:
-    workflows: ["Rust Test"]
+    workflows: ["Rust Coverage"]
     types:
       - completed
 
