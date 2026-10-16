@@ -22,6 +22,8 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
+using NetTopologySuite.Geometries;
+using NetTopologySuite.IO;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -187,6 +189,50 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 GeospatialWkb.ToEwkb(s_pointOneTwo, 4326),
                 values.GetBytes(0).ToArray());
             Assert.True(values.IsNull(1));
+        }
+
+        [Theory]
+        [InlineData(true, true)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(false, false)]
+        public async Task AnySrid_EwkbReaderCanPreserveOrIgnoreEmbeddedSrid(
+            bool nativeInput,
+            bool handleSrid)
+        {
+            int[] srids = { 4326, 3857, 0 };
+            IArrowArray physical = nativeInput
+                ? NativeGeoArray(
+                    srids,
+                    new[] { s_pointOneTwo, s_pointOneTwo, s_pointOneTwo },
+                    new[] { true, true, true })
+                : new StringArray.Builder()
+                    .Append("SRID=4326;POINT(1 2)")
+                    .Append("SRID=3857;POINT(1 2)")
+                    .Append("POINT(1 2)")
+                    .Build();
+
+            using GeospatialTransformingStream stream = CreateStream(
+                "GEOMETRY(ANY)",
+                physical.Data.DataType,
+                physical,
+                enableGeospatialSupport: true);
+            Field field = stream.Schema.GetFieldByIndex(0);
+            Assert.Equal("geoarrow.wkb", field.Metadata["ARROW:extension:name"]);
+            Assert.False(field.Metadata.ContainsKey("ARROW:extension:metadata"));
+
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            BinaryArray values = Assert.IsType<BinaryArray>(batch.Column(0));
+            var reader = new WKBReader { HandleSRID = handleSrid };
+            int defaultSrid = reader.Read(s_pointOneTwo).SRID;
+            for (int row = 0; row < srids.Length; row++)
+            {
+                Point point = Assert.IsType<Point>(reader.Read(values.GetBytes(row).ToArray()));
+                Assert.Equal(1, point.X);
+                Assert.Equal(2, point.Y);
+                Assert.Equal(handleSrid ? srids[row] : defaultSrid, point.SRID);
+            }
         }
 
         [Fact]
