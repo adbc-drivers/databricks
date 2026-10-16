@@ -192,6 +192,31 @@ jobs:
 
           cargo test
 
+      - name: Post-Test
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_HTTPPATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_OAUTH_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_OAUTH_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }} # zizmor: ignore[secrets-outside-env]
+        working-directory: rust
+        run: |
+          set -a
+          if [[ -f .env ]]; then
+            source .env
+          fi
+          if [[ -f .env.${{ matrix.platform }} ]]; then
+            source .env.${{ matrix.platform }}
+          fi
+          if [[ -f .env.ci ]]; then
+            source .env.ci
+          fi
+          if [[ -f .env.override ]]; then
+            source .env.override
+          fi
+          set +a
+
+          ./ci/scripts/post-test.sh
 
       - name: clippy
         working-directory: rust

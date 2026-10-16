@@ -18,6 +18,33 @@ limitations under the License.
 
 This directory contains GitHub Actions workflows for automated testing and validation.
 
+## Generated Workflows and Custom Checks
+
+Regenerate the common workflows from the repository root:
+
+```bash
+uvx --from git+https://github.com/adbc-drivers/dev adbc-gen-workflow generate "$(pwd)"
+```
+
+Configure generated workflows in `generate.toml`. Databricks-specific checks live
+in the following files so that regeneration preserves them:
+
+- `rust/ci/scripts/post-test.sh` (relative to the repository root) builds and tests
+  the FFI feature and runs Clippy with all targets and features. The generator
+  includes this executable hook in both Rust test and release workflows when the
+  file exists. Regenerate workflows after adding or removing the hook.
+- `rust_coverage.yaml` runs coverage on Rust pull requests and uploads the
+  `rust-coverage` artifact. `rust_coverage_report.yaml` listens for the
+  `Rust Coverage` workflow and posts the report, including for fork PRs.
+- `merge_queue_lint.yaml` runs pre-commit and zizmor on merge groups. Its job name,
+  `lint & pre-commit`, matches the check from `dev.yaml`. Keep its lint steps in
+  sync with `dev.yaml`; the generated workflow handles pull requests and pushes.
+
+Zizmor reads `.github/zizmor.yaml` from the repository root. It records exceptions
+for existing findings in custom workflows and Dependabot configuration so this
+migration preserves their behavior. Generated workflows remain checked, and
+regeneration preserves the exceptions file.
+
 ## Workflows
 
 ### C# Build and Test (`csharp.yml`)
