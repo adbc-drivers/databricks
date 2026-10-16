@@ -240,9 +240,15 @@ Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
 `adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
 returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
 
-GeoArrow fields use the `geoarrow.wkb` extension. Fixed positive-SRID columns carry the integer
-as an opaque database `srid` CRS and use ISO WKB values. `GEOMETRY(ANY)` / `GEOGRAPHY(ANY)` use
-EWKB so each row retains its SRID; GEOGRAPHY fields also declare spherical edges.
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
 
 **Performance Notes:**
 - Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
