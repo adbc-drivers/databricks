@@ -585,7 +585,7 @@ func TestExecuteUpdateRunsOncePerParameterRow(t *testing.T) {
 				query:       test.query,
 				boundStream: newInt32RecordReader(t, schema, []int32{1, 2}, []int32{3}),
 			}
-			defer func() { require.NoError(t, statement.Close()) }()
+			defer func() { require.NoError(t, statement.Close(context.Background())) }()
 			if test.prepared {
 				require.NoError(t, statement.Prepare(context.Background()))
 			}
@@ -693,7 +693,10 @@ func (c *parameterCaptureConn) CheckNamedValue(*driver.NamedValue) error {
 	return nil
 }
 
-func (c *parameterCaptureConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+func (c *parameterCaptureConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.queries = append(c.queries, query)
 	clonedArgs := append([]driver.NamedValue(nil), args...)
 	c.calls = append(c.calls, clonedArgs)
