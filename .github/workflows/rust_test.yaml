@@ -59,13 +59,15 @@ on:
         required: true
 
 concurrency:
-  # Must share concurrency group with rust_release workflow since it also builds/tests
-  group: ${{ github.repository }}-${{ github.ref }}-rust-azure-prod
+  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
 
 defaults:
   run:
     shell: bash
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -80,6 +82,7 @@ jobs:
           - { platform: windows, arch: amd64, runner: windows-latest }
     permissions:
       contents: read
+      packages: read
     steps:
       - name: free up disk space
         if: runner.os != 'Windows'
@@ -88,7 +91,7 @@ jobs:
           # https://github.com/actions/runner-images/issues/2840
           sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -96,7 +99,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -105,15 +108,23 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f  # v2.0.0
         with:
+          cache: true
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.72.0
           run-install: false
 
+
+      - name: Log in to ghcr.io
+        if: runner.os == 'Linux'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
       - name: Build
         working-directory: rust
@@ -131,11 +142,6 @@ jobs:
           set +a
 
           cargo build --locked
-          cargo build --locked --features ffi
-
-      - name: Lint
-        working-directory: rust
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Start Test Dependencies
         # Can't use Docker on macOS AArch64 runners, and Windows containers
@@ -153,6 +159,11 @@ jobs:
           fi
 
       - name: Test
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_HTTPPATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_OAUTH_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }} # zizmor: ignore[secrets-outside-env]
+          DATABRICKS_OAUTH_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }} # zizmor: ignore[secrets-outside-env]
         working-directory: rust
         run: |
           set -a
@@ -169,21 +180,28 @@ jobs:
 
           if [[ -f ci/scripts/pre-test.sh ]]; then
             echo "Loading pre-test"
-            ./ci/scripts/pre-test.sh ${{ matrix.platform }} ${{ matrix.arch }}
+            ./ci/scripts/pre-test.sh ${{ matrix.platform }} ${{ matrix.arch }} "test-service"
           fi
 
-          cargo test --locked
-          cargo build --locked --features ffi
-          cargo test --locked --features ffi
-
-          if [[ -f ci/scripts/post-test.sh ]]; then
-            ./ci/scripts/post-test.sh
+          # if pre-test.sh needs to override env vars, it can generate this file
+          set -a
+          if [[ -f .env.override ]]; then
+            source .env.override
           fi
+          set +a
 
+          cargo test
+
+
+      - name: clippy
+        working-directory: rust
+        run: |
+          cargo clippy --locked --no-deps -- -A unused_variables -D warnings
 
 
   build:
     name: "Build databricks/${{ matrix.platform }}_${{ matrix.arch }}"
+    needs: test
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -198,7 +216,7 @@ jobs:
       packages: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -206,7 +224,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -215,13 +233,14 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f  # v2.0.0
         with:
+          cache: true
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.72.0
           run-install: false
 
       - name: Install dev tools
@@ -231,8 +250,21 @@ jobs:
 
       - name: Log in to ghcr.io
         if: runner.os == 'Linux'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+
+      - name: Add dumpbin to PATH
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\dumpbin.exe' | Select-Object -First 1
+          if (-not $dumpbin) {
+            throw "Could not find dumpbin.exe using vswhere"
+          }
+          Split-Path $dumpbin -Parent | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build Library
         working-directory: rust
@@ -249,9 +281,12 @@ jobs:
             source .env.release
           fi
           set +a
-          pixi run adbc-make check CI=true VERBOSE=true DRIVER=databricks IMPL_LANG=rust TARGET_NAME=databricks_adbc
+          pixi run adbc-make check CI=true VERBOSE=true
+          if [[ -f ci/scripts/post-build.sh ]]; then
+            ./ci/scripts/post-build.sh release ${{ matrix.platform }} ${{ matrix.arch }}
+          fi
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: drivers-${{ matrix.platform }}-${{ matrix.arch }}
           path: "rust/build/libadbc_driver_databricks.*"
@@ -260,12 +295,13 @@ jobs:
   package:
     name: "Generate Packages"
     runs-on: ubuntu-latest
-    needs: build
+    needs:
+      - build
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -273,7 +309,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -282,16 +318,17 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f  # v2.0.0
         with:
+          cache: true
           components: "clippy"
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.72.0
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: "drivers-*"
           path: "~/drivers"
@@ -299,7 +336,7 @@ jobs:
       - name: Install tools
         working-directory: rust
         run: |
-          cargo install cargo-about --version 0.8.4 --locked
+          cargo install cargo-about@0.9.1 --locked -F cli
 
       - name: Generate packages
         working-directory: rust
@@ -310,17 +347,18 @@ jobs:
             --name databricks \
             --root $(pwd) \
             --manifest-template $(pwd)/manifest.toml \
-            ${{ (inputs.release && '--release') || '' }}\
+             \
             -o ~/packages \
             ~/drivers/drivers-*-*/
 
           ls ~/packages
 
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: all-packages
           path: ~/packages
           retention-days: 7
+
 
   test-packages:
     name: "Test Packages/${{ matrix.platform }}_${{ matrix.arch }}"
@@ -336,14 +374,15 @@ jobs:
           - { platform: windows, arch: amd64, runner: windows-latest }
     steps:
       # for now, install dbc from main
-      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5  # v6.2.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
         with:
+          cache: true
           go-version: 'stable'
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.72.0
           run-install: false
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: "all-packages"
           path: "~/packages"
@@ -351,7 +390,7 @@ jobs:
         # dbc uses the filename as the driver name
         run: |
           echo "Installing dbc"
-          git clone https://github.com/columnar-tech/dbc && git -C dbc checkout 96a28b1718e25bf258fff5b7ebcf936cc05a3bdf
+          git clone --depth 1 https://github.com/columnar-tech/dbc
           cd dbc
           go build ./cmd/dbc
           echo "Installed dbc"
@@ -360,14 +399,14 @@ jobs:
           echo "Installing ${driver_pkg}"
           ./dbc install --no-verify "${driver_pkg}"
           echo "Installed ${driver_pkg}"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 1
           persist-credentials: false
           submodules: 'recursive'
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -403,7 +442,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name != 'workflow_dispatch'
         with:
           fetch-depth: 0
@@ -411,7 +450,7 @@ jobs:
           submodules: 'recursive'
 
       - name: "checkout remote"
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: github.event_name == 'workflow_dispatch'
         with:
           repository: ${{ inputs.repository }}
@@ -420,12 +459,12 @@ jobs:
           persist-credentials: false
           submodules: 'recursive'
 
-      - uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514  # v0.11.0
         with:
-          pixi-version: v0.63.2
+          pixi-version: v0.72.0
           run-install: false
 
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           name: "all-packages"
           path: "~/packages"
@@ -441,38 +480,3 @@ jobs:
 
           pixi run release --dry-run $(pwd) $tag
           echo gh release upload $tag $(find ~/packages -name '*.tar.gz') $(find ~/packages -name 'manifest.yaml') $(find ~/packages -name '*.md')
-
-  coverage:
-    name: "Coverage"
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: actions-rust-lang/setup-rust-toolchain@1780873c7b576612439a134613cc4cc74ce5538c  # v1.15.2
-        with:
-          components: "llvm-tools-preview"
-
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@735e5933943122c5ac182670a935f54a949265c1  # v2.52.4
-        with:
-          tool: cargo-llvm-cov
-
-      - name: Generate coverage
-        working-directory: rust
-        run: |
-          cargo llvm-cov --all-features \
-            --ignore-filename-regex "tests/" \
-            --lcov --output-path lcov.info
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
-        with:
-          name: rust-coverage
-          path: rust/lcov.info
-          retention-days: 1
