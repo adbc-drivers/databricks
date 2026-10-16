@@ -14,13 +14,12 @@
 
 import adbc_drivers_validation.tests.ingest
 
-from . import databricks
+from .databricks import get_quirks
 
 
 def pytest_generate_tests(metafunc) -> None:
-    return adbc_drivers_validation.tests.ingest.generate_tests(
-        databricks.QUIRKS, metafunc
-    )
+    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
+    return adbc_drivers_validation.tests.ingest.generate_tests(quirks, metafunc)
 
 
 class TestIngest(adbc_drivers_validation.tests.ingest.TestIngest):

@@ -21,7 +21,7 @@ from adbc_drivers_validation.tests.connection import (
     generate_tests,
 )
 
-from . import databricks
+from .databricks import get_quirks
 
 
 class TestConnection(BaseTestConnection):
@@ -371,4 +371,5 @@ class TestConnection(BaseTestConnection):
 
 
 def pytest_generate_tests(metafunc) -> None:
-    return generate_tests(databricks.QUIRKS, metafunc)
+    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
+    return generate_tests(quirks, metafunc)
