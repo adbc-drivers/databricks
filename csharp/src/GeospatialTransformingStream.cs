@@ -39,15 +39,21 @@ namespace AdbcDrivers.Databricks
     {
         private sealed class ColumnPlan
         {
-            internal ColumnPlan(IArrowType logicalType, IArrowType rewriteType)
+            internal ColumnPlan(
+                IArrowType logicalType,
+                IArrowType rewriteType,
+                bool allowPhysicalTagFallback)
             {
                 LogicalType = logicalType;
                 RewriteType = rewriteType;
+                AllowPhysicalTagFallback = allowPhysicalTagFallback;
             }
 
             internal IArrowType LogicalType { get; }
 
             internal IArrowType RewriteType { get; }
+
+            internal bool AllowPhysicalTagFallback { get; }
         }
 
         private readonly IArrowArrayStream _inner;
@@ -146,7 +152,8 @@ namespace AdbcDrivers.Databricks
                     batch.Column(i),
                     plan.LogicalType,
                     plan.RewriteType,
-                    _schema.GetFieldByIndex(i).Name);
+                    _schema.GetFieldByIndex(i).Name,
+                    plan.AllowPhysicalTagFallback);
             }
 
             return rewritten == null
@@ -173,8 +180,23 @@ namespace AdbcDrivers.Databricks
                 ColumnMetadataHelper.ArrowMetadataKey,
                 out typeText);
 
-            IArrowType logicalType = !string.IsNullOrWhiteSpace(typeText)
-                && MayContainGeospatialType(typeText!)
+            bool hasLogicalMetadata = !string.IsNullOrWhiteSpace(typeText);
+            bool logicalMayContainGeo = hasLogicalMetadata
+                && MayContainGeospatialType(typeText!);
+
+            // Logical SQL metadata is authoritative when present. Physical tags
+            // can identify geospatial values only when that metadata is absent.
+            if (hasLogicalMetadata && !logicalMayContainGeo)
+            {
+                RejectPhysicalGeospatialTags(field.DataType, field.Name);
+                if (physicalType != null)
+                    RejectPhysicalGeospatialTags(physicalType, field.Name);
+
+                outputField = physicalType == null ? field : WithType(field, physicalType);
+                return null;
+            }
+
+            IArrowType logicalType = logicalMayContainGeo
                 ? ArrowTypeParser.MapToArrowType(
                     typeText!,
                     enableComplexDatatypeSupport: true)
@@ -214,12 +236,42 @@ namespace AdbcDrivers.Databricks
             // complex support is disabled, ComplexTypeSerializingStream flattens this
             // rewritten complex field to the final JSON string in the next stage.
             outputField = rewriteField;
-            return new ColumnPlan(logicalType, rewriteField.DataType);
+            return new ColumnPlan(
+                logicalType,
+                rewriteField.DataType,
+                allowPhysicalTagFallback: !hasLogicalMetadata);
         }
 
         private static bool MayContainGeospatialType(string typeText) =>
             typeText.IndexOf("GEOMETRY", StringComparison.OrdinalIgnoreCase) >= 0
             || typeText.IndexOf("GEOGRAPHY", StringComparison.OrdinalIgnoreCase) >= 0;
+
+        private static void RejectPhysicalGeospatialTags(IArrowType type, string path)
+        {
+            if (GeospatialArrowType.ResolveTag(type, out GeospatialArrowType.Tag tag))
+                throw UnexpectedPhysicalTag(path, tag);
+
+            switch (type)
+            {
+                case StructType structType:
+                    foreach (Field field in structType.Fields)
+                        RejectPhysicalGeospatialTags(field.DataType, $"{path}.{field.Name}");
+                    break;
+                case ListType listType:
+                    RejectPhysicalGeospatialTags(listType.ValueDataType, $"{path}[]");
+                    break;
+                case LargeListType listType:
+                    RejectPhysicalGeospatialTags(listType.ValueDataType, $"{path}[]");
+                    break;
+                case FixedSizeListType listType:
+                    RejectPhysicalGeospatialTags(listType.ValueDataType, $"{path}[]");
+                    break;
+                case MapType mapType:
+                    RejectPhysicalGeospatialTags(mapType.KeyField.DataType, $"{path}.key");
+                    RejectPhysicalGeospatialTags(mapType.ValueField.DataType, $"{path}.value");
+                    break;
+            }
+        }
 
         private static IArrowArray[] CopyColumns(RecordBatch batch)
         {
@@ -235,21 +287,24 @@ namespace AdbcDrivers.Databricks
             IArrowArray source,
             IArrowType logicalType,
             IArrowType outputType,
-            string path) =>
+            string path,
+            bool allowPhysicalTagFallback) =>
             ArrowArrayFactory.BuildArray(
                 RewriteData(
                     source.Data,
                     logicalType,
                     outputType,
                     path,
-                    parentValidity: null));
+                    null,
+                    allowPhysicalTagFallback));
 
         private static ArrayData RewriteData(
             ArrayData source,
             IArrowType logicalType,
             IArrowType outputType,
             string path,
-            bool[]? parentValidity)
+            bool[]? parentValidity,
+            bool allowPhysicalTagFallback)
         {
             if (GeospatialArrowType.ResolveTag(logicalType, out GeospatialArrowType.Tag logicalTag))
             {
@@ -258,6 +313,9 @@ namespace AdbcDrivers.Databricks
 
             if (GeospatialArrowType.ResolveTag(source.DataType, out GeospatialArrowType.Tag physicalTag))
             {
+                if (!allowPhysicalTagFallback)
+                    throw UnexpectedPhysicalTag(path, physicalTag);
+
                 return RewriteGeo(source, outputType, physicalTag, path, parentValidity);
             }
 
@@ -287,7 +345,8 @@ namespace AdbcDrivers.Databricks
                                     logicalStruct.Fields[i].DataType,
                                     outputStruct.Fields[i].DataType,
                                     $"{path}.{logicalStruct.Fields[i].Name}",
-                                    childValidity));
+                                    childValidity,
+                                    allowPhysicalTagFallback));
                         }
                         return RebuildStruct(values, outputType, children).Data;
                     }
@@ -299,7 +358,8 @@ namespace AdbcDrivers.Databricks
                         outputList.ValueDataType,
                         outputType,
                         path,
-                        parentValidity);
+                        parentValidity,
+                        allowPhysicalTagFallback);
                 case LargeListType logicalList when outputType is LargeListType outputList:
                     return RewriteSingleChild(
                         source,
@@ -308,7 +368,8 @@ namespace AdbcDrivers.Databricks
                         outputList.ValueDataType,
                         outputType,
                         path,
-                        parentValidity);
+                        parentValidity,
+                        allowPhysicalTagFallback);
                 case FixedSizeListType logicalList when outputType is FixedSizeListType outputList:
                     if (logicalList.ListSize != outputList.ListSize)
                         throw ShapeMismatch(path, source.DataType, logicalType);
@@ -319,7 +380,8 @@ namespace AdbcDrivers.Databricks
                         outputList.ValueDataType,
                         outputType,
                         path,
-                        parentValidity);
+                        parentValidity,
+                        allowPhysicalTagFallback);
                 case MapType logicalMap when outputType is MapType outputMap:
                     return RewriteSingleChild(
                         source,
@@ -328,7 +390,8 @@ namespace AdbcDrivers.Databricks
                         outputMap.KeyValueType,
                         outputType,
                         path,
-                        parentValidity);
+                        parentValidity,
+                        allowPhysicalTagFallback);
                 default:
                     return RewriteLeaf(source, logicalType, outputType, path);
             }
@@ -401,7 +464,8 @@ namespace AdbcDrivers.Databricks
             IArrowType outputChild,
             IArrowType outputType,
             string path,
-            bool[]? parentValidity)
+            bool[]? parentValidity,
+            bool allowPhysicalTagFallback)
         {
             if (source.DataType.TypeId != expectedPhysicalType
                 || source.Children == null
@@ -420,7 +484,8 @@ namespace AdbcDrivers.Databricks
                 logicalChild,
                 outputChild,
                 path,
-                childValidity);
+                childValidity,
+                allowPhysicalTagFallback);
             return Retype(source, outputType, new[] { child });
         }
 
@@ -988,6 +1053,14 @@ namespace AdbcDrivers.Databricks
 
         private static Field WithType(Field field, IArrowType dataType) =>
             new Field(field.Name, dataType, field.IsNullable, field.Metadata);
+
+        private static DatabricksException UnexpectedPhysicalTag(
+            string path,
+            GeospatialArrowType.Tag tag) =>
+            new DatabricksException(
+                $"Geospatial value '{path}' is tagged {tag.Family}({tag.Srid}), "
+                + "but Spark:DataType:SqlName declares it as non-geospatial",
+                AdbcStatusCode.InvalidData);
 
         private static DatabricksException ShapeMismatch(
             string path,
