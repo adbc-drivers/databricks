@@ -121,6 +121,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
+        public void EnableGeospatialSupport_DefaultsToStringMode()
+        {
+            var result = ConnectionTelemetry.BuildDriverConnectionParams(
+                new Dictionary<string, string>(), Host, DriverModeType.Thrift,
+                enableDirectResults: true,
+                enableComplexDatatypeSupport: false,
+                connectTimeoutMilliseconds: TimeoutMs);
+
+            Assert.False(result.EnableGeospatialSupport);
+        }
+
+        [Fact]
         public void OptionalFields_LeftUnset_WhenPropertiesAbsent()
         {
             var props = new Dictionary<string, string>

@@ -444,7 +444,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
             Activity? activity,
-            bool enableGeospatialSupport = true)
+            bool enableGeospatialSupport = false)
         {
             try
             {
@@ -640,7 +640,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool enableDirectResults,
             bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
-            bool enableGeospatialSupport = true)
+            bool enableGeospatialSupport = false)
         {
             properties.TryGetValue(SparkParameters.Path, out string? httpPath);
             int port = ResolvePort(properties);

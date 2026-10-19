@@ -31,7 +31,9 @@ namespace AdbcDrivers.Databricks
     /// Reconciles logical GEOMETRY / GEOGRAPHY types from result metadata with
     /// either Reyden's physical Arrow <c>struct&lt;srid:int32,wkb:binary&gt;</c> values
     /// or legacy server-rendered WKT / EWKT. Enabled mode returns GeoArrow WKB;
-    /// disabled mode returns WKT / EWKT strings.
+    /// disabled mode returns WKT / EWKT strings. The logical SQL type is authoritative
+    /// when present; the tagged struct is a fallback only when logical metadata is absent.
+    /// Plain Binary WKB and untagged structs are not Databricks result contracts.
     /// </summary>
     internal sealed class GeospatialTransformingStream : IArrowArrayStream
     {
@@ -112,13 +114,14 @@ namespace AdbcDrivers.Databricks
             bool enableGeospatialSupport,
             out Field outputField)
         {
+            string? typeText = null;
+            bool hasLogicalMetadata = field.Metadata?.TryGetValue(
+                ColumnMetadataHelper.ArrowMetadataKey,
+                out typeText) == true
+                && !string.IsNullOrWhiteSpace(typeText);
             bool hasLogicalTag = false;
             GeospatialArrowType.Tag logicalTag = default;
-            if (field.Metadata?.TryGetValue(
-                    ColumnMetadataHelper.ArrowMetadataKey,
-                    out string? typeText) == true
-                && !string.IsNullOrWhiteSpace(typeText)
-                && MayContainGeospatialType(typeText!))
+            if (hasLogicalMetadata && MayContainGeospatialType(typeText!))
             {
                 IArrowType logicalType = ArrowTypeParser.MapToArrowType(
                     typeText!,
@@ -129,6 +132,19 @@ namespace AdbcDrivers.Databricks
             bool hasPhysicalTag = GeospatialArrowType.ResolveTag(
                 field.DataType,
                 out GeospatialArrowType.Tag physicalTag);
+            if (hasLogicalMetadata && !hasLogicalTag)
+            {
+                if (hasPhysicalTag)
+                {
+                    throw new DatabricksException(
+                        $"Column '{field.Name}' is declared as non-geospatial SQL type "
+                        + $"'{typeText}' but its Arrow schema is tagged "
+                        + $"{physicalTag.Family}({physicalTag.Srid})",
+                        AdbcStatusCode.InvalidData);
+                }
+                outputField = field;
+                return null;
+            }
             if (!hasLogicalTag && !hasPhysicalTag)
             {
                 outputField = field;
@@ -174,6 +190,9 @@ namespace AdbcDrivers.Databricks
             {
                 if (outputType.TypeId == ArrowTypeId.String)
                 {
+                    // Preserve legacy server text exactly for backward compatibility.
+                    // In particular, do not normalize formatting or revalidate an
+                    // embedded EWKT SRID against the declared fixed-SRID type.
                     return source.DataType.TypeId == ArrowTypeId.String
                         ? source
                         : ConvertLargeStringToString(source).Data;
@@ -277,6 +296,36 @@ namespace AdbcDrivers.Databricks
                     AdbcStatusCode.InvalidData);
             }
 
+            if (tag.Srid != -1)
+            {
+                for (int row = 0; row < values.Length; row++)
+                {
+                    if (values.IsNull(row))
+                        continue;
+                    if (srids.IsNull(row) || wkbs.IsNull(row))
+                    {
+                        throw new DatabricksException(
+                            $"Geospatial value '{path}' row {row} has a null child under a non-null struct",
+                            AdbcStatusCode.InvalidData);
+                    }
+                    ValidateFixedSrid(tag, srids.GetValue(row)!.Value, path, row);
+                }
+
+                // Struct slicing keeps the child and parent offsets aligned. Reuse the
+                // WKB offsets/data buffers and apply the outer struct's validity bitmap.
+                if (values.Offset == wkbs.Offset)
+                {
+                    return new BinaryArray(
+                        BinaryType.Default,
+                        values.Length,
+                        wkbs.ValueOffsetsBuffer,
+                        wkbs.ValueBuffer,
+                        values.NullBitmapBuffer,
+                        values.NullCount,
+                        wkbs.Offset);
+                }
+            }
+
             var output = new BinaryArray.Builder();
             for (int row = 0; row < values.Length; row++)
             {
@@ -311,6 +360,8 @@ namespace AdbcDrivers.Databricks
                 }
                 else
                 {
+                    // Defensive fallback for an Arrow implementation that exposes
+                    // different parent/child offsets after slicing.
                     output.Append(wkb);
                 }
             }

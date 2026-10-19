@@ -528,8 +528,10 @@ namespace AdbcDrivers.Databricks
         /// Whether GEOMETRY and GEOGRAPHY results use GeoArrow WKB.
         /// When true, values are returned as binary with the geoarrow.wkb extension;
         /// legacy server-provided WKT / EWKT is converted locally. When false, native values are
-        /// rendered locally as WKT / EWKT strings. The default is true. This is a client-side
-        /// setting and is never forwarded to SEA.
+        /// rendered locally as WKT / EWKT strings, while legacy text is returned verbatim without
+        /// normalizing its formatting or revalidating an embedded SRID. The default is false to
+        /// preserve the existing string result contract. This is a client-side setting and is
+        /// never forwarded to SEA.
         /// </summary>
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableGeospatialSupport = "adbc.databricks.enable_geospatial_support";

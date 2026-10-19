@@ -154,11 +154,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public void GeospatialSupport_DefaultsToNativeMode()
+        public void GeospatialSupport_DefaultsToStringMode()
         {
             var (httpClient, _, _) = CreateCapturingHttpClient();
             using var conn = new StatementExecutionConnection(BaseProperties(), httpClient);
-            Assert.True(conn.EnableGeospatialSupport);
+            Assert.False(conn.EnableGeospatialSupport);
         }
 
         [Fact]

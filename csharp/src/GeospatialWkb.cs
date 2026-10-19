@@ -15,7 +15,6 @@
 */
 
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -46,17 +45,7 @@ namespace AdbcDrivers.Databricks
 
         internal static string ToWkt(ReadOnlySpan<byte> wkb)
         {
-            try
-            {
-                var reader = new WKBReader { IsStrict = true };
-                byte[] bytes = wkb.ToArray();
-                Geometry geometry = reader.Read(bytes);
-                return new WkbWktWriter(bytes, geometry.PrecisionModel).Write(geometry);
-            }
-            catch (ParseException ex)
-            {
-                throw new FormatException(ex.Message, ex);
-            }
+            return new WkbWktWriter(wkb).Write();
         }
 
         /// <summary>
@@ -128,7 +117,9 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         internal static byte[] ToEwkb(ReadOnlySpan<byte> wkb, int srid)
         {
-            return new WkbToEwkbRewriter(wkb.ToArray()).Rewrite(srid);
+            byte[] output = new byte[checked(wkb.Length + sizeof(uint))];
+            new WkbToEwkbRewriter(wkb, output).Rewrite(srid);
+            return output;
         }
 
         private readonly struct WkbType
@@ -147,26 +138,26 @@ namespace AdbcDrivers.Databricks
             internal uint EwkbFlags { get; }
         }
 
-        // NTS's WKTWriter infers dimensions from non-NaN coordinates, losing Z/M
-        // on empty members and collections. Pair the validated geometry tree with
-        // its WKB headers so every node retains its encoded dimensions.
-        private sealed class WkbWktWriter
+        // Render directly from the validated WKB structure. This retains explicit
+        // dimensions on empty members without allocating an NTS Geometry tree.
+        private ref struct WkbWktWriter
         {
-            private readonly byte[] _input;
-            private readonly StringBuilder _output = new StringBuilder();
-            private readonly OrdinateFormat _ordinateFormat;
+            private static readonly OrdinateFormat s_ordinateFormat = new OrdinateFormat(16);
+
+            private readonly ReadOnlySpan<byte> _input;
+            private readonly StringBuilder _output;
             private int _offset;
 
-            internal WkbWktWriter(byte[] input, PrecisionModel precisionModel)
+            internal WkbWktWriter(ReadOnlySpan<byte> input)
             {
                 _input = input;
-                _ordinateFormat = new OrdinateFormat(
-                    Math.Max(0, precisionModel.MaximumSignificantDigits));
+                _output = new StringBuilder();
+                _offset = 0;
             }
 
-            internal string Write(Geometry geometry)
+            internal string Write()
             {
-                WriteGeometry(geometry, tagged: true);
+                WriteGeometry(tagged: true);
                 if (_offset != _input.Length)
                 {
                     throw new FormatException(
@@ -175,7 +166,7 @@ namespace AdbcDrivers.Databricks
                 return _output.ToString();
             }
 
-            private void WriteGeometry(Geometry geometry, bool tagged)
+            private uint WriteGeometry(bool tagged)
             {
                 if (_input.Length - _offset < 5)
                     throw new FormatException("Malformed WKB: geometry header is truncated");
@@ -194,86 +185,171 @@ namespace AdbcDrivers.Databricks
                 if ((rawType & EwkbSridFlag) != 0)
                     ReadUInt32(littleEndian);
 
-                if (tagged)
+                switch (type.BaseType)
                 {
-                    _output.Append(geometry.GeometryType.ToUpperInvariant());
-                    _output.Append(hasZ ? (hasM ? " ZM" : " Z") : (hasM ? " M" : ""));
-                    bool emptyBody = geometry is GeometryCollection
-                        ? geometry.NumGeometries == 0
-                        : geometry.IsEmpty;
-                    if (hasZ || hasM || emptyBody)
-                        _output.Append(' ');
-                }
-
-                switch (geometry)
-                {
-                    case Point point:
-                        SkipBytes((ulong)type.Dimensions * sizeof(double));
-                        WriteSequence(point.CoordinateSequence, type);
-                        break;
-                    case LineString line:
-                        SkipSequence(littleEndian, type.Dimensions);
-                        WriteSequence(line.CoordinateSequence, type);
-                        break;
-                    case Polygon polygon:
-                        uint rings = ReadUInt32(littleEndian);
-                        for (uint ring = 0; ring < rings; ring++)
-                            SkipSequence(littleEndian, type.Dimensions);
-                        if (polygon.IsEmpty)
+                    case 1: // POINT
                         {
-                            _output.Append("EMPTY");
+                            double x = ReadDouble(littleEndian);
+                            double y = ReadDouble(littleEndian);
+                            double z = hasZ ? ReadDouble(littleEndian) : 0;
+                            double m = hasM ? ReadDouble(littleEndian) : 0;
+                            bool empty = double.IsNaN(x) && double.IsNaN(y);
+                            WriteTag(type, tagged, empty);
+                            if (empty)
+                            {
+                                _output.Append("EMPTY");
+                            }
+                            else
+                            {
+                                _output.Append('(');
+                                WriteCoordinate(x, y, z, m, hasZ, hasM);
+                                _output.Append(')');
+                            }
                             break;
                         }
-                        _output.Append('(');
-                        WriteSequence(polygon.ExteriorRing.CoordinateSequence, type);
-                        for (int ring = 0; ring < polygon.NumInteriorRings; ring++)
+                    case 2: // LINESTRING
                         {
-                            _output.Append(',');
-                            WriteSequence(polygon.GetInteriorRingN(ring).CoordinateSequence, type);
-                        }
-                        _output.Append(')');
-                        break;
-                    case GeometryCollection collection:
-                        uint children = ReadUInt32(littleEndian);
-                        if (children == 0)
-                        {
-                            _output.Append("EMPTY");
+                            uint points = ReadUInt32(littleEndian);
+                            if (points == 1)
+                            {
+                                throw new FormatException(
+                                    "Malformed WKB: linestring must contain zero or at least two points");
+                            }
+                            WriteTag(type, tagged, points == 0);
+                            WriteSequenceBody(points, littleEndian, hasZ, hasM);
                             break;
                         }
-                        _output.Append('(');
-                        for (int child = 0; child < collection.NumGeometries; child++)
+                    case 3: // POLYGON
                         {
-                            if (child != 0)
-                                _output.Append(',');
-                            WriteGeometry(collection.GetGeometryN(child), tagged: type.BaseType == 7);
+                            uint rings = ReadUInt32(littleEndian);
+                            WriteTag(type, tagged, rings == 0);
+                            if (rings == 0)
+                            {
+                                _output.Append("EMPTY");
+                                break;
+                            }
+                            _output.Append('(');
+                            for (uint ring = 0; ring < rings; ring++)
+                            {
+                                if (ring != 0)
+                                    _output.Append(',');
+                                uint points = ReadUInt32(littleEndian);
+                                if (points < 4)
+                                {
+                                    throw new FormatException(
+                                        "Malformed WKB: polygon ring must contain at least four points");
+                                }
+                                WriteSequenceBody(
+                                    points,
+                                    littleEndian,
+                                    hasZ,
+                                    hasM,
+                                    requireClosed: true);
+                            }
+                            _output.Append(')');
+                            break;
                         }
-                        _output.Append(')');
-                        break;
+                    case 4: // MULTIPOINT
+                    case 5: // MULTILINESTRING
+                    case 6: // MULTIPOLYGON
+                    case 7: // GEOMETRYCOLLECTION
+                        {
+                            uint children = ReadUInt32(littleEndian);
+                            WriteTag(type, tagged, children == 0);
+                            if (children == 0)
+                            {
+                                _output.Append("EMPTY");
+                                break;
+                            }
+                            _output.Append('(');
+                            for (uint child = 0; child < children; child++)
+                            {
+                                if (child != 0)
+                                    _output.Append(',');
+                                uint childType = WriteGeometry(tagged: type.BaseType == 7);
+                                if (type.BaseType != 7 && childType != type.BaseType - 3)
+                                {
+                                    throw new FormatException(
+                                        $"Malformed WKB: geometry type {type.BaseType} "
+                                        + $"contains child type {childType}");
+                                }
+                            }
+                            _output.Append(')');
+                            break;
+                        }
                     default:
                         throw new FormatException("Unsupported WKB geometry type");
                 }
+
+                return type.BaseType;
             }
 
-            private void WriteSequence(CoordinateSequence sequence, WkbType type)
+            private void WriteTag(WkbType type, bool tagged, bool empty)
             {
-                if (sequence.Count == 0)
+                if (!tagged)
+                    return;
+
+                _output.Append(TypeName(type.BaseType));
+                bool hasZ = (type.EwkbFlags & EwkbZFlag) != 0;
+                bool hasM = (type.EwkbFlags & EwkbMFlag) != 0;
+                _output.Append(hasZ ? (hasM ? " ZM" : " Z") : (hasM ? " M" : ""));
+                if (hasZ || hasM || empty)
+                    _output.Append(' ');
+            }
+
+            private void WriteSequenceBody(
+                uint points,
+                bool littleEndian,
+                bool hasZ,
+                bool hasM,
+                bool requireClosed = false)
+            {
+                if (points == 0)
                 {
                     _output.Append("EMPTY");
                     return;
                 }
                 _output.Append('(');
-                for (int i = 0; i < sequence.Count; i++)
+                double firstX = 0;
+                double firstY = 0;
+                double lastX = 0;
+                double lastY = 0;
+                for (uint i = 0; i < points; i++)
                 {
                     if (i != 0)
                         _output.Append(',');
-                    _output.Append(_ordinateFormat.Format(sequence.GetX(i)));
-                    _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetY(i)));
-                    if ((type.EwkbFlags & EwkbZFlag) != 0)
-                        _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetZ(i)));
-                    if ((type.EwkbFlags & EwkbMFlag) != 0)
-                        _output.Append(' ').Append(_ordinateFormat.Format(sequence.GetM(i)));
+                    double x = ReadDouble(littleEndian);
+                    double y = ReadDouble(littleEndian);
+                    double z = hasZ ? ReadDouble(littleEndian) : 0;
+                    double m = hasM ? ReadDouble(littleEndian) : 0;
+                    if (i == 0)
+                    {
+                        firstX = x;
+                        firstY = y;
+                    }
+                    lastX = x;
+                    lastY = y;
+                    WriteCoordinate(x, y, z, m, hasZ, hasM);
                 }
                 _output.Append(')');
+                if (requireClosed && (firstX != lastX || firstY != lastY))
+                    throw new FormatException("Malformed WKB: polygon ring is not closed");
+            }
+
+            private void WriteCoordinate(
+                double x,
+                double y,
+                double z,
+                double m,
+                bool hasZ,
+                bool hasM)
+            {
+                _output.Append(s_ordinateFormat.Format(x));
+                _output.Append(' ').Append(s_ordinateFormat.Format(y));
+                if (hasZ)
+                    _output.Append(' ').Append(s_ordinateFormat.Format(z));
+                if (hasM)
+                    _output.Append(' ').Append(s_ordinateFormat.Format(m));
             }
 
             private uint ReadUInt32(bool littleEndian)
@@ -281,38 +357,54 @@ namespace AdbcDrivers.Databricks
                 if (_input.Length - _offset < 4)
                     throw new FormatException("Malformed WKB: truncated uint32");
                 uint value = GeospatialWkb.ReadUInt32(
-                    new ReadOnlySpan<byte>(_input, _offset, 4), littleEndian);
+                    _input.Slice(_offset, 4), littleEndian);
                 _offset += 4;
                 return value;
             }
 
-            private void SkipSequence(bool littleEndian, int dimensions)
+            private double ReadDouble(bool littleEndian)
             {
-                uint points = ReadUInt32(littleEndian);
-                SkipBytes((ulong)points * (ulong)dimensions * sizeof(double));
+                if (_input.Length - _offset < sizeof(double))
+                    throw new FormatException("Malformed WKB: truncated coordinate");
+                ulong bits = GeospatialWkb.ReadUInt64(
+                    _input.Slice(_offset, sizeof(double)),
+                    littleEndian);
+                _offset += sizeof(double);
+                return BitConverter.Int64BitsToDouble(unchecked((long)bits));
             }
 
-            private void SkipBytes(ulong count)
+            private static string TypeName(uint baseType)
             {
-                if (count > (ulong)(_input.Length - _offset))
-                    throw new FormatException("Malformed WKB: payload is truncated");
-                _offset += (int)count;
+                switch (baseType)
+                {
+                    case 1: return "POINT";
+                    case 2: return "LINESTRING";
+                    case 3: return "POLYGON";
+                    case 4: return "MULTIPOINT";
+                    case 5: return "MULTILINESTRING";
+                    case 6: return "MULTIPOLYGON";
+                    case 7: return "GEOMETRYCOLLECTION";
+                    default: throw new FormatException("Unsupported WKB geometry type");
+                }
             }
         }
 
-        private sealed class WkbToEwkbRewriter
+        private ref struct WkbToEwkbRewriter
         {
-            private readonly byte[] _input;
-            private readonly List<byte> _output;
+            private readonly ReadOnlySpan<byte> _input;
+            private readonly Span<byte> _output;
             private int _offset;
+            private int _outputOffset;
 
-            internal WkbToEwkbRewriter(byte[] input)
+            internal WkbToEwkbRewriter(ReadOnlySpan<byte> input, Span<byte> output)
             {
                 _input = input;
-                _output = new List<byte>(input.Length + 4);
+                _output = output;
+                _offset = 0;
+                _outputOffset = 0;
             }
 
-            internal byte[] Rewrite(int srid)
+            internal void Rewrite(int srid)
             {
                 RewriteGeometry(includeSrid: true, srid);
                 if (_offset != _input.Length)
@@ -320,7 +412,8 @@ namespace AdbcDrivers.Databricks
                     throw new FormatException(
                         $"Malformed WKB: {_input.Length - _offset} trailing bytes");
                 }
-                return _output.ToArray();
+                if (_outputOffset != _output.Length)
+                    throw new InvalidOperationException("Internal EWKB output length mismatch");
             }
 
             private uint RewriteGeometry(bool includeSrid, int srid)
@@ -344,7 +437,7 @@ namespace AdbcDrivers.Databricks
                 }
 
                 WkbType type = DecodeIsoWkbType(ReadUInt32(littleEndian));
-                _output.Add(byteOrder);
+                _output[_outputOffset++] = byteOrder;
                 uint outputType = type.BaseType | type.EwkbFlags;
                 if (includeSrid)
                     outputType |= EwkbSridFlag;
@@ -398,7 +491,7 @@ namespace AdbcDrivers.Databricks
                 if (_input.Length - _offset < 4)
                     throw new FormatException("Malformed WKB: truncated uint32");
                 uint value = GeospatialWkb.ReadUInt32(
-                    new ReadOnlySpan<byte>(_input, _offset, 4),
+                    _input.Slice(_offset, 4),
                     littleEndian);
                 _offset += 4;
                 return value;
@@ -406,9 +499,8 @@ namespace AdbcDrivers.Databricks
 
             private void AppendUInt32(uint value, bool littleEndian)
             {
-                var encoded = new byte[4];
-                WriteUInt32(encoded, value, littleEndian);
-                _output.AddRange(encoded);
+                WriteUInt32(_output.Slice(_outputOffset, sizeof(uint)), value, littleEndian);
+                _outputOffset += sizeof(uint);
             }
 
             private uint CopyUInt32(bool littleEndian)
@@ -431,9 +523,10 @@ namespace AdbcDrivers.Databricks
                     throw new FormatException("Malformed WKB: payload is truncated");
 
                 int byteCount = (int)count;
-                for (int i = 0; i < byteCount; i++)
-                    _output.Add(_input[_offset + i]);
+                _input.Slice(_offset, byteCount).CopyTo(
+                    _output.Slice(_outputOffset, byteCount));
                 _offset += byteCount;
+                _outputOffset += byteCount;
             }
         }
 
@@ -494,6 +587,17 @@ namespace AdbcDrivers.Databricks
                 | ((uint)value[1] << 16)
                 | ((uint)value[2] << 8)
                 | value[3];
+        }
+
+        private static ulong ReadUInt64(ReadOnlySpan<byte> value, bool littleEndian)
+        {
+            ulong result = 0;
+            for (int i = 0; i < sizeof(ulong); i++)
+            {
+                int shift = littleEndian ? i * 8 : (7 - i) * 8;
+                result |= (ulong)value[i] << shift;
+            }
+            return result;
         }
 
         private static void WriteUInt32(Span<byte> output, uint value, bool littleEndian)
