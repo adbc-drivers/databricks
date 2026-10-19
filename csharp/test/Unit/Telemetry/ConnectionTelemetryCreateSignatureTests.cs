@@ -69,7 +69,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
-                activity: null);
+                activity: null,
+                enableGeospatialSupport: true);
 
             try
             {
@@ -104,7 +105,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
-                activity: null);
+                activity: null,
+                enableGeospatialSupport: true);
 
             try
             {
@@ -134,7 +136,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
-                activity: null);
+                activity: null,
+                enableGeospatialSupport: true);
 
             try
             {
@@ -165,7 +168,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
-                activity: null);
+                activity: null,
+                enableGeospatialSupport: true);
 
             try
             {
@@ -207,7 +211,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
                 connectTimeoutMilliseconds: DefaultTimeoutMs,
-                activity: null);
+                activity: null,
+                enableGeospatialSupport: true);
 
             Assert.Same(NoOpConnectionTelemetry.Instance, telemetry);
             Assert.Null(telemetry.Session);

@@ -82,7 +82,7 @@ namespace AdbcDrivers.Databricks.Telemetry
             bool enableComplexDatatypeSupport,
             int connectTimeoutMilliseconds,
             Activity? activity,
-            bool enableGeospatialSupport = true)
+            bool enableGeospatialSupport)
         {
             try
             {
