@@ -90,7 +90,7 @@ func (s *statementImpl) Prepare(ctx context.Context) error {
 
 	stmt, err := s.conn.conn.PrepareContext(ctx, s.query)
 	if err != nil {
-		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "failed to prepare statement: %v", err)
+		return s.ErrorHelper.WrapInvalidState(err, "failed to prepare statement")
 	}
 
 	s.prepared = stmt
@@ -150,7 +150,7 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 	})
 
 	if err != nil {
-		return nil, errorHelper.Errorf(adbc.StatusInternal, "failed to execute query: %v", err)
+		return nil, errorHelper.WrapInternal(err, "failed to execute query")
 	}
 
 	defer func() {
@@ -241,7 +241,7 @@ func (s *statementImpl) executeUpdate(ctx context.Context, query string, args []
 		result, err = s.conn.conn.ExecContext(ctx, query, values...)
 	}
 	if err != nil {
-		return -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute update: %v", err)
+		return -1, s.ErrorHelper.WrapInternal(err, "failed to execute update")
 	}
 
 	rowsAffected, err := result.RowsAffected()

@@ -17,6 +17,7 @@ package databricks
 import (
 	"context"
 	"database/sql/driver"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -52,6 +53,8 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 
 	totalRows := int64(0)
 	params := make([]driver.NamedValue, s.boundStream.Schema().NumFields())
+	errorHelper := s.ErrorHelper
+	errorHelper.ErrorInspector = DatabricksErrorInspector{ingest: true}
 
 	for s.boundStream.Next() {
 		recordBatch := s.boundStream.RecordBatch()
@@ -70,7 +73,7 @@ func (s *statementImpl) executeIngest(ctx context.Context) (int64, error) {
 			// Use ExecContext directly instead of PrepareContext because Databricks doesn't do server-side statement preparation
 			result, err := s.conn.conn.ExecContext(ctx, insertSQL, valuesToInterfaces(params)...)
 			if err != nil {
-				return totalRows, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute the query: %v", err)
+				return totalRows, errorHelper.WrapInternal(err, "failed to execute the query")
 			}
 
 			rows, _ := result.RowsAffected()
@@ -97,7 +100,7 @@ func (s *statementImpl) createTableIfNeeded(ctx context.Context, tableName strin
 	case adbc.OptionValueIngestModeReplace:
 		dropSQL := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
 		if _, err := s.conn.conn.ExecContext(ctx, dropSQL); err != nil {
-			return s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to drop the table: %v", err)
+			return s.ErrorHelper.WrapInternal(err, "failed to drop the table")
 		}
 		return s.createTable(ctx, tableName, schema, false)
 
@@ -134,7 +137,7 @@ func (s *statementImpl) createTable(ctx context.Context, tableName string, schem
 
 	_, err := s.conn.conn.ExecContext(ctx, sql.String())
 	if err != nil {
-		return s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to create table: %v", err)
+		return s.ErrorHelper.WrapInternal(err, "failed to create table")
 	}
 	return nil
 }
@@ -161,10 +164,11 @@ func buildInsertSQL(tableName string, schema *arrow.Schema) (string, error) {
 			sql.WriteString(", ")
 		}
 
-		if field.Type.ID() == arrow.FIXED_SIZE_BINARY {
-			// Use UNHEX() to convert hex string to binary
+		switch field.Type.ID() {
+		case arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY:
+			// Send hex strings to preserve arbitrary bytes through text parameters.
 			sql.WriteString("UNHEX(?)")
-		} else {
+		default:
 			sql.WriteString("?")
 		}
 	}
@@ -253,14 +257,13 @@ func extractGoValue(arr arrow.Array, idx int) (any, error) {
 		return arr.(*array.StringView).Value(idx), nil
 
 	case arrow.BINARY:
-		return arr.(*array.Binary).Value(idx), nil
+		return hex.EncodeToString(arr.(*array.Binary).Value(idx)), nil
 	case arrow.LARGE_BINARY:
-		return arr.(*array.LargeBinary).Value(idx), nil
+		return hex.EncodeToString(arr.(*array.LargeBinary).Value(idx)), nil
 	case arrow.BINARY_VIEW:
-		return arr.(*array.BinaryView).Value(idx), nil
+		return hex.EncodeToString(arr.(*array.BinaryView).Value(idx)), nil
 	case arrow.FIXED_SIZE_BINARY:
-		// Convert to hex string for use with UNHEX() SQL function
-		return fmt.Sprintf("%x", arr.(*array.FixedSizeBinary).Value(idx)), nil
+		return hex.EncodeToString(arr.(*array.FixedSizeBinary).Value(idx)), nil
 
 	case arrow.DATE32:
 		return arr.(*array.Date32).Value(idx).ToTime(), nil

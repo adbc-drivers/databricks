@@ -89,8 +89,10 @@ func NewDriver(alloc memory.Allocator) driverbase.DriverWithContext {
 		panic(err)
 	}
 
+	base := driverbase.NewDriverImplBase(info, alloc)
+	base.ErrorHelper.ErrorInspector = DatabricksErrorInspector{}
 	return driverbase.NewDriver(&driverImpl{
-		DriverImplBase: driverbase.NewDriverImplBase(info, alloc),
+		DriverImplBase: base,
 	})
 }
 
