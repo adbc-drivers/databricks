@@ -191,6 +191,31 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.True(values.IsNull(1));
         }
 
+        [Fact]
+        public async Task FixedSridNativeMode_ReusesWkbBuffersAndOuterValidity()
+        {
+            StructArray physical = NativeGeoArray(
+                new[] { 4326, 4326 },
+                new[] { s_pointOneTwo, s_line },
+                new[] { true, false });
+            BinaryArray physicalWkb = Assert.IsType<BinaryArray>(physical.Fields[1]);
+
+            using GeospatialTransformingStream stream = CreateStream(
+                "GEOMETRY(4326)",
+                StringType.Default,
+                physical,
+                enableGeospatialSupport: true);
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+
+            Assert.NotNull(batch);
+            BinaryArray output = Assert.IsType<BinaryArray>(batch.Column(0));
+            Assert.Equal(s_pointOneTwo, output.GetBytes(0).ToArray());
+            Assert.True(output.IsNull(1));
+            Assert.True(output.ValueOffsetsBuffer.Memory.Equals(physicalWkb.ValueOffsetsBuffer.Memory));
+            Assert.True(output.ValueBuffer.Memory.Equals(physicalWkb.ValueBuffer.Memory));
+            Assert.True(output.NullBitmapBuffer.Memory.Equals(physical.NullBitmapBuffer.Memory));
+        }
+
         [Theory]
         [InlineData(true, true)]
         [InlineData(true, false)]
@@ -330,6 +355,28 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public async Task FixedSridNativeMode_RespectsSlicedStructOffset()
+        {
+            StructArray physical = NativeGeoArray(
+                new[] { 4326, 4326, 4326 },
+                new[] { s_line, s_pointOneTwo, s_line },
+                new[] { true, true, true });
+            using RecordBatch fullBatch = PhysicalBatch(physical);
+            using RecordBatch slicedBatch = fullBatch.Slice(1, 2);
+            Schema schema = SchemaFor("GEOMETRY(4326)", StringType.Default);
+            using IArrowArrayStream source = new StubArrowArrayStream(schema, new[] { slicedBatch });
+            using var stream = new GeospatialTransformingStream(
+                source,
+                enableGeospatialSupport: true);
+
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            BinaryArray values = Assert.IsType<BinaryArray>(batch.Column(0));
+            Assert.Equal(s_pointOneTwo, values.GetBytes(0).ToArray());
+            Assert.Equal(s_line, values.GetBytes(1).ToArray());
+        }
+
+        [Fact]
         public async Task Geography_UsesGeoArrowCrsAndSphericalEdges()
         {
             StructArray physical = NativeGeoArray(
@@ -466,10 +513,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public async Task LegacyText_IsPreservedInStringMode()
+        public async Task LegacyText_IsPreservedWithoutRevalidatingEmbeddedSridInStringMode()
         {
             StringArray text = new StringArray.Builder()
-                .Append("SRID=4326;POINT(1 2)")
+                .Append("SRID=3857;POINT (1 2)")
                 .Build();
 
             using GeospatialTransformingStream stream = CreateStream(
@@ -481,8 +528,83 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
             Assert.Equal(
-                "SRID=4326;POINT(1 2)",
+                "SRID=3857;POINT (1 2)",
                 Assert.IsType<StringArray>(batch.Column(0)).GetString(0));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task LegacyTextBatch_IsHandledWhenManifestDeclaresTaggedStruct(bool enabled)
+        {
+            const string sqlType = "GEOMETRY(4326)";
+            IArrowType manifestType = ArrowTypeParser.MapToArrowType(sqlType, true);
+            StringArray text = new StringArray.Builder()
+                .Append("SRID=4326;POINT(1 2)")
+                .Build();
+
+            using GeospatialTransformingStream stream = CreateStream(
+                sqlType,
+                manifestType,
+                text,
+                enableGeospatialSupport: enabled);
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+
+            Assert.NotNull(batch);
+            if (enabled)
+            {
+                Assert.Equal(
+                    s_pointOneTwo,
+                    Assert.IsType<BinaryArray>(batch.Column(0)).GetBytes(0).ToArray());
+            }
+            else
+            {
+                Assert.Equal(
+                    "SRID=4326;POINT(1 2)",
+                    Assert.IsType<StringArray>(batch.Column(0)).GetString(0));
+            }
+        }
+
+        [Fact]
+        public void NonGeospatialLogicalType_RejectsContradictoryPhysicalTag()
+        {
+            StructType taggedType = ArrowTypeParser.MapToArrowType(
+                "GEOMETRY(4326)", true) as StructType
+                ?? throw new InvalidOperationException();
+            Schema schema = SchemaFor("STRING", taggedType);
+            using IArrowArrayStream source = new StubArrowArrayStream(
+                schema,
+                System.Array.Empty<RecordBatch>());
+
+            DatabricksException error = Assert.Throws<DatabricksException>(() =>
+                new GeospatialTransformingStream(source, enableGeospatialSupport: true));
+
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Contains("non-geospatial SQL type", error.Message);
+        }
+
+        [Fact]
+        public void TaggedPhysicalType_IsDetectionFallbackWithoutLogicalMetadata()
+        {
+            StructType taggedType = ArrowTypeParser.MapToArrowType(
+                "GEOGRAPHY(4326)", true) as StructType
+                ?? throw new InvalidOperationException();
+            Schema schema = new Schema.Builder()
+                .Field(new Field("g", taggedType, nullable: true))
+                .Build();
+            using IArrowArrayStream source = new StubArrowArrayStream(
+                schema,
+                System.Array.Empty<RecordBatch>());
+            using var stream = new GeospatialTransformingStream(
+                source,
+                enableGeospatialSupport: true);
+
+            Field field = stream.Schema.GetFieldByIndex(0);
+            Assert.IsType<BinaryType>(field.DataType);
+            Assert.Equal("geoarrow.wkb", field.Metadata["ARROW:extension:name"]);
+            Assert.Equal(
+                "{\"crs\":\"4326\",\"crs_type\":\"srid\",\"edges\":\"spherical\"}",
+                field.Metadata["ARROW:extension:metadata"]);
         }
 
         [Fact]

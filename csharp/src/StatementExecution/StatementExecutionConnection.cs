@@ -398,7 +398,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _traceParentHeaderName = PropertyHelper.GetStringProperty(properties, DatabricksParameters.TraceParentHeaderName, "traceparent");
             _traceStateEnabled = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.TraceStateEnabled, false);
             _enableComplexDatatypeSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableComplexDatatypeSupport, false);
-            _enableGeospatialSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableGeospatialSupport, true);
+            _enableGeospatialSupport = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.EnableGeospatialSupport, false);
 
             // Authentication configuration.
             if (properties.TryGetValue(DatabricksParameters.IdentityFederationClientId, out string? identityFederationClientId))

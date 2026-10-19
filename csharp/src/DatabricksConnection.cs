@@ -79,7 +79,7 @@ namespace AdbcDrivers.Databricks
         private bool _enablePKFK = true;
         private bool _runAsyncInThrift = true;
         private bool _enableComplexDatatypeSupport = false;
-        private bool _enableGeospatialSupport = true;
+        private bool _enableGeospatialSupport = false;
 
         // DirectQuery configuration
         private const long DefaultDirectResultMaxBytes = 10 * 1024 * 1024; // 10MB for direct query results size limit
