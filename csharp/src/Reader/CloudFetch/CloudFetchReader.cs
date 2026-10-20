@@ -327,7 +327,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 return downloadManager.GetChunkMetrics();
             }
 
-            // Return cached metrics if download manager was already disposed after results were exhausted
+            // Return cached metrics after the download manager has been disposed.
             return _cachedChunkMetrics ?? new ChunkMetrics();
         }
 
@@ -347,6 +347,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             if (this.downloadManager != null)
             {
+                try
+                {
+                    // Geospatial initialization can dispose the reader before error telemetry is emitted.
+                    _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
+                }
+                catch
+                {
+                    // Telemetry collection must not prevent resource cleanup.
+                }
                 this.downloadManager.Dispose();
                 this.downloadManager = null;
             }
