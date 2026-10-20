@@ -91,6 +91,41 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal("GEOMETRYCOLLECTION M (POINT M (1 2 3))", GeospatialWkb.ToWkt(actual));
         }
 
+        // Fixed ISO WKB checks every nested header and ordinate. An explicit child
+        // dimension applies to its descendants without changing a sibling's inheritance.
+        [Theory]
+        [InlineData(
+            "GEOMETRYCOLLECTION Z (GEOMETRYCOLLECTION(POINT(1 2 3)))",
+            "01ef03000001000000" + "01ef03000001000000" +
+            "01e9030000000000000000f03f00000000000000400000000000000840")]
+        [InlineData(
+            "GEOMETRYCOLLECTION M (GEOMETRYCOLLECTION(POINT(1 2 3)))",
+            "01d707000001000000" + "01d707000001000000" +
+            "01d1070000000000000000f03f00000000000000400000000000000840")]
+        [InlineData(
+            "GEOMETRYCOLLECTION ZM (GEOMETRYCOLLECTION(POINT(1 2 3 4)))",
+            "01bf0b000001000000" + "01bf0b000001000000" +
+            "01b90b0000000000000000f03f000000000000004000000000000008400000000000001040")]
+        [InlineData(
+            "GEOMETRYCOLLECTION Z (GEOMETRYCOLLECTION M (POINT(1 2 3)),POINT(4 5 6))",
+            "01ef03000002000000" + "01d707000001000000" +
+            "01d1070000000000000000f03f00000000000000400000000000000840" +
+            "01e9030000000000000000104000000000000014400000000000001840")]
+        [InlineData(
+            "GEOMETRYCOLLECTION M (GEOMETRYCOLLECTION ZM (POINT(1 2 3 4)),POINT(5 6 7))",
+            "01d707000002000000" + "01bf0b000001000000" +
+            "01b90b0000000000000000f03f000000000000004000000000000008400000000000001040" +
+            "01d1070000000000000000144000000000000018400000000000001c40")]
+        [InlineData(
+            "GEOMETRYCOLLECTION ZM (GEOMETRYCOLLECTION Z (POINT(1 2 3)),POINT(4 5 6 7))",
+            "01bf0b000002000000" + "01ef03000001000000" +
+            "01e9030000000000000000f03f00000000000000400000000000000840" +
+            "01b90b00000000000000001040000000000000144000000000000018400000000000001c40")]
+        public void NestedCollectionsInheritAndOverrideDimensions(string wkt, string expectedHex)
+        {
+            Assert.Equal(FromHex(expectedHex), GeospatialWkb.ToWkb(wkt, 0, out _));
+        }
+
         [Theory]
         [InlineData("POINT(1 2)", 0, 0)]
         [InlineData("POINT(1 2)", 4326, 4326)]
