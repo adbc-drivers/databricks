@@ -24,8 +24,9 @@
 set -ex
 
 # Run Databricks driver unit tests
-source_dir=${1}/csharp/test
+source_dir="${1}/csharp/test"
 
-pushd ${source_dir}
-dotnet test --filter "FullyQualifiedName~Apache.Arrow.Adbc.Tests.Drivers.Databricks.Unit"
+pushd "${source_dir}"
+dotnet test --filter "FullyQualifiedName~AdbcDrivers.Databricks.Tests.Unit" \
+  -- RunConfiguration.TreatNoTestsAsError=true
 popd
