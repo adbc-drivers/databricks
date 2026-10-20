@@ -59,7 +59,9 @@ on:
         required: true
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.ref }}-${{ github.workflow }}
+  # Effectively prevents parallel tests - usually used for cloud workflows
+  # Not necessary if you use environments + manual approval + trust the manual approval
+  group: ${{ github.repository }}-${{ github.ref }}-go-azure-prod
   cancel-in-progress: true
 
 defaults:

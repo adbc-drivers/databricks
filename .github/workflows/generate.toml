@@ -14,6 +14,7 @@
 # limitations under the License.
 
 driver = "databricks"
+concurrency-key = "${{ github.ref }}-go-azure-prod"
 
 # Generate Go and shared dev workflows only. Leave the existing Rust workflows
 # and Rust Pixi configuration unchanged until a separate Rust migration.
