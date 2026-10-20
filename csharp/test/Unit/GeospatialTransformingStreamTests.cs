@@ -206,7 +206,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 "GEOMETRY(4326)",
                 StringType.Default,
                 physical,
-                enableGeospatialSupport: true);
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
@@ -841,28 +842,36 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.True(Assert.IsType<BinaryArray>(output.Fields[0]).IsNull(0));
         }
 
-        [Fact]
-        public async Task NullOuterStruct_MasksInvalidNativeGeoPlaceholder()
+        [Theory]
+        [InlineData("GEOMETRY(ANY)", false)]
+        [InlineData("GEOMETRY(ANY)", true)]
+        [InlineData("GEOMETRY(4326)", false)]
+        [InlineData("GEOMETRY(4326)", true)]
+        public async Task NullOuterStruct_MasksInvalidNativeGeoPlaceholder(
+            string geoType, bool enableGeospatialSupport)
         {
             StructArray invalidGeo = NativeGeoArray(
                 new[] { 4326 },
                 new[] { new byte[] { 1, 1 } },
                 new[] { true });
             StructArray physical = OuterStruct("geom", invalidGeo, outerValid: false);
-            const string sqlType = "STRUCT<geom:GEOMETRY(ANY)>";
+            string sqlType = $"STRUCT<geom:{geoType}>";
 
             using GeospatialTransformingStream stream = CreateStream(
                 sqlType,
                 ArrowTypeParser.MapToArrowType(sqlType, true),
                 physical,
-                enableGeospatialSupport: false,
+                enableGeospatialSupport,
                 enableComplexDatatypeSupport: true);
 
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
             StructArray output = Assert.IsType<StructArray>(batch.Column(0));
             Assert.True(output.IsNull(0));
-            Assert.True(Assert.IsType<StringArray>(output.Fields[0]).IsNull(0));
+            if (enableGeospatialSupport)
+                Assert.True(Assert.IsType<BinaryArray>(output.Fields[0]).IsNull(0));
+            else
+                Assert.True(Assert.IsType<StringArray>(output.Fields[0]).IsNull(0));
         }
 
         [Fact]
@@ -1246,7 +1255,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 sqlType,
                 manifestType,
                 text,
-                enableGeospatialSupport: enabled);
+                enableGeospatialSupport: enabled,
+                enableComplexDatatypeSupport: true);
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
 
             Assert.NotNull(batch);
