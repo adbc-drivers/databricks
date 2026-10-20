@@ -1,5 +1,5 @@
 <!--
-Copyright (c) 2025 ADBC Drivers Contributors
+Copyright (c) 2025-2026 ADBC Drivers Contributors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,28 @@ limitations under the License.
 # CI/CD Workflows
 
 This directory contains GitHub Actions workflows for automated testing and validation.
+
+## Workflow Generation and Merge-Queue Lint
+
+Regenerate Go and shared development workflows from the repository root:
+
+```bash
+uvx --from git+https://github.com/adbc-drivers/dev adbc-gen-workflow generate "$(pwd)"
+```
+
+`generate.toml` enables only Go. Regeneration leaves the existing Rust workflows,
+Rust Pixi configuration, and Rust lockfile unchanged. Rust FFI tests, Clippy, and
+coverage remain in the existing Rust workflows. A future Rust migration must
+explicitly enable Rust generation and update its build configuration together.
+
+`merge_queue_lint.yaml` preserves lint on merge groups. Its `lint & pre-commit`
+job matches the check from `dev.yaml`, which handles pull requests and pushes.
+Keep their lint steps in sync.
+
+`.github/zizmor.yaml` records exceptions for existing findings in custom and
+unmigrated Rust workflows, Dependabot configuration, and the existing issue
+assignment handler. Exceptions are scoped to individual rules and files; other
+checks remain enabled. Regeneration preserves this file.
 
 ## Workflows
 
