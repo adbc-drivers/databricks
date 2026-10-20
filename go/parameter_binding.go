@@ -81,12 +81,13 @@ func newParameterRowIterator(stream array.RecordReader, mode parameterBindingMod
 			}
 			seenNames[field.Name] = struct{}{}
 		}
-		if err := validateParameterType(field.Type); err != nil {
+		dataType := arrowValueType(field.Type)
+		if err := validateParameterType(dataType); err != nil {
 			it.Release()
 			return nil, err
 		}
-		if field.Type.ID() == arrow.TIMESTAMP {
-			converter, err := field.Type.(*arrow.TimestampType).GetToTimeFunc()
+		if dataType.ID() == arrow.TIMESTAMP {
+			converter, err := dataType.(*arrow.TimestampType).GetToTimeFunc()
 			if err != nil {
 				it.Release()
 				return nil, adbc.Error{
@@ -99,6 +100,17 @@ func newParameterRowIterator(stream array.RecordReader, mode parameterBindingMod
 	}
 
 	return it, nil
+}
+
+// arrowValueType resolves dictionary encoding to the type sent to the server.
+func arrowValueType(dataType arrow.DataType) arrow.DataType {
+	for {
+		dictionaryType, ok := dataType.(*arrow.DictionaryType)
+		if !ok {
+			return dataType
+		}
+		dataType = dictionaryType.ValueType
+	}
 }
 
 func validateParameterType(dataType arrow.DataType) error {
@@ -278,7 +290,7 @@ func (it *parameterRowIterator) bindQuery(query string) (string, error) {
 
 		result.WriteString(query[last:marker.start])
 		markerText := query[marker.start:marker.end]
-		dataType := fields[index].Type
+		dataType := arrowValueType(fields[index].Type)
 		switch dataType.ID() {
 		case arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY:
 			fmt.Fprintf(&result, "unhex(%s)", markerText)
@@ -397,6 +409,9 @@ func arrowValueToParameter(
 	}
 
 	switch values.DataType().ID() {
+	case arrow.DICTIONARY:
+		dictionary := values.(*array.Dictionary)
+		return arrowValueToParameter(dictionary.Dictionary(), dictionary.GetValueIndex(row), name, timestampConverter)
 	case arrow.NULL:
 		parameter.Type = dbsql.SqlVoid
 	case arrow.BOOL:

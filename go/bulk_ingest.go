@@ -164,7 +164,7 @@ func buildInsertSQL(tableName string, schema *arrow.Schema) (string, error) {
 			sql.WriteString(", ")
 		}
 
-		switch field.Type.ID() {
+		switch arrowValueType(field.Type).ID() {
 		case arrow.BINARY, arrow.LARGE_BINARY, arrow.BINARY_VIEW, arrow.FIXED_SIZE_BINARY:
 			// Send hex strings to preserve arbitrary bytes through text parameters.
 			sql.WriteString("UNHEX(?)")
@@ -212,6 +212,9 @@ func extractGoValue(arr arrow.Array, idx int) (any, error) {
 	}
 
 	switch arr.DataType().ID() {
+	case arrow.DICTIONARY:
+		dictionary := arr.(*array.Dictionary)
+		return extractGoValue(dictionary.Dictionary(), dictionary.GetValueIndex(idx))
 	case arrow.BOOL:
 		return arr.(*array.Boolean).Value(idx), nil
 
@@ -286,6 +289,7 @@ func extractGoValue(arr arrow.Array, idx int) (any, error) {
 
 // arrowTypeToDatabricksType maps Arrow types to Databricks DDL types for CREATE TABLE
 func arrowTypeToDatabricksType(dt arrow.DataType) string {
+	dt = arrowValueType(dt)
 	switch dt.ID() {
 	case arrow.BOOL:
 		return "BOOLEAN"
