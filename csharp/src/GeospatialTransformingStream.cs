@@ -686,8 +686,8 @@ namespace AdbcDrivers.Databricks
                 }
                 else
                 {
-                    // Defensive fallback for an Arrow implementation that exposes
-                    // different parent/child offsets after slicing.
+                    // Materialize values when applying an outer validity mask or
+                    // when parent/child offsets prevent reusing the WKB buffers.
                     output.Append(wkb);
                 }
             }

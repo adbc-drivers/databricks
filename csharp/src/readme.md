@@ -133,7 +133,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.enable_pk_fk` | Whether to enable primary key foreign key metadata calls | `true` |
 | `adbc.databricks.use_desc_table_extended` | Whether to use DESC TABLE EXTENDED to get extended column metadata when supported by DBR | `true` (SEA/REST), `false` (Thrift) |
 | `adbc.databricks.enable_run_async_thrift` | Whether to enable RunAsync flag in Thrift operations | `true` |
-| `adbc.databricks.enable_geospatial_support` | Whether GEOMETRY/GEOGRAPHY use GeoArrow WKB values. Set to `false` for WKT/EWKT strings. The driver converts between Reyden and legacy server representations locally; the setting is not sent to SEA. | `true` |
+| `adbc.databricks.enable_geospatial_support` | Return GEOMETRY/GEOGRAPHY as GeoArrow WKB instead of WKT/EWKT strings. The driver converts between Reyden and legacy server representations locally; the setting is not sent to SEA. | `false` |
 | `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
 | `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
 | `adbc.apache.connection.polltime_ms` | The time in milliseconds between each poll for query execution status. Databricks default is 100ms (Apache default: 500ms) | `100` |
