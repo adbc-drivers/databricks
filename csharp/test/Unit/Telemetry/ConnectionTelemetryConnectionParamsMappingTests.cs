@@ -59,7 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
 
             Assert.Equal("team:peco,env:test", result.QueryTags);
             Assert.Equal("all-apis", result.AuthScope);
@@ -87,14 +87,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
             Assert.False(disabled.EnableComplexDatatypeSupport);
 
             var enabled = ConnectionTelemetry.BuildDriverConnectionParams(
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: true,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
             Assert.True(enabled.EnableComplexDatatypeSupport);
         }
 
@@ -121,18 +121,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
         }
 
         [Fact]
-        public void EnableGeospatialSupport_DefaultsToStringMode()
-        {
-            var result = ConnectionTelemetry.BuildDriverConnectionParams(
-                new Dictionary<string, string>(), Host, DriverModeType.Thrift,
-                enableDirectResults: true,
-                enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
-
-            Assert.False(result.EnableGeospatialSupport);
-        }
-
-        [Fact]
         public void OptionalFields_LeftUnset_WhenPropertiesAbsent()
         {
             var props = new Dictionary<string, string>
@@ -144,7 +132,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
 
             // Absent properties leave the proto fields unset (null/empty), matching JDBC.
             Assert.False(result.HasQueryTags);
