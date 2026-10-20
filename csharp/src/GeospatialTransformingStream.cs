@@ -67,17 +67,20 @@ namespace AdbcDrivers.Databricks
             bool enableComplexDatatypeSupport,
             CancellationToken cancellationToken = default)
         {
-            var stream = new GeospatialTransformingStream(
-                inner, enableGeospatialSupport, enableComplexDatatypeSupport);
-            if (System.Array.TrueForAll(stream._plans, plan => plan == null))
-                return stream;
+            if (inner == null)
+                throw new ArgumentNullException(nameof(inner));
 
-            // SEA's reported schema is manifest-derived, not the IPC schema. Read
-            // one batch before publishing the output schema so non-geo siblings
-            // retain their physical units/timezones. Keep it for the first read.
             RecordBatch? firstBatch = null;
             try
             {
+                var stream = new GeospatialTransformingStream(
+                    inner, enableGeospatialSupport, enableComplexDatatypeSupport);
+                if (System.Array.TrueForAll(stream._plans, plan => plan == null))
+                    return stream;
+
+                // SEA's reported schema is manifest-derived, not the IPC schema. Read
+                // one batch before publishing the output schema so non-geo siblings
+                // retain their physical units/timezones. Keep it for the first read.
                 firstBatch = await inner.ReadNextRecordBatchAsync(cancellationToken)
                     .ConfigureAwait(false);
                 if (firstBatch == null)

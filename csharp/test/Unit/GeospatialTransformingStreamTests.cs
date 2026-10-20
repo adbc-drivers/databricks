@@ -1497,6 +1497,40 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
+        public async Task SchemaInitializationDisposesInnerWhenInitialPlanFails()
+        {
+            var source = new StubArrowArrayStream(
+                SchemaFor("STRING", ArrowTypeParser.MapToArrowType("GEOMETRY(4326)", true)),
+                System.Array.Empty<RecordBatch>());
+
+            DatabricksException error = await Assert.ThrowsAsync<DatabricksException>(async () =>
+                await GeospatialTransformingStream.CreateAsync(source, true, true));
+
+            Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Equal(0, source.ReadCount);
+            Assert.Equal(1, source.DisposeCount);
+        }
+
+        [Fact]
+        public async Task SchemaInitializationDisposesInnerWhenPrefetchFails()
+        {
+            var expected = new InvalidOperationException("first batch fetch failed");
+            var source = new StubArrowArrayStream(
+                SchemaFor("GEOMETRY(4326)", StringType.Default),
+                System.Array.Empty<RecordBatch>())
+            {
+                ReadException = expected
+            };
+
+            InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await GeospatialTransformingStream.CreateAsync(source, true, true));
+
+            Assert.Same(expected, error);
+            Assert.Equal(1, source.ReadCount);
+            Assert.Equal(1, source.DisposeCount);
+        }
+
+        [Fact]
         public async Task SchemaInitializationPreservesEveryBatchAndEof()
         {
             var source = new StubArrowArrayStream(
@@ -1529,6 +1563,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             DatabricksException error = await Assert.ThrowsAsync<DatabricksException>(async () =>
                 await GeospatialTransformingStream.CreateAsync(source, true, true));
             Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
+            Assert.Equal(1, source.DisposeCount);
         }
 
         [Fact]
@@ -1724,16 +1759,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             public Schema Schema { get; }
 
             internal int ReadCount { get; private set; }
+            internal int DisposeCount { get; private set; }
+            internal Exception? ReadException { get; set; }
 
             public ValueTask<RecordBatch?> ReadNextRecordBatchAsync(
                 CancellationToken cancellationToken = default)
             {
                 ReadCount++;
+                if (ReadException != null)
+                    throw ReadException;
                 return new ValueTask<RecordBatch?>(
                     _batches.Count == 0 ? null : _batches.Dequeue());
             }
 
-            public void Dispose() { }
+            public void Dispose() => DisposeCount++;
         }
     }
 }

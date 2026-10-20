@@ -289,8 +289,10 @@ namespace AdbcDrivers.Databricks
                 // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
                 // would mask those types, so keep the real reader here and wrap only on return.
                 _lastQueryResult = result;
+                ctx.StatementId = StatementId;
+                QueryResult wrapped = MaybeWrapComplexTypesAsync(result).GetAwaiter().GetResult();
                 RecordSuccess(ctx);
-                return MaybeWrapComplexTypesAsync(result).GetAwaiter().GetResult();
+                return wrapped;
             }
             catch (Exception ex)
             {
@@ -298,6 +300,7 @@ namespace AdbcDrivers.Databricks
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
                 PendingTelemetryContext = null; // Clear to avoid double emission
+                _lastQueryResult = null;
                 throw;
             }
         }
@@ -318,8 +321,10 @@ namespace AdbcDrivers.Databricks
                 // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
                 // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
                 _lastQueryResult = result;
+                ctx.StatementId = StatementId;
+                QueryResult wrapped = await MaybeWrapComplexTypesAsync(result).ConfigureAwait(false);
                 RecordSuccess(ctx);
-                return await MaybeWrapComplexTypesAsync(result).ConfigureAwait(false);
+                return wrapped;
             }
             catch (Exception ex)
             {
@@ -327,6 +332,7 @@ namespace AdbcDrivers.Databricks
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
                 PendingTelemetryContext = null; // Clear to avoid double emission
+                _lastQueryResult = null;
                 throw;
             }
         }
