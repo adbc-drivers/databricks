@@ -18,8 +18,6 @@ using System;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using NetTopologySuite.Geometries;
-using NetTopologySuite.IO;
 
 namespace AdbcDrivers.Databricks
 {
@@ -38,10 +36,6 @@ namespace AdbcDrivers.Databricks
         private static readonly Regex s_ewktPattern = new Regex(
             @"^\s*(?:SRID\s*=\s*(?<srid>[+-]?\d+)\s*;\s*)?(?<wkt>.+?)\s*$",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
-
-        private static readonly Regex s_wktDimensionPattern = new Regex(
-            @"^\s*[A-Z]+(?:\s+(?<dimension>ZM|Z|M))?\s*(?:\(|EMPTY\b)",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
         internal static string ToWkt(ReadOnlySpan<byte> wkb)
         {
@@ -71,44 +65,7 @@ namespace AdbcDrivers.Databricks
                 throw new FormatException($"Invalid EWKT SRID '{sridGroup.Value}'");
             }
 
-            string wkt = ewktMatch.Groups["wkt"].Value;
-            Match dimensionMatch = s_wktDimensionPattern.Match(wkt);
-            if (!dimensionMatch.Success)
-                throw new FormatException("Invalid WKT geometry type or dimensional marker");
-
-            string dimension = dimensionMatch.Groups["dimension"].Value.ToUpperInvariant();
-            bool emitZ = dimension is "Z" or "ZM";
-            bool emitM = dimension is "M" or "ZM";
-
-            try
-            {
-                var reader = new WKTReader
-                {
-                    IsStrict = true,
-                    // Databricks emits an explicit Z/M/ZM marker for dimensional values.
-                    // Reject ambiguous unmarked three-dimensional input.
-                    IsOldNtsCoordinateSyntaxAllowed = false,
-                };
-                Geometry geometry = reader.Read(wkt);
-                geometry.SRID = srid;
-
-                // Strict mode (the default) uses ISO dimension offsets (1000/2000/3000)
-                // and handleSRID=false keeps the bytes as WKB rather than EWKB.
-                var writer = new WKBWriter(
-                    ByteOrder.LittleEndian,
-                    handleSRID: false,
-                    emitZ,
-                    emitM);
-                return writer.Write(geometry);
-            }
-            catch (ParseException ex)
-            {
-                throw new FormatException(ex.Message, ex);
-            }
-            catch (ArgumentException ex)
-            {
-                throw new FormatException(ex.Message, ex);
-            }
+            return GeospatialWktReader.Read(ewktMatch.Groups["wkt"].Value);
         }
 
         /// <summary>
@@ -139,11 +96,9 @@ namespace AdbcDrivers.Databricks
         }
 
         // Render directly from the validated WKB structure. This retains explicit
-        // dimensions on empty members without allocating an NTS Geometry tree.
+        // dimensions on empty members without allocating a geometry object tree.
         private ref struct WkbWktWriter
         {
-            private static readonly OrdinateFormat s_ordinateFormat = new OrdinateFormat(16);
-
             private readonly ReadOnlySpan<byte> _input;
             private readonly StringBuilder _output;
             private int _offset;
@@ -344,12 +299,73 @@ namespace AdbcDrivers.Databricks
                 bool hasZ,
                 bool hasM)
             {
-                _output.Append(s_ordinateFormat.Format(x));
-                _output.Append(' ').Append(s_ordinateFormat.Format(y));
+                WriteOrdinate(x);
+                _output.Append(' ');
+                WriteOrdinate(y);
                 if (hasZ)
-                    _output.Append(' ').Append(s_ordinateFormat.Format(z));
+                {
+                    _output.Append(' ');
+                    WriteOrdinate(z);
+                }
                 if (hasM)
-                    _output.Append(' ').Append(s_ordinateFormat.Format(m));
+                {
+                    _output.Append(' ');
+                    WriteOrdinate(m);
+                }
+            }
+
+            private void WriteOrdinate(double value)
+            {
+                if (double.IsNaN(value))
+                {
+                    _output.Append("NaN");
+                    return;
+                }
+                if (double.IsInfinity(value))
+                {
+                    _output.Append(value < 0 ? "-Inf" : "Inf");
+                    return;
+                }
+
+                string text = value.ToString("R", CultureInfo.InvariantCulture);
+                // Older .NET Framework runtimes occasionally need G17 to round-trip
+                // a double even when the R format is requested.
+                if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+                    || parsed != value)
+                {
+                    text = value.ToString("G17", CultureInfo.InvariantCulture);
+                }
+
+                int exponentIndex = text.IndexOf('E');
+                if (exponentIndex < 0)
+                {
+                    _output.Append(text);
+                    return;
+                }
+
+                // Expand scientific notation without rounding or imposing a fixed
+                // decimal precision, including for subnormal coordinates.
+                int exponent = int.Parse(text.Substring(exponentIndex + 1), CultureInfo.InvariantCulture);
+                int start = text[0] == '-' ? 1 : 0;
+                string mantissa = text.Substring(start, exponentIndex - start);
+                int decimalIndex = mantissa.IndexOf('.');
+                int decimalPosition = (decimalIndex < 0 ? mantissa.Length : decimalIndex) + exponent;
+                string digits = mantissa.Replace(".", string.Empty);
+                if (start != 0)
+                    _output.Append('-');
+                if (decimalPosition <= 0)
+                {
+                    _output.Append("0.").Append('0', -decimalPosition).Append(digits);
+                }
+                else if (decimalPosition >= digits.Length)
+                {
+                    _output.Append(digits).Append('0', decimalPosition - digits.Length);
+                }
+                else
+                {
+                    _output.Append(digits, 0, decimalPosition).Append('.');
+                    _output.Append(digits, decimalPosition, digits.Length - decimalPosition);
+                }
             }
 
             private uint ReadUInt32(bool littleEndian)

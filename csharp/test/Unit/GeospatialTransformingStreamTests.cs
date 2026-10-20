@@ -22,8 +22,6 @@ using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
-using NetTopologySuite.Geometries;
-using NetTopologySuite.IO;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -217,13 +215,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Theory]
-        [InlineData(true, true)]
-        [InlineData(true, false)]
-        [InlineData(false, true)]
-        [InlineData(false, false)]
-        public async Task AnySrid_EwkbReaderCanPreserveOrIgnoreEmbeddedSrid(
-            bool nativeInput,
-            bool handleSrid)
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task AnySrid_EmbedsEachRowSridInEwkb(bool nativeInput)
         {
             int[] srids = { 4326, 3857, 0 };
             IArrowArray physical = nativeInput
@@ -249,14 +243,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
             Assert.NotNull(batch);
             BinaryArray values = Assert.IsType<BinaryArray>(batch.Column(0));
-            var reader = new WKBReader { HandleSRID = handleSrid };
-            int defaultSrid = reader.Read(s_pointOneTwo).SRID;
+            string[] expected =
+            {
+                "0101000020e6100000000000000000f03f0000000000000040",
+                "0101000020110f0000000000000000f03f0000000000000040",
+                "010100002000000000000000000000f03f0000000000000040",
+            };
             for (int row = 0; row < srids.Length; row++)
             {
-                Point point = Assert.IsType<Point>(reader.Read(values.GetBytes(row).ToArray()));
-                Assert.Equal(1, point.X);
-                Assert.Equal(2, point.Y);
-                Assert.Equal(handleSrid ? srids[row] : defaultSrid, point.SRID);
+                Assert.Equal(FromHex(expected[row]), values.GetBytes(row).ToArray());
             }
         }
 
