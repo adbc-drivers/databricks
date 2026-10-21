@@ -14,7 +14,7 @@
 
 module github.com/adbc-drivers/databricks/go
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20261015034256-4c82882827b5
@@ -22,7 +22,7 @@ require (
 	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20261015034256-4c82882827b5
 	github.com/apache/arrow-adbc/go/adbc v1.12.0
 	github.com/apache/arrow-go/v18 v18.8.0
-	github.com/databricks/databricks-sql-go v1.16.0
+	github.com/databricks/databricks-sql-go v1.17.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
 )
@@ -35,13 +35,13 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_amd64 v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_arm64 v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_amd64 v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm64 v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_amd64 v1.1.0 // indirect
-	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_arm64 v1.1.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_amd64 v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_arm64 v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_amd64 v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm64 v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_amd64 v1.2.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_arm64 v1.2.0 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
@@ -59,7 +59,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
 	github.com/klauspost/compress v1.20.3 // indirect
-	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
 	github.com/mattn/go-colorable v0.1.16 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
@@ -86,13 +86,13 @@ require (
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/telemetry v0.0.0-20261015160703-b2e8be0732e6 // indirect
+	golang.org/x/telemetry v0.0.0-20261020154912-7bf0a11256d5 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20261019180522-ce908d29299b // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gotest.tools/gotestsum v1.13.0 // indirect

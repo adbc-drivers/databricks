@@ -89,7 +89,29 @@ const errPrefix = "[databricks] "
 const logLevelEnvVar = "ADBC_DRIVER_DATABRICKS_LOG_LEVEL"
 const logSinkEnvVar = "ADBC_DRIVER_DATABRICKS_LOG_SINK"
 
-func setErr(err *C.struct_AdbcError, format string, vals ...interface{}) {
+func setErr(err *C.struct_AdbcError, format string) {
+	if err == nil {
+		return
+	}
+
+	if err.release != nil {
+		C.DatabrickserrRelease(err)
+	}
+
+	var msg string
+	if strings.HasPrefix(format, errPrefix) {
+		// If the error message already starts with the prefix, we don't
+		// want to add it again.
+		msg = format
+	} else {
+		// Otherwise, we prepend the prefix to the error message.
+		msg = errPrefix + format
+	}
+	err.message = C.CString(msg)
+	err.release = (*[0]byte)(C.Databricks_release_error)
+}
+
+func fmtErr(err *C.struct_AdbcError, format string, vals ...interface{}) {
 	if err == nil {
 		return
 	}
@@ -203,7 +225,7 @@ func poison(err *C.struct_AdbcError, fname string, e interface{}) C.AdbcStatusCo
 		length := runtime.Stack(buf, true)
 		fmt.Fprintf(os.Stderr, "databricks driver panicked, stack traces:\n%s", buf[:length])
 	}
-	setErr(err, "%s: Go panic in databricks driver (see stderr): %#v", fname, e)
+	fmtErr(err, "%s: Go panic in databricks driver (see stderr): %#v", fname, e)
 	return C.ADBC_STATUS_INTERNAL
 }
 
@@ -215,8 +237,7 @@ func initLoggingFromEnv(db adbc.DatabaseLogging) {
 		logLevel = slog.LevelDebug
 	case "info":
 		logLevel = slog.LevelInfo
-	case "warn":
-	case "warning":
+	case "warn", "warning":
 		logLevel = slog.LevelWarn
 	case "error":
 		logLevel = slog.LevelError
@@ -293,15 +314,15 @@ func exportBytesOption(val []byte, out *C.uint8_t, length *C.size_t) C.AdbcStatu
 
 func checkDBAlloc(db *C.struct_AdbcDatabase, err *C.struct_AdbcError, fname string) bool {
 	if globalPoison.Load() {
-		setErr(err, "%s: Go panicked, driver is in unknown state", fname)
+		fmtErr(err, "%s: Go panicked, driver is in unknown state", fname)
 		return false
 	}
 	if db == nil {
-		setErr(err, "%s: database not allocated", fname)
+		fmtErr(err, "%s: database not allocated", fname)
 		return false
 	}
 	if db.private_data == nil {
-		setErr(err, "%s: database not allocated", fname)
+		fmtErr(err, "%s: database not allocated", fname)
 		return false
 	}
 	return true
@@ -313,7 +334,7 @@ func checkDBInit(db *C.struct_AdbcDatabase, err *C.struct_AdbcError, fname strin
 	}
 	cdb := getFromHandle[cDatabase](db.private_data)
 	if cdb.db == nil {
-		setErr(err, "%s: database not initialized", fname)
+		fmtErr(err, "%s: database not initialized", fname)
 		return nil
 	}
 
@@ -759,15 +780,15 @@ type cConn struct {
 
 func checkConnAlloc(cnxn *C.struct_AdbcConnection, err *C.struct_AdbcError, fname string) bool {
 	if globalPoison.Load() {
-		setErr(err, "%s: Go panicked, driver is in unknown state", fname)
+		fmtErr(err, "%s: Go panicked, driver is in unknown state", fname)
 		return false
 	}
 	if cnxn == nil {
-		setErr(err, "%s: connection not allocated", fname)
+		fmtErr(err, "%s: connection not allocated", fname)
 		return false
 	}
 	if cnxn.private_data == nil {
-		setErr(err, "%s: connection not allocated", fname)
+		fmtErr(err, "%s: connection not allocated", fname)
 		return false
 	}
 	return true
@@ -779,7 +800,7 @@ func checkConnInit(cnxn *C.struct_AdbcConnection, err *C.struct_AdbcError, fname
 	}
 	conn := getFromHandle[cConn](cnxn.private_data)
 	if conn.cnxn == nil {
-		setErr(err, "%s: connection not initialized", fname)
+		fmtErr(err, "%s: connection not initialized", fname)
 		return nil
 	}
 
@@ -1042,7 +1063,7 @@ func fromCArr[T, CType any](ptr *CType, sz int) []T {
 
 func checkLengthToInt(length C.size_t, err *C.struct_AdbcError) (int, C.AdbcStatusCode) {
 	if length > C.size_t(math.MaxInt) {
-		setErr(err, "Length %d exceeds max Go int %d", length, math.MaxInt)
+		fmtErr(err, "Length %d exceeds max Go int %d", length, math.MaxInt)
 		return 0, C.ADBC_STATUS_INVALID_ARGUMENT
 	}
 	return int(length), C.ADBC_STATUS_OK
@@ -1311,15 +1332,15 @@ type cStmt struct {
 
 func checkStmtAlloc(stmt *C.struct_AdbcStatement, err *C.struct_AdbcError, fname string) bool {
 	if globalPoison.Load() {
-		setErr(err, "%s: Go panicked, driver is in unknown state", fname)
+		fmtErr(err, "%s: Go panicked, driver is in unknown state", fname)
 		return false
 	}
 	if stmt == nil {
-		setErr(err, "%s: statement not allocated", fname)
+		fmtErr(err, "%s: statement not allocated", fname)
 		return false
 	}
 	if stmt.private_data == nil {
-		setErr(err, "%s: statement not allocated", fname)
+		fmtErr(err, "%s: statement not allocated", fname)
 		return false
 	}
 	return true
@@ -1331,7 +1352,7 @@ func checkStmtInit(stmt *C.struct_AdbcStatement, err *C.struct_AdbcError, fname 
 	}
 	cStmt := getFromHandle[cStmt](stmt.private_data)
 	if cStmt.stmt == nil {
-		setErr(err, "%s: statement not allocated", fname)
+		fmtErr(err, "%s: statement not allocated", fname)
 		return nil
 	}
 	return cStmt
@@ -1885,7 +1906,7 @@ func AdbcDriverDatabricksInit(version C.int, rawDriver *C.void, err *C.struct_Ad
 		sink := fromCArr[byte]((*byte)(unsafe.Pointer(driver)), C.ADBC_DRIVER_1_1_0_SIZE)
 		memory.Set(sink, 0)
 	default:
-		setErr(err, "Only version 1.0.0/1.1.0 supported, got %d", int(version))
+		fmtErr(err, "Only version 1.0.0/1.1.0 supported, got %d", int(version))
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
