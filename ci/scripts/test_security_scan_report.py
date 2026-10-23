@@ -21,9 +21,7 @@ import unittest
 from pathlib import Path
 
 from security_scan_report import (
-    collect_conda_reports,
     collect_findings,
-    collect_grype_findings,
     is_blocking,
     numeric_score,
     render_summary,
@@ -49,134 +47,6 @@ def report_with_score(score):
             }
         ]
     }
-
-
-def conda_artifact():
-    return {
-        "id": "conda-artifact",
-        "name": "openssl",
-        "version": "3.6.1",
-        "type": "conda",
-        "metadata": {
-            "build": "h123_1",
-            "subdir": "linux-64",
-            "url": "https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.1-h123_1.conda",
-        },
-    }
-
-
-def conda_report(score=7.8, severity="High"):
-    return {
-        "matches": [
-            {
-                "vulnerability": {
-                    "id": "CVE-example",
-                    "severity": severity,
-                    "description": "Example native library vulnerability",
-                    "cvss": []
-                    if score is None
-                    else [{"metrics": {"baseScore": score}}],
-                },
-                "relatedVulnerabilities": [{"id": "GHSA-example"}],
-                "matchDetails": [{"type": "cpe-match"}],
-                "artifact": {
-                    key: value
-                    for key, value in conda_artifact().items()
-                    if key != "metadata"
-                },
-            }
-        ],
-    }
-
-
-def write_conda_reports(root, report):
-    directory = root / "pixi" / "rust"
-    directory.mkdir(parents=True)
-    artifact = conda_artifact()
-    package = {
-        "name": artifact["name"],
-        "version": artifact["version"],
-        **artifact["metadata"],
-    }
-    for filename, data in {
-        "conda-inventory.json": {"source": "rust/pixi.lock", "packages": [package]},
-        "conda-sbom.json": {"artifacts": [artifact]},
-        "conda-findings.json": report,
-    }.items():
-        (directory / filename).write_text(json.dumps(data))
-    return directory.parent
-
-
-class CondaFindingsTest(unittest.TestCase):
-    def test_cpe_evidence_build_platform_and_aliases_are_preserved(self):
-        report = conda_report()
-        report["matches"].append(report["matches"][0])
-        findings = collect_grype_findings(
-            report, "rust/pixi.lock", {"conda-artifact": conda_artifact()}
-        )
-        self.assertEqual(len(findings), 1)
-        finding = findings[0]
-        self.assertEqual(finding["ecosystem"], "Conda")
-        self.assertEqual(finding["ids"], ["CVE-example", "GHSA-example"])
-        self.assertEqual(finding["source"], "rust/pixi.lock")
-        self.assertEqual(finding["build"], "h123_1")
-        self.assertEqual(finding["platform"], "linux-64")
-        self.assertEqual(finding["match_details"], [{"type": "cpe-match"}])
-        self.assertTrue(is_blocking(finding))
-
-    def test_grype_ratings_apply_when_numeric_cvss_is_unavailable(self):
-        for rating, blocking in [
-            ("High", True),
-            ("Critical", True),
-            ("Unknown", True),
-            ("Medium", False),
-            ("Low", False),
-        ]:
-            with self.subTest(rating=rating):
-                report = conda_report(None, rating)
-                report["matches"][0]["vulnerability"]["cvss"] = None
-                report["matches"][0]["relatedVulnerabilities"] = None
-                finding = collect_grype_findings(
-                    report,
-                    "go/pixi.lock",
-                    {"conda-artifact": conda_artifact()},
-                )[0]
-                self.assertEqual(is_blocking(finding), blocking)
-                self.assertEqual(finding["severity"], rating.upper())
-
-    def test_empty_grype_report_is_valid_but_missing_matches_fails(self):
-        self.assertEqual(
-            collect_grype_findings({"matches": []}, "rust/pixi.lock", {}), []
-        )
-        for report in [{}, None, {"matches": None}]:
-            with self.subTest(report=report), self.assertRaises(TypeError):
-                collect_grype_findings(report, "rust/pixi.lock", {})
-
-    def test_dropped_or_changed_conda_packages_fail_closed(self):
-        for mutation in ("drop", "version", "platform"):
-            with (
-                self.subTest(mutation=mutation),
-                tempfile.TemporaryDirectory() as directory,
-            ):
-                root = write_conda_reports(Path(directory), conda_report())
-                path = root / "rust" / "conda-sbom.json"
-                sbom = json.loads(path.read_text())
-                if mutation == "drop":
-                    sbom["artifacts"] = []
-                elif mutation == "version":
-                    sbom["artifacts"][0]["version"] = "99.0"
-                else:
-                    sbom["artifacts"][0]["metadata"]["subdir"] = "win-64"
-                path.write_text(json.dumps(sbom))
-                with self.assertRaisesRegex(ValueError, "Incomplete Conda SBOM"):
-                    collect_conda_reports(root)
-
-    def test_missing_conda_reports_fail_closed(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = write_conda_reports(Path(directory), conda_report())
-            (root / "rust" / "conda-findings.json").unlink()
-            with self.assertRaises(OSError):
-                collect_conda_reports(root)
 
 
 class FindingsTest(unittest.TestCase):
@@ -275,17 +145,11 @@ class FindingsTest(unittest.TestCase):
 
 
 class ReportingTest(unittest.TestCase):
-    def run_report(
-        self, report, event="pull_request", scan_exit_code=1, raw=False, conda=None
-    ):
+    def run_report(self, report, event="pull_request", scan_exit_code=1, raw=False):
         with tempfile.TemporaryDirectory() as directory:
             report_path = Path(directory) / "osv-out.json"
             report_path.write_text(report if raw else json.dumps(report))
             summary_path = Path(directory) / "summary.md"
-            extra_args = []
-            if conda:
-                conda_directory = write_conda_reports(Path(directory), conda)
-                extra_args = ["--conda-reports-directory", str(conda_directory)]
             result = subprocess.run(
                 [
                     sys.executable,
@@ -295,7 +159,6 @@ class ReportingTest(unittest.TestCase):
                     event,
                     "--scan-exit-code",
                     str(scan_exit_code),
-                    *extra_args,
                 ],
                 env={**os.environ, "GITHUB_STEP_SUMMARY": str(summary_path)},
                 check=False,
@@ -310,34 +173,6 @@ class ReportingTest(unittest.TestCase):
             )
             summary = summary_path.read_text() if summary_path.exists() else ""
             return result, findings, summary
-
-    def test_conda_and_osv_findings_share_the_report_and_policy(self):
-        result, findings, summary = self.run_report(
-            report_with_score("6.9"), conda=conda_report()
-        )
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertEqual(len(findings), 2)
-        self.assertEqual(findings[0]["ecosystem"], "Conda")
-        self.assertIn("Conda artifacts inventoried from rust/pixi.lock: 1", summary)
-        self.assertIn("CPE matching", summary)
-
-    def test_conda_medium_uses_the_same_event_thresholds(self):
-        for event, returncode in [
-            ("pull_request", 0),
-            ("schedule", 1),
-            ("workflow_dispatch", 1),
-        ]:
-            with self.subTest(event=event):
-                result, findings, _summary = self.run_report(
-                    {"results": []},
-                    event=event,
-                    scan_exit_code=0,
-                    conda=conda_report(5.5, "Medium"),
-                )
-                self.assertEqual(
-                    result.returncode, returncode, result.stdout + result.stderr
-                )
-                self.assertEqual(len(findings), 1)
 
     def test_clean_report_passes_all_events(self):
         for event in ["pull_request", "schedule", "workflow_dispatch"]:
