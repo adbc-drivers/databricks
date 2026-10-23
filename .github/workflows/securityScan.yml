@@ -69,7 +69,7 @@ jobs:
               -p:IsWindows=true -p:NuGetAudit=false
           done
 
-      - name: Install OSV-Scanner
+      - name: Install dependency scanners
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 --output "$RUNNER_TEMP/osv-scanner" \
@@ -79,10 +79,29 @@ jobs:
           chmod +x "$RUNNER_TEMP/osv-scanner"
           "$RUNNER_TEMP/osv-scanner" --version
 
+          curl -fsSL --retry 3 --output "$RUNNER_TEMP/syft.tar.gz" \
+            https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz
+          echo "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d  $RUNNER_TEMP/syft.tar.gz" \
+            | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP" syft
+          "$RUNNER_TEMP/syft" version
+
+          curl -fsSL --retry 3 --output "$RUNNER_TEMP/grype.tar.gz" \
+            https://github.com/anchore/grype/releases/download/v0.121.0/grype_0.121.0_linux_amd64.tar.gz
+          echo "64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519  $RUNNER_TEMP/grype.tar.gz" \
+            | sha256sum --check --status
+          tar -xzf "$RUNNER_TEMP/grype.tar.gz" -C "$RUNNER_TEMP" grype
+          "$RUNNER_TEMP/grype" version
+
       - name: Scan dependencies and report findings
         env:
           SCAN_EVENT: ${{ github.event_name }}
           SECURITY_SCAN_DIR: ${{ runner.temp }}/security-scan
+          SYFT_CHECK_FOR_APP_UPDATE: 'false'
+          GRYPE_CHECK_FOR_APP_UPDATE: 'false'
+          GRYPE_DB_CACHE_DIR: ${{ runner.temp }}/grype-db
+          GRYPE_DB_REQUIRE_UPDATE_CHECK: 'true'
+          GRYPE_MATCH_STOCK_USING_CPES: 'true'
         run: |
           set -euo pipefail
           mkdir -p "$SECURITY_SCAN_DIR"
@@ -125,9 +144,20 @@ jobs:
             exit 1
           fi
 
+          for language in rust go; do
+            inventory="$SECURITY_SCAN_DIR/pixi/$language"
+            "$RUNNER_TEMP/syft" scan "dir:$inventory" \
+              --override-default-catalogers=conda-meta-cataloger \
+              --source-name="$language/pixi.lock" \
+              --output="syft-json=$inventory/conda-sbom.json"
+            "$RUNNER_TEMP/grype" "sbom:$inventory/conda-sbom.json" \
+              --output=json --file="$inventory/conda-findings.json"
+          done
+
           python3 ci/scripts/security_scan_report.py \
             "$SECURITY_SCAN_DIR/osv-out.json" \
-            --event "$SCAN_EVENT" --scan-exit-code "$scan_rc"
+            --event "$SCAN_EVENT" --scan-exit-code "$scan_rc" \
+            --conda-reports-directory "$SECURITY_SCAN_DIR/pixi"
 
       - name: Upload reports
         if: always()

@@ -20,14 +20,69 @@ import unittest
 from pathlib import Path
 
 import yaml
-from security_scan_pixi import collect_packages
+from security_scan_pixi import collect_conda_packages, collect_packages
 
 
 def pypi_package(name="certifi", version="2026.1.4"):
     return {"pypi": f"https://example.org/{name}.whl", "name": name, "version": version}
 
 
+def conda_package(platform="linux-64", suffix=".conda"):
+    return {
+        "conda": f"https://conda.anaconda.org/conda-forge/{platform}/openssl-3.6.1-h123_1{suffix}",
+        "sha256": "a" * 64,
+        "depends": ["ca-certificates"],
+    }
+
+
 class PixiInventoryTest(unittest.TestCase):
+    def test_conda_artifact_identity_and_metadata_are_preserved(self):
+        for schema, suffix in [(6, ".conda"), (7, ".tar.bz2")]:
+            with self.subTest(schema=schema):
+                packages = collect_conda_packages(
+                    {"version": schema, "packages": [conda_package(suffix=suffix)]}
+                )
+                self.assertEqual(len(packages), 1)
+                package = packages[0]
+                self.assertEqual(package["name"], "openssl")
+                self.assertEqual(package["version"], "3.6.1")
+                self.assertEqual(package["build"], "h123_1")
+                self.assertEqual(package["subdir"], "linux-64")
+                self.assertEqual(package["sha256"], "a" * 64)
+                self.assertEqual(package["depends"], ["ca-certificates"])
+
+    def test_conda_platforms_are_preserved_and_duplicate_urls_are_deduplicated(self):
+        packages = collect_conda_packages(
+            {
+                "version": 7,
+                "packages": [
+                    conda_package(),
+                    conda_package(),
+                    conda_package("win-64"),
+                    pypi_package(),
+                ],
+            }
+        )
+        self.assertEqual(len(packages), 2)
+        self.assertEqual({p["subdir"] for p in packages}, {"linux-64", "win-64"})
+
+    def test_hyphenated_conda_package_names_are_preserved(self):
+        package = conda_package()
+        package["conda"] = package["conda"].replace("/openssl-", "/ca-certificates-")
+        self.assertEqual(
+            collect_conda_packages({"version": 6, "packages": [package]})[0]["name"],
+            "ca-certificates",
+        )
+
+    def test_unsupported_conda_artifacts_fail_instead_of_disappearing(self):
+        for value in [
+            {"git": "https://example.org/repo"},
+            "https://example.org/package.conda",
+            "file:///tmp/package-1.0-0.conda",
+        ]:
+            with self.subTest(value=value), self.assertRaises((ValueError, TypeError)):
+                collect_conda_packages({"version": 7, "packages": [{"conda": value}]})
+
     def test_certifi_is_exported_from_both_supported_schemas(self):
         for schema in (6, 7):
             with self.subTest(schema=schema):
@@ -124,7 +179,13 @@ class PixiInventoryTest(unittest.TestCase):
                 lockfile.parent.mkdir()
                 lockfile.write_text(
                     yaml.safe_dump(
-                        {"version": schema, "packages": [pypi_package(version=version)]}
+                        {
+                            "version": schema,
+                            "packages": [
+                                pypi_package(version=version),
+                                conda_package(),
+                            ],
+                        }
                     )
                 )
                 lockfiles.append(str(lockfile))
@@ -151,6 +212,19 @@ class PixiInventoryTest(unittest.TestCase):
                     inventory["results"][0]["packages"][0]["package"]["version"],
                     version,
                 )
+                exported = root / "inventories" / language
+                metadata = list((exported / "conda-meta").glob("*.json"))
+                self.assertEqual(len(metadata), 1)
+                package = json.loads(metadata[0].read_text())
+                self.assertEqual(package["name"], "openssl")
+                self.assertEqual(package["sha256"], "a" * 64)
+                conda_inventory = json.loads(
+                    (exported / "conda-inventory.json").read_text()
+                )
+                self.assertEqual(
+                    conda_inventory["source"], str(root / language / "pixi.lock")
+                )
+                self.assertEqual(conda_inventory["packages"], [package])
 
 
 if __name__ == "__main__":

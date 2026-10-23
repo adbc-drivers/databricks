@@ -12,24 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Export locked Pixi PyPI packages to OSV-Scanner's custom inventory format."""
+"""Export locked Pixi packages for OSV and Conda SBOM generation."""
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import yaml
 
 
-def collect_packages(lock):
+def locked_records(lock):
     if not isinstance(lock, dict) or lock.get("version") not in (6, 7):
         raise ValueError("Expected a Pixi v6 or v7 lockfile")
     if not isinstance(lock.get("packages"), list):
         raise TypeError("Pixi lockfile must contain a packages array")
+    return lock["packages"]
 
+
+def collect_packages(lock):
     packages = {}
-    for record in lock["packages"]:
+    for record in locked_records(lock):
         if "pypi" not in record:
             continue
         if record["pypi"].startswith("git+"):
@@ -52,13 +57,49 @@ def collect_packages(lock):
     return [packages[key] for key in sorted(packages)]
 
 
+def collect_conda_packages(lock):
+    packages = {}
+    for record in locked_records(lock):
+        if "conda" not in record:
+            continue
+        url = record["conda"]
+        if not isinstance(url, str):
+            raise TypeError("Conda source dependencies cannot be inventoried")
+        parsed = urlsplit(url)
+        filename = parsed.path.rsplit("/", 1)[-1]
+        suffix = next(
+            (suffix for suffix in (".conda", ".tar.bz2") if filename.endswith(suffix)),
+            None,
+        )
+        if not suffix or parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError(f"Unsupported Conda artifact URL: {url}")
+        identity = filename[: -len(suffix)].rsplit("-", 2)
+        if len(identity) != 3 or not all(identity):
+            raise ValueError(f"Invalid Conda artifact filename: {filename}")
+        name, version, build = identity
+        channel, subdir, _filename = url.rsplit("/", 2)
+        package = {
+            **{key: value for key, value in record.items() if key != "conda"},
+            "name": name,
+            "version": version,
+            "build": build,
+            "channel": channel,
+            "subdir": subdir,
+            "fn": filename,
+            "url": url,
+        }
+        packages[url] = package
+    return [packages[url] for url in sorted(packages)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("lockfiles", nargs="+", type=Path)
     parser.add_argument("--output-directory", required=True, type=Path)
     args = parser.parse_args()
     for lockfile in args.lockfiles:
-        packages = collect_packages(yaml.safe_load(lockfile.read_text()))
+        lock = yaml.safe_load(lockfile.read_text())
+        packages = collect_packages(lock)
         inventory = {
             "results": [
                 {
@@ -71,6 +112,31 @@ def main():
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(inventory, indent=2) + "\n")
         print(f"Exported {len(packages)} PyPI packages from {lockfile} to {output}")
+
+        conda_packages = collect_conda_packages(lock)
+        conda_directory = output.parent / "conda-meta"
+        conda_directory.mkdir(exist_ok=True)
+        for package in conda_packages:
+            identity = hashlib.sha256(package["url"].encode()).hexdigest()
+            (conda_directory / f"{identity}.json").write_text(
+                json.dumps(package, indent=2) + "\n"
+            )
+        output.with_name("conda-inventory.json").write_text(
+            json.dumps(
+                {
+                    "source": str(lockfile),
+                    "packages": conda_packages,
+                    "source_dependencies": [
+                        {"name": record.get("name"), "url": record["pypi"]}
+                        for record in locked_records(lock)
+                        if str(record.get("pypi", "")).startswith("git+")
+                    ],
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        print(f"Exported {len(conda_packages)} Conda artifacts from {lockfile}")
 
 
 if __name__ == "__main__":
