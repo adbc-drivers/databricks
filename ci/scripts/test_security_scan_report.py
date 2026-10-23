@@ -64,14 +64,26 @@ class FindingsTest(unittest.TestCase):
                 self.assertEqual(finding["severity"], "UNKNOWN")
                 self.assertTrue(is_blocking(finding))
 
-    def test_numeric_advisory_severity_fallback(self):
+    def test_missing_scanner_score_stays_unscored_with_cvss_vector(self):
         report = report_with_score("")
         report["results"][0]["packages"][0]["vulnerabilities"][0]["severity"] = [
-            {"type": "CVSS_V3", "score": "8.1"}
+            {
+                "type": "CVSS_V3",
+                "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            }
         ]
         finding = collect_findings(report)[0]
-        self.assertEqual(finding["severity"], "8.1")
+        self.assertEqual(finding["severity"], "UNKNOWN")
         self.assertTrue(is_blocking(finding))
+
+    def test_unscored_then_highest_severity_findings_appear_first(self):
+        report = {"results": []}
+        for score in ["0", "6.9", "", "9.1", "7"]:
+            report["results"].extend(report_with_score(score)["results"])
+        self.assertEqual(
+            [finding["severity"] for finding in collect_findings(report)],
+            ["UNKNOWN", "9.1", "7.0", "6.9", "0.0"],
+        )
 
     def test_aliases_are_counted_once_per_package(self):
         report = report_with_score("8.1")

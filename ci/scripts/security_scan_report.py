@@ -53,16 +53,11 @@ def collect_findings(report):
                 grouped_ids.update(ids)
                 aliases = set(ids) | set(group.get("aliases", []))
                 summaries = []
-                scores = [numeric_score(group.get("max_severity"))]
+                score = numeric_score(group.get("max_severity"))
                 for vuln in vulns:
                     if vuln["id"] in ids:
                         aliases.update(vuln.get("aliases", []))
                         summaries.append(vuln.get("summary") or vuln["id"])
-                        scores.extend(
-                            numeric_score(severity.get("score"))
-                            for severity in vuln.get("severity", [])
-                        )
-                score = max((s for s in scores if s is not None), default=None)
                 findings.append(
                     {
                         "pkg": f"{metadata['name']}@{metadata['version']}",
@@ -78,7 +73,10 @@ def collect_findings(report):
 
     return sorted(
         findings,
-        key=lambda finding: -(numeric_score(finding["severity"]) or 0),
+        key=lambda finding: (
+            finding["severity"] != "UNKNOWN",
+            -(numeric_score(finding["severity"]) or 0),
+        ),
     )
 
 
