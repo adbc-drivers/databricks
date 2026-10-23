@@ -1,0 +1,138 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main, 'maint-*', 'release/csharp/*']
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Pixi lockfile parser
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+
+      - name: Test reporting policy
+        run: python3 -m unittest discover -s ci/scripts -p 'test_security_scan_*.py'
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve C# dependencies
+        # Include net472 on Linux; OSV applies the vulnerability policy after restore.
+        run: |
+          set -euo pipefail
+          for project in \
+            csharp/src/AdbcDrivers.Databricks.csproj \
+            csharp/test/AdbcDrivers.Databricks.Tests.csproj \
+            csharp/Benchmarks/DatabricksBenchmarks.csproj \
+            csharp/tools/MetadataComparator/MetadataComparator.csproj; do
+            dotnet restore "$project" --use-lock-file \
+              -p:IsWindows=true -p:NuGetAudit=false
+          done
+
+      - name: Install OSV-Scanner
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --output "$RUNNER_TEMP/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
+          echo "bc98e15319ed0d515e3f9235287ba53cdc5535d576d24fd573978ecfe9ab92dc  $RUNNER_TEMP/osv-scanner" \
+            | sha256sum --check --status
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+          "$RUNNER_TEMP/osv-scanner" --version
+
+      - name: Scan dependencies and report findings
+        env:
+          SCAN_EVENT: ${{ github.event_name }}
+          SECURITY_SCAN_DIR: ${{ runner.temp }}/security-scan
+        run: |
+          set -euo pipefail
+          mkdir -p "$SECURITY_SCAN_DIR"
+          python3 ci/scripts/security_scan_pixi.py rust/pixi.lock go/pixi.lock \
+            --output-directory "$SECURITY_SCAN_DIR/pixi"
+          for lockfile in \
+            rust/Cargo.lock \
+            go/go.mod \
+            csharp/src/packages.lock.json \
+            csharp/test/packages.lock.json \
+            csharp/Benchmarks/packages.lock.json \
+            csharp/tools/MetadataComparator/packages.lock.json \
+            csharp/hiveserver2/csharp/src/AdbcDrivers.HiveServer2/packages.lock.json; do
+            if [ ! -s "$lockfile" ]; then
+              echo "::error::Missing dependency inventory: $lockfile"
+              exit 1
+            fi
+          done
+
+          # Restore generates lockfiles only for these projects and their references.
+          shopt -s globstar nullglob
+          lockfiles=(rust/Cargo.lock go/go.mod csharp/**/packages.lock.json)
+          args=()
+          for lockfile in "${lockfiles[@]}"; do
+            args+=(--lockfile="$lockfile")
+          done
+          for lockfile in "$SECURITY_SCAN_DIR"/pixi/*/osv-scanner.json; do
+            args+=(--lockfile="osv-scanner:$lockfile")
+            lockfiles+=("$lockfile")
+          done
+          printf '%s\n' "${lockfiles[@]}" > "$SECURITY_SCAN_DIR/lockfiles.txt"
+
+          scan_rc=0
+          "$RUNNER_TEMP/osv-scanner" scan source "${args[@]}" \
+            --no-call-analysis=go --no-call-analysis=rust \
+            --config=osv-scanner.toml --format=json \
+            --output-file="$SECURITY_SCAN_DIR/osv-out.json" || scan_rc=$?
+          if [ "$scan_rc" -ne 0 ] && [ "$scan_rc" -ne 1 ]; then
+            echo "::error::OSV-Scanner failed with exit code $scan_rc."
+            exit 1
+          fi
+
+          python3 ci/scripts/security_scan_report.py \
+            "$SECURITY_SCAN_DIR/osv-out.json" \
+            --event "$SCAN_EVENT" --scan-exit-code "$scan_rc"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-scan-reports
+          path: ${{ runner.temp }}/security-scan/
+          if-no-files-found: ignore
