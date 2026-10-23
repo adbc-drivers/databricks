@@ -277,7 +277,7 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
+            if (ctx == null) return MaybeWrapComplexTypesAsync(base.ExecuteQuery()).GetAwaiter().GetResult();
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
@@ -289,8 +289,10 @@ namespace AdbcDrivers.Databricks
                 // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
                 // would mask those types, so keep the real reader here and wrap only on return.
                 _lastQueryResult = result;
+                ctx.StatementId = StatementId;
+                QueryResult wrapped = MaybeWrapComplexTypesAsync(result).GetAwaiter().GetResult();
                 RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                return wrapped;
             }
             catch (Exception ex)
             {
@@ -298,6 +300,7 @@ namespace AdbcDrivers.Databricks
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
                 PendingTelemetryContext = null; // Clear to avoid double emission
+                _lastQueryResult = null;
                 throw;
             }
         }
@@ -308,7 +311,7 @@ namespace AdbcDrivers.Databricks
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
+            if (ctx == null) return await MaybeWrapComplexTypesAsync(await base.ExecuteQueryAsync()).ConfigureAwait(false);
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
@@ -318,8 +321,10 @@ namespace AdbcDrivers.Databricks
                 // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
                 // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
                 _lastQueryResult = result;
+                ctx.StatementId = StatementId;
+                QueryResult wrapped = await MaybeWrapComplexTypesAsync(result).ConfigureAwait(false);
                 RecordSuccess(ctx);
-                return MaybeWrapComplexTypes(result);
+                return wrapped;
             }
             catch (Exception ex)
             {
@@ -327,21 +332,25 @@ namespace AdbcDrivers.Databricks
                 // Emit telemetry immediately on error (won't reach Dispose)
                 EmitTelemetry(ctx);
                 PendingTelemetryContext = null; // Clear to avoid double emission
+                _lastQueryResult = null;
                 throw;
             }
         }
 
         /// <summary>
         /// Applies client-side geospatial representation handling before the optional
-        /// complex-type JSON serializer.
+        /// complex-type JSON serializer. The ordering matters for nested geospatial values:
+        /// they must become GeoArrow WKB or EWKT strings before an outer complex
+        /// value is serialized.
         /// </summary>
-        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        private async ValueTask<QueryResult> MaybeWrapComplexTypesAsync(QueryResult result)
         {
             if (result.Stream == null) return result;
 
-            IArrowArrayStream stream = new GeospatialTransformingStream(
+            IArrowArrayStream stream = await GeospatialTransformingStream.CreateAsync(
                 result.Stream,
-                enableGeospatialSupport);
+                enableGeospatialSupport,
+                enableComplexDatatypeSupport).ConfigureAwait(false);
             if (!enableComplexDatatypeSupport)
             {
                 stream = new ComplexTypeSerializingStream(stream);

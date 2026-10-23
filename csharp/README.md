@@ -236,6 +236,30 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
 
+Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
+`adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
+returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
+
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+For results containing GEOMETRY or GEOGRAPHY, including nested values, `ExecuteQuery`
+and `ExecuteQueryAsync` read and buffer the first batch before returning. This lets the
+driver expose the physical Arrow type details, such as timestamp units and timezones,
+that SEA's manifest does not provide. With CloudFetch, execution can wait for the first
+file download, and fetch or schema-reconciliation errors can surface from the execute
+call. The buffered batch is returned on the first read; geospatial value conversion
+still happens as batches are read. This additional prefetch applies whether
+`adbc.databricks.enable_geospatial_support` is `true` or `false`. Results without
+geospatial columns do not incur this additional prefetch.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
+
 **Performance Notes:**
 - Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
 - `polltime_ms` defaults differ by protocol (see Core Spark Properties table); SEA's 1000 ms reflects heavier HTTP/JSON polling cost.
