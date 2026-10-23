@@ -26,6 +26,7 @@ from security_scan_report import (
     collect_grype_findings,
     is_blocking,
     numeric_score,
+    render_summary,
 )
 
 
@@ -132,12 +133,16 @@ class CondaFindingsTest(unittest.TestCase):
             ("Low", False),
         ]:
             with self.subTest(rating=rating):
+                report = conda_report(None, rating)
+                report["matches"][0]["vulnerability"]["cvss"] = None
+                report["matches"][0]["relatedVulnerabilities"] = None
                 finding = collect_grype_findings(
-                    conda_report(None, rating),
+                    report,
                     "go/pixi.lock",
                     {"conda-artifact": conda_artifact()},
                 )[0]
                 self.assertEqual(is_blocking(finding), blocking)
+                self.assertEqual(finding["severity"], rating.upper())
 
     def test_empty_grype_report_is_valid_but_missing_matches_fails(self):
         self.assertEqual(
@@ -175,6 +180,17 @@ class CondaFindingsTest(unittest.TestCase):
 
 
 class FindingsTest(unittest.TestCase):
+    def test_summary_renders_advisory_markdown_and_html_as_text(self):
+        findings = collect_findings(report_with_score("8.1"))
+        findings[0]["summary"] = (
+            "[misleading](https://example.org) ![image](https://example.org/image) <img src='https://example.org'> | **text**"
+        )
+        summary = render_summary(findings)
+        self.assertIn(r"\[misleading\]", summary)
+        self.assertIn(r"\!\[image\]", summary)
+        self.assertIn("&lt;img", summary)
+        self.assertIn(r"\| \*\*text\*\*", summary)
+
     def test_severity_threshold(self):
         for score, blocking in [
             ("0", False),
@@ -348,6 +364,7 @@ class ReportingTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertEqual(len(findings), 1)
                 self.assertIn("example@1.0", summary)
+                self.assertIn("Blocking findings (all findings): 1", summary)
 
     def test_blocking_pr_findings_still_write_artifacts(self):
         for score in ["7.0", ""]:

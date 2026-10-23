@@ -64,7 +64,8 @@ cross-repository digest, alongside Conda inventories, SBOMs, and raw Grype resul
 Findings include advisory summaries and CVE aliases.
 Conda matching uses upstream package names and versions: review possible name
 collisions, platform applicability, and backported fixes. A lack of matches does
-not establish that a Conda package is safe. These are lockfile scans, not scans of
+not establish that a Conda package is safe; CPE matching can miss certificate
+trust-store removals. These are lockfile scans, not scans of
 installed package contents or deployed OS trust stores.
 Scanning Go module dependencies does not inspect the Rust dependencies embedded
 in prebuilt SQL kernel bindings; those need upstream coverage.

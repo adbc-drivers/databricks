@@ -153,6 +153,13 @@ class PixiInventoryTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     collect_packages({"version": 6, "packages": [package]})
 
+    def test_invalid_pypi_url_type_fails(self):
+        for url in [None, {}]:
+            with self.subTest(url=url), self.assertRaises(TypeError):
+                collect_packages(
+                    {"version": 7, "packages": [{**pypi_package(), "pypi": url}]}
+                )
+
     def test_invalid_schema_fails(self):
         for lock in (
             None,

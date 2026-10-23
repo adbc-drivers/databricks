@@ -15,9 +15,11 @@
 """Report dependency findings and apply the driver repositories' severity policy."""
 
 import argparse
+import html
 import json
 import math
 import os
+import re
 from pathlib import Path
 
 
@@ -102,18 +104,18 @@ def collect_grype_findings(report, source, sbom_artifacts):
             raise ValueError("Expected only Conda packages in the Grype report")
         vulnerability = match["vulnerability"]
         ids = {vulnerability["id"]}
-        related = match.get("relatedVulnerabilities", [])
+        related = match.get("relatedVulnerabilities") or []
         ids.update(vuln["id"] for vuln in related)
         if not all(isinstance(id_, str) and id_ for id_ in ids):
             raise ValueError("Grype finding has no valid advisory IDs")
         scores = [
             score
             for vuln in [vulnerability, *related]
-            for cvss in vuln.get("cvss", [])
+            for cvss in (vuln.get("cvss") or [])
             if (score := numeric_score(cvss.get("metrics", {}).get("baseScore")))
             is not None
         ]
-        rating = vulnerability.get("severity", "Unknown").upper()
+        rating = (vulnerability.get("severity") or "Unknown").upper()
         severity = str(max(scores)) if scores else rating
         if not scores and rating not in {
             "CRITICAL",
@@ -208,12 +210,21 @@ def is_blocking(finding):
     )
 
 
-def render_summary(findings, conda_coverage=()):
+def blocking_findings(findings, event):
+    return list(filter(is_blocking, findings)) if event == "pull_request" else findings
+
+
+def render_summary(findings, conda_coverage=(), *, event="pull_request"):
+    threshold = (
+        "CVSS >= 7, high/critical, or unscored"
+        if event == "pull_request"
+        else "all findings"
+    )
     lines = [
         "## Security Scan Findings",
         "",
         f"- Total findings: {len(findings)}",
-        f"- Blocking findings (CVSS >= 7, high/critical, or unscored): {sum(map(is_blocking, findings))}",
+        f"- Blocking findings ({threshold}): {len(blocking_findings(findings, event))}",
     ]
     for inventory in conda_coverage:
         lines.append(
@@ -253,7 +264,16 @@ def render_summary(findings, conda_coverage=()):
                 summary,
                 ", ".join(finding["ids"]),
             ]
-            cells = [cell.replace("|", "\\|").replace("\n", " ") for cell in cells]
+            cells = [
+                re.sub(
+                    r"([\\`*_{}\[\]!|])",
+                    r"\\\1",
+                    html.escape(
+                        cell.replace("\n", " ").replace("\r", " "), quote=False
+                    ),
+                )
+                for cell in cells
+            ]
             lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
@@ -289,17 +309,13 @@ def main():
     args.report.with_name("all-findings.json").write_text(
         json.dumps(findings, indent=2) + "\n"
     )
-    summary = render_summary(findings, conda_coverage)
+    summary = render_summary(findings, conda_coverage, event=args.event)
     print(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
             output.write(summary)
 
-    failed = (
-        any(map(is_blocking, findings))
-        if args.event == "pull_request"
-        else bool(findings)
-    )
+    failed = bool(blocking_findings(findings, args.event))
     if failed:
         print(
             "::error::Unsuppressed vulnerabilities exceed the security scan threshold."

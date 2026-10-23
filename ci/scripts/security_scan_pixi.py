@@ -37,7 +37,10 @@ def collect_packages(lock):
     for record in locked_records(lock):
         if "pypi" not in record:
             continue
-        if record["pypi"].startswith("git+"):
+        url = record["pypi"]
+        if not isinstance(url, str):
+            raise TypeError("Locked PyPI package must have a URL string")
+        if url.startswith("git+"):
             continue
         name, version = record.get("name"), record.get("version")
         if (
