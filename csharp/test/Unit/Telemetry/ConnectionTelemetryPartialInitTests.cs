@@ -62,7 +62,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -82,7 +82,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -105,7 +105,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Oauth, connParams.AuthMech);
@@ -124,7 +124,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
@@ -139,7 +139,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.DetermineAuthType(properties);
 
             Assert.Equal(DriverAuthMechType.Pat, connParams.AuthMech);
@@ -193,7 +193,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
 
             var connParams = ConnectionTelemetry.BuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
-                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs);
+                enableDirectResults: true, enableComplexDatatypeSupport: true, DefaultTimeoutMs, enableGeospatialSupport: false);
 
             Assert.True(connParams.EnableArrow);
             Assert.True(connParams.EnableDirectResults);
@@ -223,7 +223,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var connParams = ConnectionTelemetry.SafeBuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
                 enableDirectResults: true, enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null);
+                connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null, enableGeospatialSupport: false);
 
             Assert.NotNull(connParams);
             Assert.True(connParams.EnableArrow);
@@ -261,7 +261,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
             var connParams = ConnectionTelemetry.SafeBuildDriverConnectionParams(
                 properties, Host, DriverModeType.Thrift,
                 enableDirectResults: true, enableComplexDatatypeSupport: true,
-                connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null);
+                connectTimeoutMilliseconds: DefaultTimeoutMs, activity: null, enableGeospatialSupport: false);
             string authType = ConnectionTelemetry.SafeDetermineAuthType(properties, activity: null);
 
             // Assemble a session as Create() would, then sanity-check the seven fields the

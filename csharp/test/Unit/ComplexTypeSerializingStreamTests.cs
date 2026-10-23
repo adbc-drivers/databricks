@@ -16,6 +16,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
@@ -27,13 +28,13 @@ using Xunit;
 namespace AdbcDrivers.Databricks.Tests.Unit
 {
     /// <summary>
-    /// Unit tests for <see cref="ComplexTypeSerializingStream"/> that pin the exact JSON string
-    /// produced for each complex-type element. These run without a warehouse and are the local
+    /// Unit tests for <see cref="ComplexTypeSerializingStream"/> that verify JSON values and
+    /// contract-specific text formats. These run without a warehouse and are the local
     /// oracle for the values the E2E ComplexTypesValueTests assert against.
     ///
     /// Contract being verified:
     ///   - DECIMAL  → bare JSON number (full precision), not a quoted string
-    ///   - DOUBLE   → JSON number that keeps a trailing ".0" for integral values
+    ///   - DOUBLE   → bare JSON number that round-trips to the same double value
     ///   - DATE     → quoted "yyyy-MM-dd"
     ///   - TIMESTAMP/INTERVAL → exact form documented by the asserts below
     ///   - MAP keys → quoted and sorted (valid JSON)
@@ -55,14 +56,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Fact]
-        public async Task Array_Double_FractionalUnchanged()
+        public async Task Array_Double_FractionalValuesRoundTrip()
         {
             ListArray.Builder b = new ListArray.Builder(DoubleType.Default);
             DoubleArray.Builder vb = (DoubleArray.Builder)b.ValueBuilder;
             b.Append();
             vb.Append(1.1);
             vb.Append(2.5);
-            Assert.Equal("[1.1,2.5]", await Serialize("ARRAY<DOUBLE>", b.Build()));
+            // .NET Framework may render 1.1 as 1.1000000000000001. Verify bare
+            // JSON numbers and exact double values without pinning runtime formatting.
+            using JsonDocument json = JsonDocument.Parse(await Serialize("ARRAY<DOUBLE>", b.Build()));
+            Assert.Equal(JsonValueKind.Array, json.RootElement.ValueKind);
+            Assert.Equal(2, json.RootElement.GetArrayLength());
+            Assert.Equal(1.1, json.RootElement[0].GetDouble());
+            Assert.Equal(2.5, json.RootElement[1].GetDouble());
         }
 
         [Fact]
