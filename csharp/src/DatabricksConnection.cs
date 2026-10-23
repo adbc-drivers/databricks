@@ -201,7 +201,7 @@ namespace AdbcDrivers.Databricks
 
         protected override TCLIService.IAsync CreateTCLIServiceClient(TProtocol protocol)
         {
-            return new ThreadSafeClient(new TCLIService.Client(protocol));
+            return new ThreadSafeClient(new TCLIService.Client(protocol, new UninterruptibleWriteProtocol(protocol)));
         }
 
         private void ValidateProperties()
