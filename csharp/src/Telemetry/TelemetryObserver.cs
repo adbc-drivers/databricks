@@ -1,0 +1,253 @@
+/*
+* Copyright (c) 2025 ADBC Drivers Contributors
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+*     http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/
+
+using System;
+using System.Diagnostics;
+using System.Threading;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Telemetry.Models;
+using ExecutionResultFormat = AdbcDrivers.Databricks.Telemetry.Proto.ExecutionResult.Types.Format;
+using OperationType = AdbcDrivers.Databricks.Telemetry.Proto.Operation.Types.Type;
+using StatementType = AdbcDrivers.Databricks.Telemetry.Proto.Statement.Types.Type;
+
+namespace AdbcDrivers.Databricks.Telemetry
+{
+    /// <summary>
+    /// Default <see cref="IStatementOperationObserver"/> implementation that translates
+    /// observer method calls into mutations on a <see cref="StatementTelemetryContext"/>
+    /// and, on <see cref="OnFinalized"/>, builds a <see cref="Proto.OssSqlDriverTelemetryLog"/>
+    /// and enqueues it on the session's telemetry client for background export.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Fail-open:</b> The lifecycle methods are plain field assignments and a couple of
+    /// guarded helpers; they cannot realistically throw. Only <see cref="OnFinalized"/> does
+    /// risky work (proto build + telemetry-client enqueue), and the try/catch is scoped to
+    /// exactly that block. Exceptions are surfaced as an OpenTelemetry activity event on the
+    /// ambient <see cref="Activity"/>, not propagated to the caller.
+    /// </para>
+    /// <para>
+    /// <b>Thread-safe:</b> The scalar writes into the per-statement context are inherently
+    /// safe for the lifecycle calls (each is called at most a small number of times from the
+    /// statement's execution path or the reader's disposal thread). The terminal
+    /// <see cref="OnFinalized"/> uses <see cref="Interlocked.CompareExchange(ref int, int, int)"/>
+    /// on an <c>_emitted</c> flag to guarantee exactly-once enqueue even if it is invoked
+    /// concurrently from multiple threads (e.g. error path + dispose path).
+    /// </para>
+    /// <para>
+    /// <b>Post-finalize:</b> Every non-terminal lifecycle method short-circuits on
+    /// <see cref="IsFinalized"/>, so any stray call after <see cref="OnFinalized"/> is a true
+    /// no-op per the interface contract.
+    /// </para>
+    /// <para>
+    /// <b>Non-blocking:</b> <see cref="OnFinalized"/> only enqueues the log into the
+    /// telemetry client's internal queue. The actual HTTP export runs on the client's
+    /// background flush timer and never blocks the calling thread.
+    /// </para>
+    /// </remarks>
+    internal sealed class TelemetryObserver : IStatementOperationObserver
+    {
+        // 0 = not yet emitted, 1 = emitted. Mutated via Interlocked.CompareExchange so the
+        // terminal OnFinalized() is exactly-once even under concurrent invocation.
+        private int _emitted;
+
+        private readonly TelemetrySessionContext _session;
+        private readonly StatementTelemetryContext _ctx;
+
+        /// <summary>
+        /// Initializes a new observer that records into a freshly created
+        /// <see cref="StatementTelemetryContext"/> seeded from <paramref name="session"/>.
+        /// </summary>
+        /// <param name="session">Per-connection telemetry session context. Required.</param>
+        public TelemetryObserver(TelemetrySessionContext session)
+            : this(session, new StatementTelemetryContext(session ?? throw new ArgumentNullException(nameof(session))))
+        {
+        }
+
+        // Test seam: allows unit tests to inject a pre-populated context. Internal so
+        // it does not leak from the assembly.
+        internal TelemetryObserver(TelemetrySessionContext session, StatementTelemetryContext context)
+        {
+            _session = session ?? throw new ArgumentNullException(nameof(session));
+            _ctx = context ?? throw new ArgumentNullException(nameof(context));
+        }
+
+        /// <summary>
+        /// Internal accessor for the underlying context, exposed for unit tests that need
+        /// to assert per-field state without building a full telemetry log.
+        /// </summary>
+        internal StatementTelemetryContext Context => _ctx;
+
+        /// <summary>
+        /// Internal accessor for the idempotency flag, exposed for unit tests that need to
+        /// confirm exactly-once semantics without reaching into the enqueue path.
+        /// </summary>
+        internal bool HasEmitted => Volatile.Read(ref _emitted) != 0;
+
+        /// <inheritdoc />
+        public void OnExecuteStarted(StatementType stmtType, OperationType opType, bool isCompressed)
+        {
+            if (IsFinalized()) return;
+            _ctx.StatementType = stmtType;
+            _ctx.OperationType = opType;
+            _ctx.IsCompressed = isCompressed;
+        }
+
+        /// <inheritdoc />
+        public void OnExecuteSucceeded(string statementId, ExecutionResultFormat resultFormat)
+        {
+            if (IsFinalized()) return;
+            _ctx.StatementId = statementId;
+            _ctx.ResultFormat = resultFormat;
+            _ctx.RecordExecuteComplete();
+        }
+
+        /// <inheritdoc />
+        public void OnPollCompleted(int count, long latencyMs)
+        {
+            if (IsFinalized()) return;
+            _ctx.PollCount = count;
+            _ctx.PollLatencyMs = latencyMs;
+        }
+
+        /// <inheritdoc />
+        public void OnFirstBatchReady(long latencyMs)
+        {
+            if (IsFinalized()) return;
+            // Only the first call wins: the underlying setter is null-guarded so
+            // repeated calls (e.g. inline reader emits one, cloud-fetch reader emits
+            // another) do not overwrite the earliest observed latency.
+            if (_ctx.FirstBatchReadyMs == null)
+            {
+                _ctx.FirstBatchReadyMs = latencyMs;
+            }
+        }
+
+        /// <inheritdoc />
+        public void OnConsumed(long latencyMs)
+        {
+            if (IsFinalized()) return;
+            _ctx.ResultsConsumedMs = latencyMs;
+        }
+
+        /// <inheritdoc />
+        public void OnChunksDownloaded(ChunkMetrics metrics)
+        {
+            if (IsFinalized() || metrics == null) return;
+            // Tolerate an empty ChunkMetrics — the gap-fix plumbing may not be landed
+            // yet, and the proto fields are nullable on the wire.
+            _ctx.SetChunkDetails(
+                metrics.TotalChunksPresent,
+                metrics.TotalChunksIterated,
+                metrics.InitialChunkLatencyMs,
+                metrics.SlowestChunkLatencyMs,
+                metrics.SumChunksDownloadTimeMs);
+        }
+
+        /// <inheritdoc />
+        public void OnError(Exception ex)
+        {
+            if (IsFinalized() || ex == null) return;
+            _ctx.HasError = true;
+            _ctx.ErrorName = ex.GetType().Name;
+            // .Message is captured in-memory only. The proto's DriverErrorInfo.error_message
+            // field is pending LPP review (see ConnectionTelemetry.EmitOperationTelemetry),
+            // so BuildTelemetryLog does NOT serialize ErrorMessage into the wire payload
+            // today. SafeMessage neutralizes the rare case where ex.Message itself throws.
+            _ctx.ErrorMessage = SafeMessage(ex);
+        }
+
+        /// <inheritdoc />
+        public void OnFinalized()
+        {
+            // Idempotency gate: only the first caller proceeds.
+            if (Interlocked.CompareExchange(ref _emitted, 1, 0) != 0)
+            {
+                return;
+            }
+
+            ITelemetryClient? client = _session.TelemetryClient;
+            if (client == null)
+            {
+                // Telemetry is disabled at the session level. The idempotency flag is
+                // already set so a subsequent OnFinalized() remains a no-op.
+                return;
+            }
+
+            // The only genuinely risky work in this class: proto construction and
+            // enqueue into the telemetry client. Anything else above this point is
+            // plain field writes that cannot throw. The catch is scoped tightly so the
+            // suppression only ever covers the real risk surface.
+            try
+            {
+                Proto.OssSqlDriverTelemetryLog log = _ctx.BuildTelemetryLog();
+                TelemetryFrontendLog frontendLog = new TelemetryFrontendLog
+                {
+                    WorkspaceId = _ctx.WorkspaceId,
+                    FrontendLogEventId = Guid.NewGuid().ToString(),
+                    Context = new FrontendLogContext
+                    {
+                        TimestampMillis = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    },
+                    Entry = new FrontendLogEntry
+                    {
+                        SqlDriverLog = log,
+                    },
+                };
+
+                // Enqueue is non-blocking; the client buffers events and flushes on a
+                // background timer. No HTTP I/O happens on the calling thread.
+                client.Enqueue(frontendLog);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    Activity.Current?.AddEvent(new ActivityEvent("telemetry.observer.suppressed",
+                        tags: new ActivityTagsCollection
+                        {
+                            { "error.type", ex.GetType().Name },
+                            { "error.message", SafeMessage(ex) },
+                            { "observer.suppressed.source", "TelemetryObserver" },
+                        }));
+                }
+                catch
+                {
+                    // Recording the suppression must not itself throw. Intentionally empty.
+                }
+            }
+        }
+
+        // After OnFinalized has fired, all other lifecycle methods are no-ops per the
+        // interface contract. Centralized here so each method body stays terse.
+        private bool IsFinalized() => Volatile.Read(ref _emitted) != 0;
+
+        // Some exceptions throw from their .Message property (rare but observed in the
+        // wild for user-defined types). Wrap it so OnError can never become a source of
+        // observer failure.
+        private static string? SafeMessage(Exception ex)
+        {
+            try
+            {
+                return ex.Message;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+}
