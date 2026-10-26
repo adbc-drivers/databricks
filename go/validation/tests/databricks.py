@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import re
 from pathlib import Path
 
-from adbc_drivers_validation import model, quirks
+import sqlglot
+from adbc_drivers_validation import model
+from sqlglot.tokens import TokenType
 
 
 class DatabricksQuirks(model.DriverQuirks):
@@ -30,6 +33,7 @@ class DatabricksQuirks(model.DriverQuirks):
         connection_set_current_catalog=False,
         connection_set_current_schema=False,
         connection_transactions=False,
+        get_objects=True,
         get_objects_constraints_check=False,
         get_objects_constraints_foreign=False,
         get_objects_constraints_primary=False,
@@ -43,6 +47,7 @@ class DatabricksQuirks(model.DriverQuirks):
         statement_get_parameter_schema=False,
         statement_prepare=True,
         statement_rows_affected=True,
+        statement_rows_affected_ddl=True,
         current_catalog="main",
         current_schema="adbc_testing",
         supported_xdbc_fields=[],
@@ -70,6 +75,11 @@ class DatabricksQuirks(model.DriverQuirks):
     def bind_parameter(self, index: int) -> str:
         return "?"
 
+    def query_override(self, context: str, default: str) -> str:
+        if context == "TestStatement.sample_table":
+            return default.replace("VARCHAR", "STRING")
+        return super().query_override(context, default)
+
     def is_table_not_found(self, table_name: str, error: Exception) -> bool:
         # Check if the error indicates a table not found condition
         error_str = str(error).lower()
@@ -89,7 +99,26 @@ class DatabricksQuirks(model.DriverQuirks):
         return f"`{identifier}`"
 
     def split_statement(self, statement: str) -> list[str]:
-        return quirks.split_statement(statement, dialect=self.name)
+        # SQLGlot's Databricks renderer drops TIMESTAMP(p) precision.
+        # Split at tokens instead, preserving the original SQL and ignoring
+        # semicolons inside literals and comments.
+        statements = []
+        start = None
+        for token in sqlglot.tokenize(statement, read=self.name):
+            if token.token_type == TokenType.SEMICOLON:
+                if start is not None:
+                    statements.append(statement[start : token.start].strip())
+                    start = None
+            elif start is None:
+                start = token.start
+        if start is not None:
+            statements.append(statement[start:].strip())
+        return statements
 
 
-QUIRKS = [DatabricksQuirks()]
+@functools.cache
+def get_quirks(version: str) -> DatabricksQuirks:
+    quirks = DatabricksQuirks()
+    if version not in {"latest", quirks.short_version}:
+        raise ValueError(f"Unsupported Databricks version: {version}")
+    return quirks

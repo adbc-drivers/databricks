@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// part: metadata
+
+[tags]
+sql-type-name = "TIMESTAMP"
+
+// part: setup_query
+
+CREATE TABLE test_timestamptz (idx INT, res TIMESTAMP, res2 TIMESTAMP);
+
 // part: expected_schema
 
 {"format": "+s", "children": [

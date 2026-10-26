@@ -43,7 +43,7 @@ type statementImpl struct {
 	bulkIngestOptions driverbase.BulkIngestOptions
 }
 
-func (s *statementImpl) Close() error {
+func (s *statementImpl) Close(ctx context.Context) error {
 	if s.conn == nil {
 		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "statement already closed")
 	}
@@ -61,7 +61,7 @@ func (s *statementImpl) Close() error {
 	return nil
 }
 
-func (s *statementImpl) SetOption(key, val string) error {
+func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {
@@ -71,7 +71,7 @@ func (s *statementImpl) SetOption(key, val string) error {
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported statement option: %s=%s", key, val)
 }
 
-func (s *statementImpl) SetSqlQuery(query string) error {
+func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 	s.query = query
 	// Reset prepared statement if query changes
 	if s.prepared != nil {
@@ -90,7 +90,7 @@ func (s *statementImpl) Prepare(ctx context.Context) error {
 
 	stmt, err := s.conn.conn.PrepareContext(ctx, s.query)
 	if err != nil {
-		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "failed to prepare statement: %v", err)
+		return s.ErrorHelper.WrapInvalidState(err, "failed to prepare statement")
 	}
 
 	s.prepared = stmt
@@ -150,7 +150,7 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 	})
 
 	if err != nil {
-		return nil, errorHelper.Errorf(adbc.StatusInternal, "failed to execute query: %v", err)
+		return nil, errorHelper.WrapInternal(err, "failed to execute query")
 	}
 
 	defer func() {
@@ -241,7 +241,7 @@ func (s *statementImpl) executeUpdate(ctx context.Context, query string, args []
 		result, err = s.conn.conn.ExecContext(ctx, query, values...)
 	}
 	if err != nil {
-		return -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute update: %v", err)
+		return -1, s.ErrorHelper.WrapInternal(err, "failed to execute update")
 	}
 
 	rowsAffected, err := result.RowsAffected()
@@ -281,13 +281,13 @@ func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReade
 	return nil
 }
 
-func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
+func (s *statementImpl) GetParameterSchema(ctx context.Context) (*arrow.Schema, error) {
 	// This would require parsing the SQL query to determine parameter types
 	// For now, return nil to indicate unknown schema
 	return nil, s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "parameter schema detection not implemented")
 }
 
-func (s *statementImpl) SetSubstraitPlan(plan []byte) error {
+func (s *statementImpl) SetSubstraitPlan(ctx context.Context, plan []byte) error {
 	// Databricks SQL doesn't support Substrait plans
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "Substrait plans not supported")
 }

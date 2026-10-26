@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// part: metadata
+
+[tags]
+sql-type-name = "TIMESTAMP_NTZ"
+partial-support = true
+caveats = ["Nanosecond timestamps are truncated to microseconds."]
+
 // part: setup_query
 
 CREATE TABLE test_timestamp (idx INT, res TIMESTAMP_NTZ);

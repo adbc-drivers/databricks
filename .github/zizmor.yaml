@@ -1,0 +1,83 @@
+# Copyright (c) 2026 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Preserve existing workflow behavior while migrating Go workflow generation.
+# Rust workflows retain their existing build tooling and are not regenerated.
+# Exceptions apply only to the listed rules and files; all other checks remain
+# enabled. Remove each exception when its underlying finding is fixed.
+rules:
+  adhoc-packages:
+    ignore:
+      - engineer-bot-followup.yml
+      - engineer-bot-learning.yaml
+      - engineer-bot.yaml
+      - reviewer-bot-followup.yml
+      - reviewer-bot.yml
+  artipacked:
+    ignore:
+      - benchmarks.yml
+      - csharp-sync-latest.yml
+      - e2e-tests.yml
+      - reyden-rest-nightly.yml
+      - trigger-integration-tests.yml
+  cache-poisoning:
+    ignore:
+      - rust_release.yaml
+  dangerous-triggers:
+    ignore:
+      # Existing "take" handler assigns an issue without checking out PR code.
+      - dev_issues.yaml
+      - pr-validation.yml
+      - rust_coverage_report.yaml
+      - skip-checks-reporter.yml
+  dependabot-cooldown:
+    ignore:
+      - dependabot.yaml
+  excessive-permissions:
+    ignore:
+      - benchmarks.yml
+      - e2e-tests.yml
+      - pr-validation.yml
+      - reyden-rest-nightly.yml
+      - rust-e2e.yml
+      - rust_release.yaml
+      - rust_test.yaml
+      - skip-checks-reporter.yml
+      - trigger-integration-tests.yml
+  github-app:
+    ignore:
+      - csharp-sync-latest.yml
+      - engineer-bot-followup.yml
+      - engineer-bot-learning.yaml
+      - engineer-bot.yaml
+      - reviewer-bot-followup.yml
+      - reviewer-bot.yml
+      - skip-checks-reporter.yml
+      - trigger-integration-tests.yml
+  template-injection:
+    ignore:
+      - benchmarks.yml
+      - csharp-sync-latest.yml
+      - e2e-tests.yml
+      - engineer-bot-followup.yml
+      - reviewer-bot-followup.yml
+      - reyden-rest-nightly.yml
+      - rust_release.yaml
+      - rust_test.yaml
+      - rust_test_pr.yaml
+      - trigger-integration-tests.yml
+  unpinned-uses:
+    ignore:
+      # Preserve the existing reusable Rust workflow reference to main.
+      - rust_test_pr.yaml
