@@ -44,7 +44,6 @@ using AdbcDrivers.HiveServer2.Thrift;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
-using Thrift.Protocol;
 
 namespace AdbcDrivers.Databricks
 {
@@ -197,11 +196,6 @@ namespace AdbcDrivers.Databricks
             //tags ??= [];
             //tags.Concat([new("key", "value")]);
             return tags;
-        }
-
-        protected override TCLIService.IAsync CreateTCLIServiceClient(TProtocol protocol)
-        {
-            return new ThreadSafeClient(new TCLIService.Client(protocol, new UninterruptibleWriteProtocol(protocol)));
         }
 
         private void ValidateProperties()

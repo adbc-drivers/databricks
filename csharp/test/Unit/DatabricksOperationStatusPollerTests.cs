@@ -34,6 +34,7 @@ using Apache.Hive.Service.Rpc.Thrift;
 using Apache.Arrow.Adbc.Tracing;
 using Moq;
 using Thrift.Protocol;
+using Thrift.Transport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -467,6 +468,54 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.NotEqual(ActivityStatusCode.Error, activity.Status);
             await client.CloseOperation(new TCloseOperationReq(_operationHandle));
             server.Verify(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StoppingStillReportsUnrelatedPollErrors(bool transportError)
+        {
+            Exception error = transportError
+                ? new TTransportException(TTransportException.ExceptionType.NotOpen, "Connection closed")
+                : new InvalidOperationException("Unexpected poll failure");
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resume = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .Returns(async () =>
+                {
+                    started.TrySetResult(true);
+                    await resume.Task;
+                    throw error;
+                });
+            using var trace = new ActivityTrace(nameof(StoppingStillReportsUnrelatedPollErrors));
+            var tracer = new Mock<IActivityTracer>();
+            tracer.Setup(t => t.Trace).Returns(trace);
+            var completed = new TaskCompletionSource<Activity>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => ReferenceEquals(source, trace.ActivitySource),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStopped = activity => completed.TrySetResult(activity)
+            };
+            ActivitySource.AddActivityListener(listener);
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds, activityTracer: tracer.Object);
+            poller.Start();
+            try
+            {
+                await WaitForSignal(started.Task);
+                poller.Stop();
+                resume.TrySetResult(true);
+                await WaitForSignal(completed.Task);
+            }
+            finally
+            {
+                resume.TrySetResult(true);
+                poller.Dispose();
+            }
+
+            Activity activity = await completed.Task;
+            Assert.Contains(activity.Events, e => e.Name == "operation_status_poller.poll_error");
         }
 
         private static Task WaitForSignal(Task task)
