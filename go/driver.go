@@ -62,7 +62,13 @@ const (
 	OptionSSLMode     = "databricks.ssl_mode"
 	OptionSSLRootCert = "databricks.ssl_root_cert"
 
-	// OAuth options (for future expansion)
+	// Authentication. When auth_type is not set, the method is inferred from the
+	// other options that are set.
+	OptionAuthType              = "databricks.auth_type"
+	OptionValueAuthTypePAT      = "pat"
+	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
+
+	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"

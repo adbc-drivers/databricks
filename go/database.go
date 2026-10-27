@@ -61,6 +61,7 @@ type databaseImpl struct {
 	serverHostname string
 	httpPath       string
 	accessToken    string
+	authType       string
 	port           int
 	catalog        string
 	schema         string
@@ -77,7 +78,7 @@ type databaseImpl struct {
 	sslCertPool *x509.CertPool
 	sslInsecure bool
 
-	// OAuth options (for future expansion)
+	// OAuth options
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
@@ -98,29 +99,16 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	// FIXME: Support other auth methods
-	if d.accessToken == "" && d.oauthClientID == "" && d.oauthClientSecret == "" {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] access token or OAuth config is required",
-		}
-	} else if d.accessToken != "" && (d.oauthClientID != "" || d.oauthClientSecret != "") {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] cannot specify both access token and OAuth config",
-		}
+	_, login, err := d.resolveLoginMethod()
+	if err != nil {
+		return nil, err
 	}
 
 	opts := []dbsql.ConnOption{
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
 		dbsql.WithArrowNativeDecimal(true),
-	}
-
-	if d.accessToken != "" {
-		opts = append(opts, dbsql.WithAccessToken(d.accessToken))
-	} else {
-		opts = append(opts, dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret))
+		login.build(d),
 	}
 
 	// Validate and set custom port
@@ -312,6 +300,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.httpPath, nil
 	case OptionAccessToken:
 		return d.accessToken, nil
+	case OptionAuthType:
+		return d.authType, nil
 	case OptionPort:
 		return strconv.Itoa(d.port), nil
 	case OptionCatalog:
@@ -404,6 +394,14 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.httpPath = value
 	case OptionAccessToken:
 		d.accessToken = value
+	case OptionAuthType:
+		if _, ok := loginMethods[value]; !ok && value != "" {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] unknown auth type '%s'", value),
+			}
+		}
+		d.authType = value
 	case OptionPort:
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
