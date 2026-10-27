@@ -50,8 +50,6 @@ namespace AdbcDrivers.Databricks.Reader
         public override Schema Schema { get { return _schema; } }
 
         private BaseDatabricksReader? _activeReader;
-        private ChunkMetrics? _cachedChunkMetrics;
-        private bool _wasCloudFetchActive;
         private readonly IHiveServer2Statement _statement;
         private readonly Schema _schema;
         private readonly IResponse _response;
@@ -313,19 +311,6 @@ namespace AdbcDrivers.Databricks.Reader
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
                                     new("reader_type", _activeReader.GetType().Name)
                                 ]);
-                                if (_activeReader is CloudFetchReader cloudFetchReader)
-                                {
-                                    _wasCloudFetchActive = true;
-                                    try
-                                    {
-                                        // Preserve reader telemetry when geospatial initialization fails.
-                                        _cachedChunkMetrics = cloudFetchReader.GetChunkMetrics();
-                                    }
-                                    catch
-                                    {
-                                        // Telemetry collection must not prevent resource cleanup.
-                                    }
-                                }
                                 _activeReader.Dispose();
                                 _activeReader = null;
                             }
@@ -396,8 +381,8 @@ namespace AdbcDrivers.Databricks.Reader
                 return cloudFetchReader.GetChunkMetrics();
             }
 
-            // Retain metrics for telemetry emitted after initialization failure or disposal.
-            return _cachedChunkMetrics;
+            // Not using CloudFetch or reader not initialized yet
+            return null;
         }
 
         /// <summary>
@@ -413,9 +398,8 @@ namespace AdbcDrivers.Databricks.Reader
         /// Reflects the server's actual choice for this result set (presence of result links in the
         /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
         /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
-        /// active reader has not been initialized yet. Preserves the selected format after disposal
-        /// so error telemetry still identifies CloudFetch results correctly.
+        /// active reader has not been initialized yet.
         /// </summary>
-        public bool IsCloudFetchActive => _activeReader is CloudFetchReader || _wasCloudFetchActive;
+        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
     }
 }

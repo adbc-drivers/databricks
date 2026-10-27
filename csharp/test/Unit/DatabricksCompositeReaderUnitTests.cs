@@ -26,11 +26,8 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.Databricks.Reader;
-using AdbcDrivers.Databricks.Reader.CloudFetch;
 using Apache.Arrow;
-using Apache.Arrow.Ipc;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
@@ -459,67 +456,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             mockReader.Protected().Verify("Dispose", Times.Once(), ItExpr.IsAny<bool>());
             mockPoller.Verify(p => p.Stop(), Times.Once);
             mockPoller.Verify(p => p.Dispose(), Times.Once);
-        }
-
-        [Theory]
-        [InlineData(false)]
-        [InlineData(true)]
-        public async Task GeospatialPrefetchFailure_PreservesCloudFetchTelemetry(bool composite)
-        {
-            var schema = new Schema.Builder()
-                .Field(new Field("g", StringType.Default, true, new Dictionary<string, string>
-                {
-                    [ColumnMetadataHelper.ArrowMetadataKey] = "GEOMETRY(4326)"
-                }))
-                .Build();
-            var client = CreateMockClient();
-            client.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new TFetchResultsResp
-                {
-                    HasMoreRows = false,
-                    Results = new TRowSet
-                    {
-                        ResultLinks = new List<TSparkArrowResultLink> { new TSparkArrowResultLink() }
-                    }
-                });
-            var statement = CreateMockStatement(client);
-            var response = CreateMockResponse();
-            var metrics = new ChunkMetrics
-            {
-                TotalChunksPresent = 2,
-                TotalChunksIterated = 1,
-                InitialChunkLatencyMs = 17
-            };
-            bool disposed = false;
-            var downloadManager = new Mock<ICloudFetchDownloadManager>();
-            downloadManager.Setup(m => m.GetChunkMetrics()).Returns(() =>
-            {
-                Assert.False(disposed);
-                return metrics;
-            });
-            downloadManager.Setup(m => m.Dispose()).Callback(() => disposed = true);
-            var expected = new InvalidOperationException("first file download failed");
-            downloadManager.Setup(m => m.GetNextDownloadedFileAsync(It.IsAny<CancellationToken>()))
-                .ThrowsAsync(expected);
-            var cloudFetch = new CloudFetchReader(
-                statement.Object, schema, response.Object, downloadManager.Object);
-            TestableDatabricksCompositeReader? compositeReader = composite
-                ? new TestableDatabricksCompositeReader(statement.Object, schema, response.Object,
-                    false, _httpClient, new Mock<IOperationStatusPoller>().Object) { MockReader = cloudFetch }
-                : null;
-            IArrowArrayStream source = compositeReader ?? (IArrowArrayStream)cloudFetch;
-
-            InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-                await GeospatialTransformingStream.CreateAsync(source, true, true));
-
-            Assert.Same(expected, error);
-            downloadManager.Verify(m => m.Dispose(), Times.Once);
-            Assert.Same(metrics, cloudFetch.GetChunkMetrics());
-            if (compositeReader != null)
-            {
-                Assert.True(compositeReader.IsCloudFetchActive);
-                Assert.Same(metrics, compositeReader.GetChunkMetrics());
-            }
         }
 
         public void Dispose()
