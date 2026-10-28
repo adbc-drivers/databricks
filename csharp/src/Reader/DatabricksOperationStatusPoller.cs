@@ -31,6 +31,7 @@ using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
+using Thrift.Transport;
 
 namespace AdbcDrivers.Databricks.Reader
 {
@@ -182,6 +183,12 @@ namespace AdbcDrivers.Databricks.Reader
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     // Cancellation was requested - exit the polling loop gracefully
+                    return;
+                }
+                catch (TTransportException ex) when (ct.IsCancellationRequested &&
+                    ex.Type == TTransportException.ExceptionType.Interrupted)
+                {
+                    // Thrift wraps canceled HTTP requests in TTransportException.
                     return;
                 }
                 catch (Exception ex)
