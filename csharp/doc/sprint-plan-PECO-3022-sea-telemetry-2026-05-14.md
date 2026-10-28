@@ -66,9 +66,8 @@ Create the interface and three implementations per design §5.1 and §12.
 
 **New files:**
 - `csharp/src/Telemetry/IStatementOperationObserver.cs`
-- `csharp/src/Telemetry/TelemetryObserver.cs` (uses `Safe(Action)` helper pattern from design §12)
+- `csharp/src/Telemetry/TelemetryObserver.cs` (try/catch scoped to `OnFinalized`'s proto build + enqueue; lifecycle methods are plain field writes that cannot throw)
 - `csharp/src/Telemetry/NullObserver.cs` (singleton)
-- `csharp/src/Telemetry/SafeObserver.cs` (decorator)
 
 **Acceptance criteria:**
 - Interface contract documented: methods MUST NOT throw, thread-safe, `OnFinalized` is terminal and idempotent.
@@ -82,8 +81,6 @@ Create the interface and three implementations per design §5.1 and §12.
   - `TelemetryObserver_OnError_RecordsErrorAndFinalizes`
   - `TelemetryObserver_AllMethods_NeverThrow_WhenContextCorrupted`
   - `TelemetryObserver_OnChunksDownloaded_MergesIntoChunkDetails`
-  - `SafeObserver_PropagatesNormalCallsToInner`
-  - `SafeObserver_SwallowsExceptionsFromInner_LogsAtTrace`
 
 **Risks:** Low. New code, no existing callers yet.
 
