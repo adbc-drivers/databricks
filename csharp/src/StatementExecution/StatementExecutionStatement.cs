@@ -23,6 +23,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
 using AdbcDrivers.HiveServer2;
@@ -1296,21 +1297,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var result = await _connection.ExecuteMetadataCommandAsync(
                     sql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
-                if (result.IsNative)
-                    return NativeMetadataResultBuilder.Build(
-                        result, MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs);
-
-                var tableCatBuilder = new StringArray.Builder();
-                int count = 0;
-                foreach (string catalog in MetadataRowReader.Catalogs(result))
-                {
-                    tableCatBuilder.Append(catalog);
-                    count++;
-                }
-
-                activity?.SetTag("result_count", count);
-                var schema = MetadataSchemaFactory.CreateCatalogsSchema();
-                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[] { tableCatBuilder.Build() }));
+                var catalogs = MetadataRowReader.ResultBuilder(result).Catalogs(result);
+                activity?.SetTag("result_count", (int)catalogs.RowCount);
+                return catalogs;
             }, "GetCatalogs").ConfigureAwait(false);
         }
 
@@ -1337,26 +1326,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     sql, MetadataOperation.GetSchemas, cancellationToken, catalog,
                     CatalogFilter.Exact(_escapePatternWildcards ? catalog : null)).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
-                if (result.IsNative)
-                    return NativeMetadataResultBuilder.Build(
-                        result, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas);
-
-                var tableSchemaBuilder = new StringArray.Builder();
-                var tableCatalogBuilder = new StringArray.Builder();
-                int count = 0;
-                foreach (var row in MetadataRowReader.Schemas(result))
-                {
-                    tableSchemaBuilder.Append(row.Schema);
-                    tableCatalogBuilder.Append(row.Catalog);
-                    count++;
-                }
-
-                activity?.SetTag("result_count", count);
-                var schema = MetadataSchemaFactory.CreateSchemasSchema();
-                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
-                {
-                    tableSchemaBuilder.Build(), tableCatalogBuilder.Build()
-                }));
+                var schemas = MetadataRowReader.ResultBuilder(result).Schemas(result);
+                activity?.SetTag("result_count", (int)schemas.RowCount);
+                return schemas;
             }, "GetSchemas").ConfigureAwait(false);
         }
 
@@ -1403,47 +1375,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         StringComparer.Ordinal)
                     : null;
 
-                if (result.IsNative)
-                    return NativeMetadataResultBuilder.Build(
-                        result, MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables,
-                        tableTypes: tableTypeFilter);
-
-                var tableCatBuilder = new StringArray.Builder();
-                var tableSchemaBuilder = new StringArray.Builder();
-                var tableNameBuilder = new StringArray.Builder();
-                var tableTypeBuilder = new StringArray.Builder();
-                var remarksBuilder = new StringArray.Builder();
-                var typeCatBuilder = new StringArray.Builder();
-                var typeSchemaBuilder = new StringArray.Builder();
-                var typeNameBuilder = new StringArray.Builder();
-                var selfRefColBuilder = new StringArray.Builder();
-                var refGenBuilder = new StringArray.Builder();
-                int count = 0;
-                foreach (var row in MetadataRowReader.Tables(
-                    result, tableTypeFilter, normalizeEmptyTableType: false))
-                {
-                    tableCatBuilder.Append(row.Catalog);
-                    tableSchemaBuilder.Append(row.Schema);
-                    tableNameBuilder.Append(row.Table);
-                    tableTypeBuilder.Append(row.TableType);
-                    remarksBuilder.Append(row.Remarks);
-                    typeCatBuilder.AppendNull();
-                    typeSchemaBuilder.AppendNull();
-                    typeNameBuilder.AppendNull();
-                    selfRefColBuilder.AppendNull();
-                    refGenBuilder.AppendNull();
-                    count++;
-                }
-
-                activity?.SetTag("result_count", count);
-                var schema = MetadataSchemaFactory.CreateTablesSchema();
-                return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
-                {
-                    tableCatBuilder.Build(), tableSchemaBuilder.Build(), tableNameBuilder.Build(),
-                    tableTypeBuilder.Build(), remarksBuilder.Build(), typeCatBuilder.Build(),
-                    typeSchemaBuilder.Build(), typeNameBuilder.Build(), selfRefColBuilder.Build(),
-                    refGenBuilder.Build()
-                }));
+                var tables = MetadataRowReader.ResultBuilder(result).Tables(result, tableTypeFilter);
+                activity?.SetTag("result_count", (int)tables.RowCount);
+                return tables;
             }, "GetTables").ConfigureAwait(false);
         }
 
@@ -1463,8 +1397,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // results immediately (matching Thrift behavior in DatabricksStatement).
                 if (!_connection.EnableMultipleCatalogSupport
                     && MetadataUtilities.NormalizeSparkCatalog(_metadataCatalogName) != null)
-                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
-                        System.Array.Empty<(string, string, string, TableInfo)>());
+                    return await MetadataRowReader.ColumnsResultAsync(
+                        new ColumnMetadataResult(System.Array.Empty<MetadataBatches>()),
+                        cancellationToken).ConfigureAwait(false);
 
                 var columns = await StatementExecutionConnection.ReadMetadataOrEmptyAsync(
                     MetadataOperation.GetColumns,
@@ -1477,13 +1412,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     () => new ColumnMetadataResult(System.Array.Empty<MetadataBatches>())).ConfigureAwait(false);
 
                 IsNativeMetadataResult = columns.IsNative;
-                if (!columns.IsNative)
-                    activity?.SetTag("result_tables", columns.Rows
-                        .Where(column => column.Catalog != null && column.Schema != null && column.Table != null)
-                        .Select(column => $"{column.Catalog}.{column.Schema}.{column.Table}")
-                        .Distinct().Count());
-                return await FlatColumnsResultBuilder.BuildFlatColumnsResultAsync(
-                    columns, cancellationToken).ConfigureAwait(false);
+                activity?.SetTag("result_tables", columns.Rows
+                    .Where(column => column.Catalog != null && column.Schema != null && column.Table != null)
+                    .Select(column => $"{column.Catalog}.{column.Schema}.{column.Table}")
+                    .Distinct().Count());
+                return await MetadataRowReader.ColumnsResultAsync(columns, cancellationToken).ConfigureAwait(false);
             }, "GetColumns").ConfigureAwait(false);
         }
 
@@ -1723,15 +1656,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var result = await _connection.ReadMetadataAsync(
                     sql, MetadataOperation.GetPrimaryKeys, cancellationToken).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
-                if (result.IsNative)
-                    return NativeMetadataResultBuilder.Build(
-                        result, MetadataSchemaFactory.CreatePrimaryKeysSchema(), MetadataOperation.GetPrimaryKeys);
-
-                var keys = MetadataRowReader.PrimaryKeys(result, catalog!, schema!, table!)
-                    .Select(row => (row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.Name)).ToList();
-
-                activity?.SetTag("result_count", keys.Count);
-                return MetadataSchemaFactory.BuildPrimaryKeysResult(keys);
+                var keys = MetadataRowReader.ResultBuilder(result).PrimaryKeys(result, catalog!, schema!, table!);
+                activity?.SetTag("result_count", (int)keys.RowCount);
+                return keys;
             }, "GetPrimaryKeys").ConfigureAwait(false);
         }
 
@@ -1811,19 +1738,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 var result = await _connection.ReadMetadataAsync(
                     sql, MetadataOperation.GetCrossReference, cancellationToken).ConfigureAwait(false);
                 IsNativeMetadataResult = result.IsNative;
-                if (result.IsNative)
-                    return NativeMetadataResultBuilder.Build(
-                        result, MetadataSchemaFactory.CreateCrossReferenceSchema(), MetadataOperation.GetCrossReference,
-                        parentCatalog: pkCatalog, parentSchema: pkSchema, parentTable: pkTable);
-
-                var refs = MetadataRowReader.ForeignKeys(result, pkCatalog, pkSchema, pkTable,
-                    fkCatalog!, fkSchema!, fkTable!)
-                    .Select(row => (row.ParentCatalog, row.ParentSchema, row.ParentTable, row.ParentColumn,
-                        row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.UpdateRule,
-                        row.DeleteRule, row.Name, row.ParentName, row.Deferrability)).ToList();
-
-                activity?.SetTag("result_count", refs.Count);
-                return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
+                var refs = MetadataRowReader.ResultBuilder(result).ForeignKeys(
+                    result, pkCatalog, pkSchema, pkTable, fkCatalog!, fkSchema!, fkTable!);
+                activity?.SetTag("result_count", (int)refs.RowCount);
+                return refs;
             }, "GetCrossReference").ConfigureAwait(false);
         }
 

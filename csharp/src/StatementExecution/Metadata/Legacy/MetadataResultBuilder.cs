@@ -16,63 +16,96 @@
 
 using System.Collections.Generic;
 using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
-using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 
-namespace AdbcDrivers.Databricks
+namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Legacy
 {
-    /// <summary>
-    /// Builds a flat columns result set with all 24 standard metadata columns,
-    /// including computed fields like BUFFER_LENGTH, NUM_PREC_RADIX,
-    /// SQL_DATETIME_SUB, and CHAR_OCTET_LENGTH.
-    /// </summary>
-    internal static class FlatColumnsResultBuilder
+    // Builds Thrift-shaped results from decoded SHOW rows, computing the columns SHOW lacks.
+    internal sealed class MetadataResultBuilder : IMetadataResultBuilder
     {
-        internal static async Task<QueryResult> BuildFlatColumnsResultAsync(
-            ColumnMetadataResult columns, CancellationToken cancellationToken)
+        internal static readonly MetadataResultBuilder Instance = new();
+
+        private MetadataResultBuilder() { }
+
+        public QueryResult Catalogs(MetadataBatches result)
         {
-            var schema = MetadataSchemaFactory.CreateColumnMetadataSchema();
-            if (columns.IsNative)
-                return NativeMetadataResultBuilder.Build(columns.Results, schema, MetadataOperation.GetColumns);
-            if (!columns.Results.Any(result => result.IsNative && result.Batches.Count > 0))
-                return BuildFlatColumnsResult(columns.Rows);
-
-            // Normalize each response independently so SHOW fallback cannot discard native fields.
-            var batches = new List<RecordBatch>();
-            try
+            var tableCatBuilder = new StringArray.Builder();
+            int count = 0;
+            foreach (string catalog in MetadataDecoder.Instance.Catalogs(result))
             {
-                for (int index = 0; index < columns.Results.Count; index++)
-                {
-                    var result = columns.Results[index];
-                    var flat = result.IsNative
-                        ? NativeMetadataResultBuilder.Build(result, schema, MetadataOperation.GetColumns)
-                        : BuildFlatColumnsResult(columns.RowsByResult[index]);
-                    using var stream = flat.Stream!;
-                    var batch = await stream.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
-                    if (batch != null) batches.Add(batch);
-                }
+                tableCatBuilder.Append(catalog);
+                count++;
+            }
 
-                var arrays = Enumerable.Range(0, schema.FieldsList.Count)
-                    .Select(column => ArrowArrayFactory.BuildArray(ArrayDataConcatenator.Concatenate(
-                        batches.Select(batch => batch.Column(column).Data).ToList())!))
-                    .ToArray();
-                return new QueryResult(batches.Sum(batch => batch.Length), new HiveInfoArrowStream(schema, arrays));
-            }
-            finally
-            {
-                foreach (var batch in batches) batch.Dispose();
-            }
+            var schema = MetadataSchemaFactory.CreateCatalogsSchema();
+            return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[] { tableCatBuilder.Build() }));
         }
 
-        private static QueryResult BuildFlatColumnsResult(IEnumerable<ColumnRow> columns)
+        public QueryResult Schemas(MetadataBatches result)
+        {
+            var tableSchemaBuilder = new StringArray.Builder();
+            var tableCatalogBuilder = new StringArray.Builder();
+            int count = 0;
+            foreach (var row in MetadataDecoder.Instance.Schemas(result))
+            {
+                tableSchemaBuilder.Append(row.Schema);
+                tableCatalogBuilder.Append(row.Catalog);
+                count++;
+            }
+
+            var schema = MetadataSchemaFactory.CreateSchemasSchema();
+            return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
+            {
+                tableSchemaBuilder.Build(), tableCatalogBuilder.Build()
+            }));
+        }
+
+        public QueryResult Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes)
+        {
+            var tableCatBuilder = new StringArray.Builder();
+            var tableSchemaBuilder = new StringArray.Builder();
+            var tableNameBuilder = new StringArray.Builder();
+            var tableTypeBuilder = new StringArray.Builder();
+            var remarksBuilder = new StringArray.Builder();
+            var typeCatBuilder = new StringArray.Builder();
+            var typeSchemaBuilder = new StringArray.Builder();
+            var typeNameBuilder = new StringArray.Builder();
+            var selfRefColBuilder = new StringArray.Builder();
+            var refGenBuilder = new StringArray.Builder();
+            int count = 0;
+            foreach (var row in MetadataDecoder.ShowTables(result, normalizeEmptyTableType: false))
+            {
+                if (!MetadataRowReader.MatchesTableType(tableTypes, row.TableType)) continue;
+                tableCatBuilder.Append(row.Catalog);
+                tableSchemaBuilder.Append(row.Schema);
+                tableNameBuilder.Append(row.Table);
+                tableTypeBuilder.Append(row.TableType);
+                remarksBuilder.Append(row.Remarks);
+                typeCatBuilder.AppendNull();
+                typeSchemaBuilder.AppendNull();
+                typeNameBuilder.AppendNull();
+                selfRefColBuilder.AppendNull();
+                refGenBuilder.AppendNull();
+                count++;
+            }
+
+            var schema = MetadataSchemaFactory.CreateTablesSchema();
+            return new QueryResult(count, new HiveInfoArrowStream(schema, new IArrowArray[]
+            {
+                tableCatBuilder.Build(), tableSchemaBuilder.Build(), tableNameBuilder.Build(),
+                tableTypeBuilder.Build(), remarksBuilder.Build(), typeCatBuilder.Build(),
+                typeSchemaBuilder.Build(), typeNameBuilder.Build(), selfRefColBuilder.Build(),
+                refGenBuilder.Build()
+            }));
+        }
+
+        public QueryResult Columns(IReadOnlyList<MetadataBatches> results, IReadOnlyList<ColumnRow> rows)
         {
             var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
-            foreach (var column in columns)
+            foreach (var column in rows)
             {
                 if (column.Catalog == null || column.Schema == null || column.Table == null) continue;
                 string key = $"{column.Catalog}.{column.Schema}.{column.Table}";
@@ -82,10 +115,25 @@ namespace AdbcDrivers.Databricks
                     tableInfos[key].info, column.Name, column.TypeName, column.Ordinal, column.Nullable,
                     columnDefault: column.Default, isAutoIncrement: column.IsAutoIncrement);
             }
-            return BuildFlatColumnsResult(tableInfos.Values);
+            return BuildColumns(tableInfos.Values);
         }
 
-        internal static QueryResult BuildFlatColumnsResult(
+        public QueryResult PrimaryKeys(MetadataBatches result, string catalog, string schema, string table)
+            => MetadataSchemaFactory.BuildPrimaryKeysResult(
+                MetadataDecoder.Instance.PrimaryKeys(result, catalog, schema, table)
+                    .Select(row => (row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.Name)));
+
+        public QueryResult ForeignKeys(MetadataBatches result,
+            string? parentCatalog, string? parentSchema, string? parentTable,
+            string catalog, string schema, string table)
+            => MetadataSchemaFactory.BuildCrossReferenceResult(
+                MetadataDecoder.Instance.ForeignKeys(result, parentCatalog, parentSchema, parentTable,
+                    catalog, schema, table)
+                    .Select(row => (row.ParentCatalog, row.ParentSchema, row.ParentTable, row.ParentColumn,
+                        row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.UpdateRule,
+                        row.DeleteRule, row.Name, row.ParentName, row.Deferrability)));
+
+        private static QueryResult BuildColumns(
             IEnumerable<(string catalog, string schema, string table, TableInfo info)> tables)
         {
             var tableCatBuilder = new StringArray.Builder();

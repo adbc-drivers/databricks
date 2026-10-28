@@ -92,7 +92,7 @@ This avoids nested `.Result` blocking calls on every Thrift RPC while maintainin
 | `CreateCatalogsSchema()` | DatabricksStatement, StatementExecutionStatement |
 | `CreateSchemasSchema()` | DatabricksStatement, StatementExecutionStatement |
 | `CreateTablesSchema()` | DatabricksStatement, StatementExecutionStatement |
-| `CreateColumnMetadataSchema()` | DatabricksStatement, FlatColumnsResultBuilder |
+| `CreateColumnMetadataSchema()` | DatabricksStatement, SEA `Metadata/{Native,Legacy}` result builders |
 | `CreatePrimaryKeysSchema()` | MetadataSchemaFactory builders |
 | `CreateCrossReferenceSchema()` | MetadataSchemaFactory builders |
 | `BuildGetInfoResult()` | HiveServer2Connection, StatementExecutionConnection |
@@ -107,8 +107,9 @@ Server result → SetPrecisionScaleAndTypeName (per-connection override)
 
 For flat GetColumns, EnhanceGetColumnsResult (on HiveServer2Statement) adds
 a BASE_TYPE_NAME column and optionally overrides precision/scale by calling
-SetPrecisionScaleAndTypeName per row. This is Thrift-only — SEA builds the
-complete result from scratch via FlatColumnsResultBuilder.
+SetPrecisionScaleAndTypeName per row. This is Thrift-only — SEA builds SHOW
+results from scratch via Legacy.MetadataResultBuilder and passes native results
+through Native.MetadataResultBuilder.
 ```
 
 ### SEA Path
