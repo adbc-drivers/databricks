@@ -147,15 +147,12 @@ SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY
 `GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
 GEOGRAPHY fields also declare spherical edges.
 
-For results containing GEOMETRY or GEOGRAPHY, including nested values, `ExecuteQuery`
-and `ExecuteQueryAsync` read and buffer the first batch before returning. This lets the
-driver expose the physical Arrow type details, such as timestamp units and timezones,
-that SEA's manifest does not provide. With CloudFetch, execution can wait for the first
-file download, and fetch or schema-reconciliation errors can surface from the execute
-call. The buffered batch is returned on the first read; geospatial value conversion
-still happens as batches are read. This additional prefetch applies whether
-`adbc.databricks.enable_geospatial_support` is `true` or `false`. Results without
-geospatial columns do not incur this additional prefetch.
+Statement Execution API (SEA) results read and buffer the first batch only when
+`adbc.databricks.enable_complex_datatype_support=true` and an ARRAY, MAP, or STRUCT
+contains a nested GEOMETRY or GEOGRAPHY value. The batch supplies physical container
+and sibling field details that SEA's manifest omits, and it is returned on the first
+read. Top-level geospatial results, complex support disabled, Thrift results, and
+results without nested geospatial values remain lazy.
 
 `ANY` has a reader compatibility limitation: some readers reject EWKB, and the
 [GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
