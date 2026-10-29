@@ -136,6 +136,18 @@ Examples:
 
 {{ types|safe }}
 
+## Errors
+
+When the server reports a SQLSTATE, the driver copies it to the ADBC error and keeps the server's message. These SQLSTATEs also set the ADBC status:
+
+| SQLSTATE | ADBC status |
+|----------|-------------|
+| `42P01` (`TABLE_OR_VIEW_NOT_FOUND`), `42704` (`SCHEMA_NOT_FOUND`, `NO_SUCH_CATALOG_EXCEPTION`), `42883` (`UNRESOLVED_ROUTINE`) | `NOT_FOUND` |
+| `42P07` (`TABLE_OR_VIEW_ALREADY_EXISTS`) | `ALREADY_EXISTS` |
+| `42703` (`UNRESOLVED_COLUMN`) | `INVALID_ARGUMENT` (`ALREADY_EXISTS` during bulk ingest) |
+
+Other SQLSTATEs keep the default status of the failing operation.
+
 ## Compatibility
 
 {{ compatibility_info|safe }}
