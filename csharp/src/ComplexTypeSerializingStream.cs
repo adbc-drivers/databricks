@@ -82,44 +82,30 @@ namespace AdbcDrivers.Databricks
 
         private readonly IArrowArrayStream _inner;
         private readonly Schema _schema;
-        private readonly IArrowType?[] _logicalComplexTypes;
-        private readonly bool _hasComplexColumns;
+        private readonly HashSet<int> _complexColumnIndices;
 
         public ComplexTypeSerializingStream(IArrowArrayStream inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _logicalComplexTypes = DetectComplexColumns(inner.Schema);
-            _hasComplexColumns = System.Array.Exists(
-                _logicalComplexTypes,
-                logicalType => logicalType != null);
+            _complexColumnIndices = DetectComplexColumns(inner.Schema);
             // Flatten complex columns to StringType so the exposed schema matches the
             // string-serialized batches this stream produces. For SEA the inner schema
             // already has StringType for complex columns (manifest-driven), so this is a
             // no-op. For Thrift with ComplexTypesAsArrow=true, the inner IPC schema has
             // native ListType/MapType/StructType — we must report StringType to keep
             // schema and batch types consistent.
-            _schema = FlattenComplexColumns(inner.Schema, _logicalComplexTypes);
+            _schema = FlattenComplexColumns(inner.Schema, _complexColumnIndices);
         }
 
-        private static Schema FlattenComplexColumns(
-            Schema schema,
-            IArrowType?[] logicalComplexTypes)
+        private static Schema FlattenComplexColumns(Schema schema, HashSet<int> complexIndices)
         {
-            if (!System.Array.Exists(logicalComplexTypes, type => type != null))
-                return schema;
-
-            var fields = new List<Field>(schema.FieldsList.Count);
+            if (complexIndices.Count == 0) return schema;
+            List<Field> fields = new List<Field>(schema.FieldsList.Count);
             for (int i = 0; i < schema.FieldsList.Count; i++)
             {
-                Field field = schema.FieldsList[i];
-                IArrowType arrowType = logicalComplexTypes[i] == null
-                    ? field.DataType
-                    : StringType.Default;
-                fields.Add(new Field(
-                    field.Name,
-                    arrowType,
-                    field.IsNullable,
-                    field.Metadata));
+                Field f = schema.FieldsList[i];
+                IArrowType arrowType = complexIndices.Contains(i) ? StringType.Default : f.DataType;
+                fields.Add(new Field(f.Name, arrowType, f.IsNullable, f.Metadata));
             }
             return new Schema(fields, schema.Metadata);
         }
@@ -132,7 +118,7 @@ namespace AdbcDrivers.Databricks
             if (batch == null)
                 return null;
 
-            if (!_hasComplexColumns)
+            if (_complexColumnIndices.Count == 0)
                 return batch;
 
             return ConvertComplexColumns(batch);
@@ -142,34 +128,23 @@ namespace AdbcDrivers.Databricks
 
         private RecordBatch ConvertComplexColumns(RecordBatch batch)
         {
-            var arrays = new IArrowArray[batch.ColumnCount];
+            IArrowArray[] arrays = new IArrowArray[batch.ColumnCount];
             for (int i = 0; i < batch.ColumnCount; i++)
             {
-                IArrowType? logicalType = _logicalComplexTypes[i];
-                arrays[i] = logicalType == null
-                    ? batch.Column(i)
-                    : SerializeToStringArray(
-                        batch.Column(i),
-                        logicalType,
-                        _schema.GetFieldByIndex(i).Name);
+                arrays[i] = _complexColumnIndices.Contains(i) ? SerializeToStringArray(batch.Column(i)) : batch.Column(i);
             }
             return new RecordBatch(_schema, arrays, batch.Length);
         }
 
-        private static StringArray SerializeToStringArray(
-            IArrowArray array,
-            IArrowType logicalType,
-            string path)
+        private static StringArray SerializeToStringArray(IArrowArray array)
         {
-            var builder = new StringArray.Builder();
+            StringArray.Builder builder = new StringArray.Builder();
             for (int i = 0; i < array.Length; i++)
             {
                 if (array.IsNull(i))
                     builder.AppendNull();
                 else
-                    builder.Append(JsonSerializer.Serialize(
-                        ToObject(array, i, logicalType, path),
-                        JsonOptions));
+                    builder.Append(JsonSerializer.Serialize(ToObject(array, i), JsonOptions));
             }
             return builder.Build();
         }
@@ -179,64 +154,38 @@ namespace AdbcDrivers.Databricks
         /// on each field. This works for all result paths because they all expose the manifest
         /// schema, which carries that metadata and already types complex columns as StringType.
         /// </summary>
-        private static IArrowType?[] DetectComplexColumns(Schema schema)
+        private static HashSet<int> DetectComplexColumns(Schema schema)
         {
-            var logicalTypes = new IArrowType?[schema.FieldsList.Count];
+            HashSet<int> indices = new HashSet<int>();
             for (int i = 0; i < schema.FieldsList.Count; i++)
             {
                 Field field = schema.FieldsList[i];
-                if (field.Metadata != null
-                    && field.Metadata.TryGetValue(
-                        ColumnMetadataHelper.ArrowMetadataKey,
-                        out string? sqlName)
-                    && !string.IsNullOrWhiteSpace(sqlName)
-                    && (sqlName.StartsWith("ARRAY", StringComparison.OrdinalIgnoreCase)
-                        || sqlName.StartsWith("MAP", StringComparison.OrdinalIgnoreCase)
-                        || sqlName.StartsWith("STRUCT", StringComparison.OrdinalIgnoreCase)))
+                if (field.Metadata != null &&
+                    field.Metadata.TryGetValue(ColumnMetadataHelper.ArrowMetadataKey, out string? sqlName) &&
+                    sqlName != null &&
+                    (sqlName.StartsWith("ARRAY", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("MAP", StringComparison.OrdinalIgnoreCase) ||
+                     sqlName.StartsWith("STRUCT", StringComparison.OrdinalIgnoreCase)))
                 {
-                    logicalTypes[i] = ArrowTypeParser.MapToArrowType(
-                        sqlName,
-                        enableComplexDatatypeSupport: true);
+                    indices.Add(i);
                 }
             }
-            return logicalTypes;
+            return indices;
         }
 
         // --- JSON serialization helpers ---
 
-        private static object? ToObject(
-            IArrowArray array,
-            int index,
-            IArrowType? logicalType,
-            string path)
+        private static object? ToObject(IArrowArray array, int index)
         {
             if (array.IsNull(index))
                 return null;
-
-            if (logicalType != null
-                && GeospatialArrowType.ResolveTag(
-                    logicalType,
-                    out GeospatialArrowType.Tag tag))
-            {
-                return GeospatialTransformingStream.RenderEwkt(
-                    array,
-                    tag,
-                    path,
-                    index);
-            }
 
             // Handle complex types with recursive traversal, and types needing specific
             // string formatting. All other primitives delegate to ValueAt().
             return array switch
             {
-                ListArray list => ToListOrMap(list, index, logicalType, path),
-                LargeListArray => throw UnsupportedArrayEncoding(path, array.Data.DataType),
-                FixedSizeListArray => throw UnsupportedArrayEncoding(path, array.Data.DataType),
-                StructArray structArray => ToDict(
-                    structArray,
-                    index,
-                    logicalType as StructType,
-                    path),
+                ListArray la => ToListOrMap(la, index),
+                StructArray sa => ToDict(sa, index),
                 // DECIMAL: emit as a bare JSON number (not a quoted string) so the output matches
                 // the JDBC driver and is valid JSON. The decimal's string form is written raw so
                 // values beyond C# decimal's ~28-digit range (DECIMAL(38, …)) keep full precision.
@@ -246,12 +195,9 @@ namespace AdbcDrivers.Databricks
                 // INTERVAL: native YearMonth/Duration arrays serialize to {} via System.Text.Json
                 // (no public properties). Render the same "Y-M" / "D HH:MM:SS.nnnnnnnnn" strings
                 // IntervalSerializingStream produces for top-level interval columns.
-                YearMonthIntervalArray ym => IntervalSerializingStream.FormatYearMonth(
-                    ym.GetValue(index)!.Value.Months),
-                DurationArray dur => IntervalSerializingStream.FormatDuration(
-                    dur.GetValue(index)!.Value,
-                    ((DurationType)dur.Data.DataType).Unit),
-                _ => array.ValueAt(index, StructResultType.Object),
+                YearMonthIntervalArray ym => IntervalSerializingStream.FormatYearMonth(ym.GetValue(index)!.Value.Months),
+                DurationArray dur => IntervalSerializingStream.FormatDuration(dur.GetValue(index)!.Value, ((DurationType)dur.Data.DataType).Unit),
+                _ => array.ValueAt(index, StructResultType.Object)      // int, long, double, float, bool, string, timestamp, etc.
             };
         }
 
@@ -262,107 +208,52 @@ namespace AdbcDrivers.Databricks
         private static JsonNode? RawNumber(string? numericText) =>
             numericText == null ? null : JsonNode.Parse(numericText);
 
-        private static object ToListOrMap(
-            ListArray listArray,
-            int index,
-            IArrowType? logicalType,
-            string path)
+        private static object ToListOrMap(ListArray listArray, int index)
         {
             IArrowArray values = listArray.Values;
             int start = (int)listArray.ValueOffsets[index];
             int end = (int)listArray.ValueOffsets[index + 1];
 
-            // Arrow MAP is stored as List<Struct<key, value>>.
+            // Arrow MAP is stored as List<Struct<key, value>>
             if (values is StructArray structValues && IsMapStruct(structValues))
-            {
-                return ToMapDict(
-                    structValues,
-                    start,
-                    end,
-                    logicalType as MapType,
-                    path);
-            }
+                return ToMapDict(structValues, start, end);
 
-            IArrowType? logicalValue = (logicalType as ListType)?.ValueDataType;
-            var list = new List<object?>();
+            List<object?> list = new List<object?>();
             for (int i = start; i < end; i++)
-                list.Add(ToObject(values, i, logicalValue, $"{path}[]"));
+                list.Add(ToObject(values, i));
             return list;
         }
 
         private static bool IsMapStruct(StructArray structArray)
         {
             StructType type = (StructType)structArray.Data.DataType;
-            return type.Fields.Count == 2
-                && type.Fields[0].Name == "key"
-                && type.Fields[1].Name == "value";
+            return type.Fields.Count == 2 &&
+                   type.Fields[0].Name == "key" &&
+                   type.Fields[1].Name == "value";
         }
 
-        private static SortedDictionary<string, object?> ToMapDict(
-            StructArray entries,
-            int start,
-            int end,
-            MapType? logicalType,
-            string path)
+        private static SortedDictionary<string, object?> ToMapDict(StructArray entries, int start, int end)
         {
             IArrowArray keyArray = entries.Fields[0];
             IArrowArray valueArray = entries.Fields[1];
-            IArrowType? logicalKey = logicalType?.KeyField.DataType;
-            IArrowType? logicalValue = logicalType?.ValueField.DataType;
-            // Use SortedDictionary for deterministic key ordering in the JSON output.
-            var result = new SortedDictionary<string, object?>();
+            // Use SortedDictionary for deterministic key ordering in the JSON output
+            SortedDictionary<string, object?> result = new SortedDictionary<string, object?>();
             for (int i = start; i < end; i++)
             {
-                string key = ToObject(
-                    keyArray,
-                    i,
-                    logicalKey,
-                    $"{path}.key")?.ToString() ?? "null";
-                result[key] = ToObject(
-                    valueArray,
-                    i,
-                    logicalValue,
-                    $"{path}.value");
+                // Convert any key type to its string representation; treat null keys as "null"
+                string key = ToObject(keyArray, i)?.ToString() ?? "null";
+                result[key] = ToObject(valueArray, i);
             }
             return result;
         }
 
-        private static Dictionary<string, object?> ToDict(
-            StructArray structArray,
-            int index,
-            StructType? logicalType,
-            string path)
+        private static Dictionary<string, object?> ToDict(StructArray structArray, int index)
         {
-            StructType physicalType = (StructType)structArray.Data.DataType;
-            if (logicalType != null
-                && logicalType.Fields.Count != physicalType.Fields.Count)
-            {
-                throw new DatabricksException(
-                    $"Complex value '{path}' has {physicalType.Fields.Count} Arrow fields, "
-                    + $"but its logical type has {logicalType.Fields.Count}",
-                    Apache.Arrow.Adbc.AdbcStatusCode.InvalidData);
-            }
-
-            var result = new Dictionary<string, object?>();
-            for (int i = 0; i < physicalType.Fields.Count; i++)
-            {
-                string name = physicalType.Fields[i].Name;
-                IArrowType? logicalChild = logicalType?.Fields[i].DataType;
-                result[name] = ToObject(
-                    structArray.Fields[i],
-                    index,
-                    logicalChild,
-                    $"{path}.{name}");
-            }
-            return result;
+            StructType type = (StructType)structArray.Data.DataType;
+            Dictionary<string, object?> dict = new Dictionary<string, object?>();
+            for (int i = 0; i < type.Fields.Count; i++)
+                dict[type.Fields[i].Name] = ToObject(structArray.Fields[i], index);
+            return dict;
         }
-
-        private static DatabricksException UnsupportedArrayEncoding(
-            string path,
-            IArrowType physicalType) =>
-            new DatabricksException(
-                $"Complex value '{path}' uses unsupported Arrow type {physicalType.Name}; "
-                + "Databricks ARRAY results must use List",
-                Apache.Arrow.Adbc.AdbcStatusCode.InvalidData);
     }
 }
