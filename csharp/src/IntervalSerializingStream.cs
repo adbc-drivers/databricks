@@ -132,7 +132,7 @@ namespace AdbcDrivers.Databricks
             return new RecordBatch(_schema, arrays, batch.Length);
         }
 
-        internal static StringArray SerializeIntervalToStringArray(IArrowArray array)
+        private static StringArray SerializeIntervalToStringArray(IArrowArray array)
         {
             StringArray.Builder builder = new StringArray.Builder();
             if (array is YearMonthIntervalArray ymArray)

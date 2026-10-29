@@ -873,8 +873,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             });
 
             Assert.Equal(AdbcStatusCode.InvalidData, error.Status);
-            Assert.Contains("unsupported Arrow type", error.Message);
-            Assert.Contains("Databricks ARRAY", error.Message);
+            Assert.Contains("does not match logical type", error.Message);
         }
 
         [Fact]
@@ -930,6 +929,39 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                 Assert.True(Assert.IsType<BinaryArray>(output.Fields[0]).IsNull(0));
             else
                 Assert.True(Assert.IsType<StringArray>(output.Fields[0]).IsNull(0));
+        }
+
+        [Theory]
+        [InlineData(0, 2)]
+        [InlineData(1, 1)]
+        public async Task NullOuterStruct_InTrimmedBatch_IsMasked(int offset, int length)
+        {
+            // CloudFetchReader and DatabricksReader trim with RecordBatch.Slice, which
+            // leaves struct children at their full length.
+            StructArray geo = NativeGeoArray(
+                new[] { 4326, 3857, 0 },
+                new[] { s_pointOneTwo, s_pointOneTwo, s_pointOneTwo },
+                new[] { true, true, true });
+            StructArray physical = OuterStruct("geom", geo, outerValid: false);
+            const string sqlType = "STRUCT<geom:GEOMETRY(ANY)>";
+            using RecordBatch fullBatch = PhysicalBatch(physical);
+            using RecordBatch slicedBatch = fullBatch.Slice(offset, length);
+            Schema schema = SchemaFor(
+                sqlType,
+                ArrowTypeParser.MapToArrowType(sqlType, true));
+            using IArrowArrayStream source = new StubArrowArrayStream(
+                schema,
+                new[] { slicedBatch });
+            using var stream = new GeospatialTransformingStream(
+                source,
+                enableGeospatialSupport: true,
+                enableComplexDatatypeSupport: true);
+
+            using RecordBatch? batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(length, batch.Length);
+            for (int row = 0; row < length; row++)
+                Assert.True(batch.Column(0).IsNull(row));
         }
 
         [Fact]
