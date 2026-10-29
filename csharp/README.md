@@ -236,6 +236,27 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
 
+Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
+`adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
+returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
+
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+Statement Execution API (SEA) results read and buffer the first batch only when
+`adbc.databricks.enable_complex_datatype_support=true` and an ARRAY, MAP, or STRUCT
+contains a nested GEOMETRY or GEOGRAPHY value. The batch supplies physical container
+and sibling field details that SEA's manifest omits, and it is returned on the first
+read. Top-level geospatial results, complex support disabled, Thrift results, and
+results without nested geospatial values remain lazy.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
+
 **Performance Notes:**
 - Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
 - `polltime_ms` defaults differ by protocol (see Core Spark Properties table); SEA's 1000 ms reflects heavier HTTP/JSON polling cost.

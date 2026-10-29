@@ -341,7 +341,8 @@ namespace AdbcDrivers.Databricks
 
             IArrowArrayStream stream = new GeospatialTransformingStream(
                 result.Stream,
-                enableGeospatialSupport);
+                enableGeospatialSupport,
+                enableComplexDatatypeSupport);
             if (!enableComplexDatatypeSupport)
             {
                 stream = new ComplexTypeSerializingStream(stream);
