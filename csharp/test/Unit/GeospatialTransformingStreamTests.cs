@@ -1761,6 +1761,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal(1, Assert.IsType<Int32Array>(batch!.Column(0)).GetValue(0));
         }
 
+        [Fact]
+        public async Task GeospatialSubstringInFieldNameDoesNotPrefetch()
+        {
+            const string sqlType = "STRUCT<geometry_label:STRING>";
+            IArrowType reportedType = ArrowTypeParser.MapToArrowType(sqlType, true);
+            var source = new StubArrowArrayStream(
+                SchemaFor(sqlType, reportedType),
+                System.Array.Empty<RecordBatch>());
+
+            using GeospatialTransformingStream stream =
+                await GeospatialTransformingStream.CreateForStatementExecutionAsync(
+                    source,
+                    enableGeospatialSupport: true,
+                    enableComplexDatatypeSupport: true);
+
+            Assert.Equal(0, source.ReadCount);
+            Assert.Same(reportedType, stream.Schema.GetFieldByIndex(0).DataType);
+        }
+
         private static GeospatialTransformingStream CreateStream(
             string sqlType,
             IArrowType outputType,

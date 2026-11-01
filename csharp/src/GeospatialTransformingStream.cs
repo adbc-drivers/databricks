@@ -212,7 +212,8 @@ namespace AdbcDrivers.Databricks
         private static bool IsComplex(string? typeText) =>
             typeText != null
             && MayContainGeospatialType(typeText)
-            && ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant() is "ARRAY" or "MAP" or "STRUCT";
+            && ColumnMetadataHelper.GetBaseTypeName(typeText).ToUpperInvariant() is "ARRAY" or "MAP" or "STRUCT"
+            && ContainsGeospatialType(ParseLogicalType(typeText));
 
         private static IArrowType ParseLogicalType(string typeText) =>
             ArrowTypeParser.MapToArrowType(typeText, enableComplexDatatypeSupport: true);
