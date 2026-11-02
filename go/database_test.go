@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
+	dbsql "github.com/databricks/databricks-sql-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,4 +129,50 @@ func TestGetOrCreatePoolSerialisesStartup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotSame(t, pools[0], next)
 	require.EqualValues(t, 2, started.Load())
+}
+
+func newSessionParamDatabase() *databaseImpl {
+	return &databaseImpl{serverHostname: "x.cloud.databricks.com", httpPath: "/sql/1.0/warehouses/w", accessToken: "tok"}
+}
+
+func TestSessionParamOptions(t *testing.T) {
+	ctx := context.Background()
+	db := newSessionParamDatabase()
+
+	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"ansi_mode", "false"))
+	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"timezone", "UTC"))
+	got, err := db.GetOption(ctx, OptionSessionParamPrefix+"ansi_mode")
+	require.NoError(t, err)
+	require.Equal(t, "false", got)
+
+	_, err = db.GetOption(ctx, OptionSessionParamPrefix+"missing")
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusNotFound, adbcErr.Code)
+
+	// An empty name is rejected and leaves the stored parameters alone.
+	err = db.SetOption(ctx, OptionSessionParamPrefix, "x")
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	require.Equal(t, map[string]string{"ansi_mode": "false", "timezone": "UTC"}, db.sessionParams)
+}
+
+func TestSessionParamsReachConnectorOptions(t *testing.T) {
+	db := newSessionParamDatabase()
+	base, err := db.resolveConnectionOptions()
+	require.NoError(t, err)
+
+	db.sessionParams = map[string]string{"ansi_mode": "false"}
+	opts, err := db.resolveConnectionOptions()
+	require.NoError(t, err)
+	require.Equal(t, len(base)+1, len(opts), "session parameters add one connector option")
+
+	// Query tags are added to the connector's session parameters; they must not
+	// leak into the database's own map.
+	db.queryTags = map[string]string{"team": "data"}
+	opts, err = db.resolveConnectionOptions()
+	require.NoError(t, err)
+	_, err = dbsql.NewConnector(opts...)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"ansi_mode": "false"}, db.sessionParams)
 }

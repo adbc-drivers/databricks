@@ -95,6 +95,9 @@ type databaseImpl struct {
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
 
+	// Session parameters sent when the session opens (databricks.session_param.<name>).
+	sessionParams map[string]string
+
 	// Azure service principal options
 	azureClientID     string
 	azureClientSecret string
@@ -200,6 +203,13 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 			MaxConnsPerHost:       100,
 		}
 		opts = append(opts, dbsql.WithTransport(transport))
+	}
+
+	// databricks-sql-go keeps the map it is given and WithQueryTags adds QUERY_TAGS to
+	// it, so pass a copy. Applied before the query tags, so that the query tag options
+	// win over a raw "databricks.session_param.QUERY_TAGS".
+	if len(d.sessionParams) > 0 {
+		opts = append(opts, dbsql.WithSessionParams(maps.Clone(d.sessionParams)))
 	}
 
 	if len(d.queryTags) > 0 {
@@ -414,6 +424,12 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		}
 		return "", nil
 	default:
+		if name, ok := sessionParamName(key); ok {
+			if v, ok := d.sessionParams[name]; ok {
+				return v, nil
+			}
+			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "session parameter not set: %s", name)
+		}
 		if name, ok := queryTagName(key); ok {
 			if v, ok := d.queryTags[name]; ok {
 				return v, nil
@@ -632,6 +648,9 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		}
 		d.oauthU2MTimeout = timeout
 	default:
+		if name, ok := sessionParamName(key); ok {
+			return d.setSessionParam(name, value)
+		}
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)
 		}

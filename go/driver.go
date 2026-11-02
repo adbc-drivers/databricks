@@ -82,6 +82,10 @@ const (
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 	OptionOAuthScopes       = "databricks.oauth.scopes"
 
+	// Session parameters sent to the SQL session when it opens, one per option:
+	// append the parameter name, e.g. "databricks.session_param.ansi_mode".
+	OptionSessionParamPrefix = "databricks.session_param."
+
 	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
 	// Settable on the database (defaults) and on a statement (overrides the default per tag).
 	OptionQueryTagPrefix = "databricks.query_tag."
