@@ -67,6 +67,8 @@ const (
 	OptionAuthType              = "databricks.auth_type"
 	OptionValueAuthTypePAT      = "pat"
 	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
+	OptionValueAuthTypeEnvOIDC  = "env-oidc"
+	OptionValueAuthTypeFileOIDC = "file-oidc"
 
 	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
@@ -76,6 +78,10 @@ const (
 	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
 	// Settable on the database (defaults) and on a statement (overrides the default per tag).
 	OptionQueryTagPrefix = "databricks.query_tag."
+
+	// OIDC token federation options (auth types env-oidc and file-oidc)
+	OptionOIDCClientID      = "databricks.oidc.client_id"
+	OptionOIDCTokenFilepath = "databricks.oidc.token_filepath"
 
 	// Default values
 	DefaultPort    = 443
