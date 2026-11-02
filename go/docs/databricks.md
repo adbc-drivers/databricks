@@ -223,6 +223,12 @@ Query tags label the statements the driver runs. Databricks records them in `sys
 
   The name must not be empty or blank and must not contain `,` or `:` (the wire format is comma-separated `name:value` pairs and escapes only backslashes in names). The value must not be empty. A value may be at most 128 characters after escaping (the driver escapes backslash, comma and colon), and at most 20 tags may be sent with a statement. These are the limits dbt-databricks enforces in [`QueryTagsUtils`](https://github.com/databricks/dbt-databricks/blob/main/dbt/adapters/databricks/utils.py). An invalid option is rejected with `INVALID_ARGUMENT` and the tags already set are left unchanged.
 
+### Result Metadata
+
+Each result stream returned by `ExecuteQuery` has the ID that Databricks assigned to the query in its schema metadata, under the key `DATABRICKS_QUERY_ID` (the Go constant `MetadataKeyDatabricksQueryID`). Use it to find the query in `system.query.history` or in the Databricks query profile.
+
+In Python, for example, `reader.schema.metadata[b"DATABRICKS_QUERY_ID"]`. If Databricks does not report an ID for the statement, the key is absent. The ID is not on the schemas of individual record batches.
+
 ## Feature & Type Support
 
 {{ features|safe }}

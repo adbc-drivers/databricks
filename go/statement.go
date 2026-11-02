@@ -27,11 +27,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"sync/atomic"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	dbsqlctx "github.com/databricks/databricks-sql-go/driverctx"
 )
 
 type statementImpl struct {
@@ -154,6 +156,9 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 	// Execute query using raw driver interface to get Arrow batches
 	// This works for both prepared and unprepared statements since
 	// databricks-sql-go doesn't do server-side preparation
+	var qid atomic.Value
+	ctx = dbsqlctx.NewContextWithQueryIdCallback(ctx, func(id string) { qid.Store(id) })
+
 	var driverRows driver.Rows
 	var err error
 	err = conn.Raw(func(driverConn interface{}) error {
@@ -179,8 +184,13 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 		}
 	}()
 
+	// The query ID is reported when the statement is submitted, so it is set
+	// by the time QueryContext returns. A server that sends none leaves it empty
+	// and the schema carries no query ID.
+	queryID, _ := qid.Load().(string)
+
 	// Use the IPC stream interface (zero-copy)
-	reader, err := newIPCReaderAdapter(ctx, driverRows)
+	reader, err := newIPCReaderAdapter(ctx, driverRows, queryID)
 	if err != nil {
 		return nil, errorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
 	}
