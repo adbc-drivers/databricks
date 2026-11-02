@@ -49,6 +49,7 @@ const (
 	OptionHTTPPath       = "databricks.http_path"
 	OptionAccessToken    = "databricks.access_token"
 	OptionPort           = "databricks.port"
+	OptionUserAgent      = "databricks.user_agent"
 	OptionCatalog        = "databricks.catalog"
 	OptionSchema         = "databricks.schema"
 

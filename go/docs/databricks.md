@@ -192,6 +192,13 @@ The auth types, the options each one uses and the options it requires are also l
 
   Path of the file holding the ID token. Used by `file-oidc` only.
 
+### Client Identification Options
+
+`databricks.user_agent`
+: **Default:** (empty)
+
+  A client name, such as `dbt`, that the driver adds to the `User-Agent` of its requests so that Databricks can attribute the traffic (for example in `system.access.audit`). The `User-Agent` is then `<driver name>/<driver version> (<entry>)`, built by [`BuildUserAgent`](https://github.com/databricks/databricks-sql-go/blob/v1.17.0/internal/client/useragent.go) in databricks-sql-go; with no entry it is `<driver name>/<driver version>`. A `uri` cannot be combined with individual options, so with a `uri` use the `userAgentEntry=<name>` parameter in its query instead.
+
 ### Session Parameter Options
 
 Session parameters are Databricks SQL configuration settings (such as `ansi_mode` or `timezone`) that the driver sends when it opens the session. Set one per option, by appending the parameter name to the option prefix.

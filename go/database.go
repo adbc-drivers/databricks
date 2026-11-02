@@ -71,6 +71,7 @@ type databaseImpl struct {
 	httpPath       string
 	accessToken    string
 	authType       string
+	userAgent      string
 	port           int
 	catalog        string
 	schema         string
@@ -141,6 +142,10 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		dbsql.WithArrowNativeDecimal(true),
 		login.connOption(loginName, d),
 	}
+
+	// An empty entry adds nothing to the User-Agent, so it is passed as is
+	// (the fork does the same).
+	opts = append(opts, dbsql.WithUserAgentEntry(d.userAgent))
 
 	// Validate and set custom port
 	// Defaults to 443
@@ -364,6 +369,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.accessToken, nil
 	case OptionAuthType:
 		return d.authType, nil
+	case OptionUserAgent:
+		return d.userAgent, nil
 	case OptionPort:
 		return strconv.Itoa(d.port), nil
 	case OptionCatalog:
@@ -499,6 +506,8 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			}
 		}
 		d.authType = value
+	case OptionUserAgent:
+		d.userAgent = value
 	case OptionPort:
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
