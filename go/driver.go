@@ -73,6 +73,10 @@ const (
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 
+	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
+	// Settable on the database (defaults) and on a statement (overrides the default per tag).
+	OptionQueryTagPrefix = "databricks.query_tag."
+
 	// Default values
 	DefaultPort    = 443
 	DefaultSSLMode = "require"

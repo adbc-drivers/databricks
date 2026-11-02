@@ -128,6 +128,22 @@ Examples:
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
+### Query Tag Options
+
+Query tags label the statements the driver runs. Databricks records them in `system.query.history` (the `query_tags` column). Tags are set one per option, by appending the tag name to the option prefix.
+
+`databricks.query_tag.<name>`
+: **Values:** a non-empty string. **Default:** (not set)
+
+  Sets the query tag `<name>`, for example `databricks.query_tag.team` set to `data-platform`.
+
+  - On the database, the tag is a default. The driver sends the defaults as the session-level `QUERY_TAGS` setting when it connects, and again with each statement.
+  - On a statement, the tag adds to the defaults or, when a default has the same name, overrides it in the tags the driver sends with that statement. It applies to that statement only. A tag cannot be removed on a statement. How Databricks combines the session-level and statement-level tags on the server is not asserted here.
+  - The tags are sent with statements run through `ExecuteQuery` and `ExecuteUpdate` (including bulk ingest). Calls the driver makes for metadata (such as `GetObjects`) carry only the session-level tags.
+  - Reading the option on a statement returns the statement's value, or the connection default when the statement has none. Reading a tag that is not set returns `NOT_FOUND`.
+
+  The name must not be empty or blank and must not contain `,` or `:` (the wire format is comma-separated `name:value` pairs and escapes only backslashes in names). The value must not be empty. A value may be at most 128 characters after escaping (the driver escapes backslash, comma and colon), and at most 20 tags may be sent with a statement. These are the limits dbt-databricks enforces in [`QueryTagsUtils`](https://github.com/databricks/dbt-databricks/blob/main/dbt/adapters/databricks/utils.py). An invalid option is rejected with `INVALID_ARGUMENT` and the tags already set are left unchanged.
+
 ## Feature & Type Support
 
 {{ features|safe }}
