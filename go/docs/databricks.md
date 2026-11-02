@@ -53,6 +53,8 @@ conn = dbapi.connect(
 
 Note: The example above is for Python using the [adbc-driver-manager](https://pypi.org/project/adbc-driver-manager) package but the process will be similar for other driver managers.
 
+Several connections can be opened from one database at the same time (for example from several threads). The first one starts the connection pool, including any login; the others wait for it and share the pool. This keeps two browser logins from competing for the same local callback port. Changing a database option makes the next connection start a new pool.
+
 ### Connection String Format
 
 Databricks's URI syntax supports three primary forms:

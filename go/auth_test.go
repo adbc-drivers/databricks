@@ -32,21 +32,21 @@ import (
 func TestResolveLoginMethod(t *testing.T) {
 	tests := []struct {
 		name    string
-		db      databaseImpl
+		db      *databaseImpl
 		want    string
 		wantErr string
 	}{
-		{name: "token is inferred as pat", db: databaseImpl{accessToken: "tok"}, want: "pat"},
-		{name: "client credentials are inferred as oauth-m2m", db: databaseImpl{oauthClientID: "id", oauthClientSecret: "secret"}, want: "oauth-m2m"},
-		{name: "nothing set", db: databaseImpl{}, wantErr: "access token or OAuth config is required"},
-		{name: "token and client credentials", db: databaseImpl{accessToken: "tok", oauthClientID: "id", oauthClientSecret: "secret"}, wantErr: "cannot specify both access token and OAuth config"},
-		{name: "inferred oauth-m2m without secret", db: databaseImpl{oauthClientID: "id"}, wantErr: "client secret is required when using auth type 'oauth-m2m'. Set this via 'databricks.oauth.client_secret'"},
-		{name: "explicit pat", db: databaseImpl{authType: "pat", accessToken: "tok"}, want: "pat"},
-		{name: "explicit pat without token", db: databaseImpl{authType: "pat"}, wantErr: "access token is required when using auth type 'pat'. Set this via 'databricks.access_token'"},
-		{name: "explicit pat ignores unrelated oauth options", db: databaseImpl{authType: "pat", accessToken: "tok", oauthClientID: "id"}, want: "pat"},
-		{name: "explicit oauth-m2m", db: databaseImpl{authType: "oauth-m2m", oauthClientID: "id", oauthClientSecret: "secret"}, want: "oauth-m2m"},
-		{name: "explicit oauth-m2m without client id", db: databaseImpl{authType: "oauth-m2m", oauthClientSecret: "secret"}, wantErr: "client ID is required when using auth type 'oauth-m2m'. Set this via 'databricks.oauth.client_id'"},
-		{name: "explicit auth type with nothing else", db: databaseImpl{authType: "oauth-m2m"}, wantErr: "client ID is required"},
+		{name: "token is inferred as pat", db: &databaseImpl{accessToken: "tok"}, want: "pat"},
+		{name: "client credentials are inferred as oauth-m2m", db: &databaseImpl{oauthClientID: "id", oauthClientSecret: "secret"}, want: "oauth-m2m"},
+		{name: "nothing set", db: &databaseImpl{}, wantErr: "access token or OAuth config is required"},
+		{name: "token and client credentials", db: &databaseImpl{accessToken: "tok", oauthClientID: "id", oauthClientSecret: "secret"}, wantErr: "cannot specify both access token and OAuth config"},
+		{name: "inferred oauth-m2m without secret", db: &databaseImpl{oauthClientID: "id"}, wantErr: "client secret is required when using auth type 'oauth-m2m'. Set this via 'databricks.oauth.client_secret'"},
+		{name: "explicit pat", db: &databaseImpl{authType: "pat", accessToken: "tok"}, want: "pat"},
+		{name: "explicit pat without token", db: &databaseImpl{authType: "pat"}, wantErr: "access token is required when using auth type 'pat'. Set this via 'databricks.access_token'"},
+		{name: "explicit pat ignores unrelated oauth options", db: &databaseImpl{authType: "pat", accessToken: "tok", oauthClientID: "id"}, want: "pat"},
+		{name: "explicit oauth-m2m", db: &databaseImpl{authType: "oauth-m2m", oauthClientID: "id", oauthClientSecret: "secret"}, want: "oauth-m2m"},
+		{name: "explicit oauth-m2m without client id", db: &databaseImpl{authType: "oauth-m2m", oauthClientSecret: "secret"}, wantErr: "client ID is required when using auth type 'oauth-m2m'. Set this via 'databricks.oauth.client_id'"},
+		{name: "explicit auth type with nothing else", db: &databaseImpl{authType: "oauth-m2m"}, wantErr: "client ID is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -303,7 +303,10 @@ func TestM2MAuthenticatorScopes(t *testing.T) {
 
 func TestAzureClientSecret(t *testing.T) {
 	ctx := context.Background()
-	full := databaseImpl{authType: "azure-client-secret", azureClientID: "app", azureClientSecret: "secret", azureTenantID: "tenant"}
+	newFull := func() *databaseImpl {
+		return &databaseImpl{authType: "azure-client-secret", azureClientID: "app", azureClientSecret: "secret", azureTenantID: "tenant"}
+	}
+	full := newFull()
 
 	t.Run("requires every option", func(t *testing.T) {
 		for option, clear := range map[string]func(*databaseImpl){
@@ -311,8 +314,8 @@ func TestAzureClientSecret(t *testing.T) {
 			OptionAzureClientSecret: func(d *databaseImpl) { d.azureClientSecret = "" },
 			OptionAzureTenantID:     func(d *databaseImpl) { d.azureTenantID = "" },
 		} {
-			db := full
-			clear(&db)
+			db := newFull()
+			clear(db)
 			_, _, err := db.resolveLoginMethod()
 			require.ErrorContains(t, err, "when using auth type 'azure-client-secret'. Set this via '"+option+"'")
 		}
@@ -322,7 +325,7 @@ func TestAzureClientSecret(t *testing.T) {
 	})
 
 	t.Run("builds an SDK config for Azure", func(t *testing.T) {
-		db := full
+		db := newFull()
 		db.serverHostname = "adb-123.4.azuredatabricks.net"
 		cfg := db.sdkConfig("azure-client-secret", loginMethods["azure-client-secret"].sdk)
 		require.Equal(t, "https://adb-123.4.azuredatabricks.net", cfg.Host)

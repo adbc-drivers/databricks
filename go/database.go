@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"crypto/tls"
@@ -53,9 +54,16 @@ const (
 type databaseImpl struct {
 	driverbase.DatabaseImplBase
 
-	// Connection Pool
+	// Connection Pool. mu serialises pool start-up and Close so that concurrent
+	// Open calls cannot each run a login (two browser logins would race for the
+	// same local callback port).
+	mu           sync.Mutex
 	db           *sql.DB
 	needsRefresh bool // Whether we need to re-initialize
+
+	// newPool creates the connection pool; nil means initializeConnectionPool.
+	// Tests replace it to observe start-up without a workspace.
+	newPool func(ctx context.Context) (*sql.DB, error)
 
 	// Connection parameters
 	uri            string
@@ -260,29 +268,46 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
-	// Re-initialize the connection pool and settings if anything
-	// has changed, or we have not initialized yet
-	if d.needsRefresh || d.db == nil {
-		db, err := d.initializeConnectionPool(ctx)
+// getOrCreatePool returns the connection pool, creating it first when it does
+// not exist yet or an option changed. Callers share one start-up: the lock is
+// held while the pool is created, so concurrent callers wait for it and reuse it.
+func (d *databaseImpl) getOrCreatePool(ctx context.Context) (*sql.DB, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-		if err != nil {
-			return nil, err
-		}
-
-		// Close the existing connection pool
-		if d.db != nil {
-			err = d.db.Close()
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		d.db = db
+	if d.db != nil && !d.needsRefresh {
+		return d.db, nil
 	}
 
-	c, err := d.db.Conn(ctx)
+	newPool := d.initializeConnectionPool
+	if d.newPool != nil {
+		newPool = d.newPool
+	}
+	db, err := newPool(ctx)
+	if err != nil {
+		return nil, err
+	}
 
+	// Close the existing connection pool
+	if d.db != nil {
+		if err := d.db.Close(); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+
+	d.db = db
+	d.needsRefresh = false
+	return d.db, nil
+}
+
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
+	db, err := d.getOrCreatePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +330,8 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 }
 
 func (d *databaseImpl) Close(ctx context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	defer func() {
 		d.needsRefresh = true
 		d.db = nil

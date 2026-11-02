@@ -28,15 +28,17 @@ import (
 // ignores, and what the error says when something is missing. No network.
 func TestLoginMatrix(t *testing.T) {
 	isolateHome(t)
-	base := databaseImpl{serverHostname: "x.cloud.databricks.com", httpPath: "/sql/1.0/warehouses/abc"}
-	with := func(f func(d *databaseImpl)) databaseImpl {
-		d := base
-		f(&d)
+	newBase := func() *databaseImpl {
+		return &databaseImpl{serverHostname: "x.cloud.databricks.com", httpPath: "/sql/1.0/warehouses/abc"}
+	}
+	with := func(f func(d *databaseImpl)) *databaseImpl {
+		d := newBase()
+		f(d)
 		return d
 	}
 	tests := []struct {
 		name    string
-		db      databaseImpl
+		db      *databaseImpl
 		wantErr string // empty: the options build
 	}{
 		{"pat", with(func(d *databaseImpl) { d.authType, d.accessToken = "pat", "t" }), ""},
@@ -48,7 +50,7 @@ func TestLoginMatrix(t *testing.T) {
 		{"external-browser with client and scopes", with(func(d *databaseImpl) {
 			d.authType, d.oauthClientID, d.oauthScopes, d.oauthRedirectURL = "external-browser", "mine", []string{"all-apis"}, "localhost:9000"
 		}), ""},
-		{"nothing set and no auth type", base, "access token or OAuth config is required"},
+		{"nothing set and no auth type", newBase(), "access token or OAuth config is required"},
 		{"unknown auth type", with(func(d *databaseImpl) { d.authType = "kerberos" }), "unknown auth type 'kerberos'"},
 		{"token and client credentials without auth type", with(func(d *databaseImpl) { d.accessToken, d.oauthClientID, d.oauthClientSecret = "t", "i", "s" }), "cannot specify both"},
 		{"client ID alone is never browser login", with(func(d *databaseImpl) { d.oauthClientID = "i" }), "client secret is required when using auth type 'oauth-m2m'"},
