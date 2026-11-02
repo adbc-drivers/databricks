@@ -30,7 +30,7 @@
     },
     "external-browser": {
       "required": [],
-      "optional": ["databricks.oauth.external_browser.timeout"]
+      "optional": ["databricks.oauth.client_id", "databricks.oauth.scopes", "databricks.oauth.external_browser.timeout"]
     },
     "env-oidc": {
       "required": ["databricks.oidc.client_id"],

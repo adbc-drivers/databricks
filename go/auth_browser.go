@@ -71,7 +71,7 @@ const (
 // (OAuth authorization code with PKCE). It has no required options: the
 // built-in client and redirect are used unless they are overridden.
 var externalBrowserMethod = loginMethod{
-	optional: []string{OptionExternalBrowserTimeout},
+	optional: []string{OptionOAuthClientID, OptionOAuthScopes, OptionExternalBrowserTimeout},
 	build: func(d *databaseImpl) dbsql.ConnOption {
 		return dbsql.WithAuthenticator(d.newBrowserAuthenticator())
 	},
@@ -81,8 +81,10 @@ var externalBrowserMethod = loginMethod{
 // from the database options. Nothing is contacted until the first request.
 func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	return newBrowserAuthenticator(browserLoginConfig{
-		host:    d.serverHostname,
-		timeout: d.oauthU2MTimeout,
+		host:     d.serverHostname,
+		clientID: d.oauthClientID,
+		scopes:   d.oauthScopes,
+		timeout:  d.oauthU2MTimeout,
 	})
 }
 

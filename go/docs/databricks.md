@@ -127,7 +127,7 @@ The auth types, the options each one uses and the options it requires are also l
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL and tries to open it, then waits for the redirect on `localhost:8020`. Optional: `databricks.oauth.client_id` (default: the built-in client of the cloud), `databricks.oauth.scopes` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL and tries to open it, then waits for the redirect on `localhost:8020`. Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly.
   - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
@@ -173,7 +173,7 @@ The auth types, the options each one uses and the options it requires are also l
 `databricks.oauth.scopes`
 : **Default:** (empty, requests `all-apis`)
 
-  The OAuth scopes `oauth-m2m` requests, separated by spaces or commas (for example `sql`). Set this when the service principal's secret is limited to scopes other than `all-apis`.
+  The OAuth scopes `oauth-m2m` and `external-browser` request, separated by spaces or commas (for example `sql`). Set this when the service principal's secret is limited to scopes other than `all-apis`. For `external-browser`, `offline_access` and the cloud's SQL scope are always added, and nothing else by default: dbt-databricks v1 defaults to `all-apis offline_access`, so a client that wants the same scopes must set this option.
 
 `databricks.oidc.client_id`
 : **Default:** (empty)

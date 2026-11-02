@@ -483,3 +483,24 @@ func TestBrowserLoginRefreshOutlivesFirstRequestContext(t *testing.T) {
 	require.Equal(t, "Bearer access-2", hdr)
 	require.Equal(t, 1, h.openCount())
 }
+
+func TestBrowserClientAndScopeOptions(t *testing.T) {
+	isolateHome(t)
+	ctx := context.Background()
+	db := &databaseImpl{}
+	require.NoError(t, db.SetOption(ctx, OptionOAuthClientID, "dbt-databricks"))
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "all-apis,offline_access"))
+	got, err := db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "all-apis offline_access", got)
+
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "dbt-databricks", a.cfg.clientID)
+	require.Equal(t, []string{"all-apis", "offline_access"}, a.cfg.scopes)
+
+	// Without the options the built-in client is used, as before.
+	a = (&databaseImpl{serverHostname: "x.cloud.databricks.com"}).newBrowserAuthenticator().(*browserAuthenticator)
+	id, err := resolveBrowserClientID(a.cfg.host, a.cfg.clientID)
+	require.NoError(t, err)
+	require.Equal(t, "databricks-sql-connector", id)
+}
