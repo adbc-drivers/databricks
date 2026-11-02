@@ -20,6 +20,11 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`; WKT/EWKT strings
+  remain the default for backward compatibility.
+
 ## [1.1.11] - 2026-10-06
 
 ### Fixed

@@ -206,6 +206,16 @@ The following table depicts how the Databricks ADBC driver converts a Databricks
 | UNION                | String     | string |
 | USER_DEFINED         | String     | string |
 | VARCHAR              | String     | string |
+| GEOMETRY             | String*    | string* |
+| GEOGRAPHY            | String*    | string* |
+
+\* `GEOMETRY` and `GEOGRAPHY` retain WKT/EWKT strings by default. Set
+`adbc.databricks.enable_geospatial_support=true` to return Binary fields with the
+`geoarrow.wkb` extension. Legacy server text is passed through verbatim in string
+mode; Reyden's tagged `struct<srid:int32,wkb:binary>` is converted locally. The
+setting is client-side and is not forwarded to the server. Plain Binary WKB and
+untagged structs are not server result representations; an untagged struct requires
+logical SQL type metadata to be recognized.
 
 ## Tracing
 

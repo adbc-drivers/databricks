@@ -222,6 +222,7 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
 | `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | Not Supported (Thrift-only concept) |
 | `adbc.databricks.enable_complex_datatype_support` | Return native Arrow types for ARRAY/MAP/STRUCT | `false` | `false` |
+| `adbc.databricks.enable_geospatial_support` | Return GEOMETRY/GEOGRAPHY as GeoArrow WKB instead of strings | `false` | `false` |
 | `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | Not Supported (no fetch-handle to keep warm) |
 | `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | Not Supported |
 | `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` | `true` |
@@ -399,10 +400,38 @@ The driver automatically converts Databricks/Spark types to Apache Arrow types:
 | ARRAY | List | string | Complex types serialize as strings |
 | MAP | Map | string | Complex types serialize as strings |
 | STRUCT | Struct | string | Complex types serialize as strings |
+| GEOMETRY | String (default) or Binary | string or byte[] | Set `adbc.databricks.enable_geospatial_support=true` for GeoArrow WKB |
+| GEOGRAPHY | String (default) or Binary | string or byte[] | Set `adbc.databricks.enable_geospatial_support=true` for GeoArrow WKB |
 
 **Data Type Conversion Mode:**
 - `adbc.spark.data_type_conv` = `scalar` (default): Converts DATE, DECIMAL, TIMESTAMP to native types
 - `adbc.spark.data_type_conv` = `none`: No conversion, returns raw string representations
+
+#### Geospatial result types
+
+By default, `GEOMETRY` and `GEOGRAPHY` preserve the existing WKT/EWKT string
+contract. Set `adbc.databricks.enable_geospatial_support=true` to return a Binary
+Arrow field carrying the `geoarrow.wkb` extension instead. This option is applied
+locally by the driver and is not sent to Thrift or SEA.
+
+Databricks has two supported server representations:
+
+- Legacy result paths return String or LargeString WKT/EWKT. In the default string
+  mode, the driver passes this text through verbatim; it does not normalize spacing
+  or precision, parse it again, or validate an embedded EWKT SRID against the
+  declared column SRID.
+- Reyden Arrow results return a tagged `struct<srid:int32,wkb:binary>`. The `wkb`
+  child is little-endian OGC/ISO WKB and carries `geometry=true` or
+  `geography=true` plus the type-level `srid`. The driver renders this locally as
+  WKT/EWKT in the default mode or converts it to GeoArrow WKB when enabled.
+
+The representation and Arrow schema are stable across inline and CloudFetch chunks
+within one query result. Plain Binary WKB and an untagged `struct<srid,wkb>` are not
+server result contracts: plain Binary is rejected, and an untagged struct is not
+recognized without logical SQL type metadata. For a fixed-SRID type, GeoArrow output
+is ordinary WKB with column CRS metadata. For `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)`,
+each row's SRID is embedded as EWKB because a single column CRS cannot describe all
+rows; some GeoArrow consumers may not preserve that EWKB SRID.
 
 ### Server-Side Properties
 
