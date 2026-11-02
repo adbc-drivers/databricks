@@ -157,6 +157,15 @@ var loginMethods = map[string]loginMethod{
 	},
 }
 
+// secretAuthOptions are the auth options that hold a secret. The contract file
+// marks the same options.
+var secretAuthOptions = map[string]bool{
+	OptionAccessToken:       true,
+	OptionOAuthClientSecret: true,
+	OptionAzureClientSecret: true,
+	OptionGoogleCredentials: true,
+}
+
 // splitHost splits the server host name into its URL scheme and bare host.
 // The scheme defaults to https, as in the SQL client.
 func splitHost(host string) (scheme, name string) {

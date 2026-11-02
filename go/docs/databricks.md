@@ -118,6 +118,8 @@ Examples:
 
 ### Authentication Options
 
+The auth types, the options each one uses and the options it requires are also listed in machine-readable form in [`go/auth_contract.json`](../auth_contract.json).
+
 `databricks.auth_type`
 : **Values:** `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials`, `google-id`. **Default:** (empty, inferred from the options that are set)
 

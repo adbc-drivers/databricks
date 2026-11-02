@@ -1,0 +1,59 @@
+{
+  "comment": "Contract of databricks.auth_type: every auth type, the options it uses and the ones it requires. auth_contract_test.go keeps this file in line with the driver. inferred_when_unset lists, per auth type, the options that select it when databricks.auth_type is not set.",
+  "option": "databricks.auth_type",
+  "inferred_when_unset": {
+    "pat": ["databricks.access_token"],
+    "oauth-m2m": ["databricks.oauth.client_id", "databricks.oauth.client_secret"]
+  },
+  "options": {
+    "databricks.access_token": {"secret": true},
+    "databricks.oauth.client_id": {"secret": false},
+    "databricks.oauth.client_secret": {"secret": true},
+    "databricks.oauth.scopes": {"secret": false},
+    "databricks.azure.client_id": {"secret": false},
+    "databricks.azure.client_secret": {"secret": true},
+    "databricks.azure.tenant_id": {"secret": false},
+    "databricks.google.credentials": {"secret": true},
+    "databricks.google.service_account": {"secret": false},
+    "databricks.oidc.client_id": {"secret": false},
+    "databricks.oidc.token_filepath": {"secret": false}
+  },
+  "auth_types": {
+    "pat": {
+      "required": ["databricks.access_token"],
+      "optional": []
+    },
+    "oauth-m2m": {
+      "required": ["databricks.oauth.client_id", "databricks.oauth.client_secret"],
+      "optional": ["databricks.oauth.scopes"]
+    },
+    "env-oidc": {
+      "required": ["databricks.oidc.client_id"],
+      "optional": []
+    },
+    "file-oidc": {
+      "required": ["databricks.oidc.client_id"],
+      "optional": ["databricks.oidc.token_filepath"]
+    },
+    "azure-client-secret": {
+      "required": ["databricks.azure.client_id", "databricks.azure.client_secret", "databricks.azure.tenant_id"],
+      "optional": []
+    },
+    "azure-msi": {
+      "required": [],
+      "optional": ["databricks.azure.client_id"]
+    },
+    "azure-cli": {
+      "required": [],
+      "optional": []
+    },
+    "google-credentials": {
+      "required": ["databricks.google.credentials"],
+      "optional": []
+    },
+    "google-id": {
+      "required": ["databricks.google.service_account"],
+      "optional": []
+    }
+  }
+}
