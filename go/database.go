@@ -92,6 +92,10 @@ type databaseImpl struct {
 	azureClientSecret string
 	azureTenantID     string
 
+	// Google options
+	googleCredentials    string
+	googleServiceAccount string
+
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
@@ -363,6 +367,10 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.azureClientSecret, nil
 	case OptionAzureTenantID:
 		return d.azureTenantID, nil
+	case OptionGoogleCredentials:
+		return d.googleCredentials, nil
+	case OptionGoogleServiceAccount:
+		return d.googleServiceAccount, nil
 	case OptionOIDCClientID:
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
@@ -555,6 +563,10 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.azureClientSecret = value
 	case OptionAzureTenantID:
 		d.azureTenantID = value
+	case OptionGoogleCredentials:
+		d.googleCredentials = value
+	case OptionGoogleServiceAccount:
+		d.googleServiceAccount = value
 	case OptionOIDCClientID:
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:

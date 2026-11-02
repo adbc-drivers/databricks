@@ -71,6 +71,10 @@ const (
 	OptionValueAuthTypeFileOIDC = "file-oidc"
 
 	OptionValueAuthTypeAzureClientSecret = "azure-client-secret"
+	OptionValueAuthTypeAzureMSI          = "azure-msi"
+	OptionValueAuthTypeAzureCLI          = "azure-cli"
+	OptionValueAuthTypeGoogleCredentials = "google-credentials"
+	OptionValueAuthTypeGoogleID          = "google-id"
 
 	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
@@ -86,6 +90,10 @@ const (
 	OptionAzureClientID     = "databricks.azure.client_id"
 	OptionAzureClientSecret = "databricks.azure.client_secret"
 	OptionAzureTenantID     = "databricks.azure.tenant_id"
+
+	// Google options, auth types google-credentials and google-id
+	OptionGoogleCredentials    = "databricks.google.credentials"
+	OptionGoogleServiceAccount = "databricks.google.service_account"
 
 	// OIDC token federation options (auth types env-oidc and file-oidc)
 	OptionOIDCClientID      = "databricks.oidc.client_id"
