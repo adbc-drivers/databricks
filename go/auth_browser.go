@@ -107,6 +107,10 @@ type browserLoginConfig struct {
 	redirectURL string
 	timeout     time.Duration
 
+	// tokenCacheDir holds the on-disk token cache and login lease. Empty means
+	// the default directory (see defaultTokenCacheDir).
+	tokenCacheDir string
+
 	// Seams for tests; nil means the real implementation.
 	resolveConfig func(ctx context.Context, c browserLoginConfig) (oauth2.Config, error)
 	openBrowser   func(loginURL string) error
@@ -149,6 +153,16 @@ type browserAuthenticator struct {
 	mu          sync.Mutex
 	oauthConfig *oauth2.Config
 	tokenSource oauth2.TokenSource
+
+	cache        *tokenCache // nil when no cache directory is available
+	lastSaved    string      // access token last written to the cache
+	cacheWarning bool
+
+	// refreshToken is the refresh token of the token source in use, and
+	// rejected the last one the identity provider refused; a rejected token is
+	// not tried again from the cache.
+	refreshToken string
+	rejected     string
 }
 
 func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
@@ -164,7 +178,11 @@ func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
 	if cfg.out == nil {
 		cfg.out = os.Stdout
 	}
-	return &browserAuthenticator{cfg: cfg}
+	a := &browserAuthenticator{cfg: cfg}
+	if cache, err := newTokenCache(cfg.tokenCacheDir); err == nil {
+		a.cache = cache
+	}
+	return a
 }
 
 // Authenticate adds a bearer token to the request. The first call runs the
@@ -178,6 +196,8 @@ func (a *browserAuthenticator) Authenticate(r *http.Request) error {
 	if a.tokenSource != nil {
 		token, err := a.tokenSource.Token()
 		if err == nil {
+			a.refreshToken = token.RefreshToken
+			a.save(token) // keeps the cache current after a refresh
 			token.SetAuthHeader(r)
 			return nil
 		}
@@ -187,6 +207,7 @@ func (a *browserAuthenticator) Authenticate(r *http.Request) error {
 			return fmt.Errorf("unable to refresh the login token: %w", err)
 		}
 		// The refresh token no longer works: sign in again.
+		a.rejected = a.refreshToken
 		a.tokenSource = nil
 	}
 
@@ -212,6 +233,10 @@ func tokenContext(ctx context.Context) context.Context {
 	return context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, &http.Client{Timeout: tokenRequestTimeout})
 }
 
+// login returns a token for the first request or after a rejected refresh. It
+// prefers, in order: the cached token (refreshed when it is stale), then a
+// browser login. Logins are serialised across processes by the lease, so that
+// one process opens the browser and the others pick up the token it caches.
 func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error) {
 	if a.oauthConfig == nil {
 		conf, err := a.cfg.resolveConfig(context.WithoutCancel(ctx), a.cfg)
@@ -220,12 +245,87 @@ func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error)
 		}
 		a.oauthConfig = &conf
 	}
-	token, err := a.runBrowserFlow(ctx, *a.oauthConfig)
+	token, err := a.fromCache(ctx)
+	if err != nil || token != nil {
+		return token, err
+	}
+	var lost chan struct{} // closed when the login lease is lost
+	if a.cache != nil {
+		lease, err := a.cache.acquireLease(ctx, a.cfg.timeout)
+		if err != nil {
+			return nil, err
+		}
+		defer lease.release()
+		// If the lease is lost (another process took it over), stop waiting
+		// for the browser rather than race that login.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		lost = make(chan struct{})
+		defer lease.keepAlive(leaseTTL, func() { close(lost); cancel() })()
+		// Another process may have finished its login while we waited.
+		token, err := a.fromCache(ctx)
+		if err != nil || token != nil {
+			return token, err
+		}
+	}
+	token, err = a.runBrowserFlow(ctx, *a.oauthConfig)
 	if err != nil {
+		select {
+		case <-lost:
+			return nil, fmt.Errorf("lost the login lease to another process: %w", err)
+		default:
+		}
 		return nil, err
 	}
 	a.tokenSource = a.oauthConfig.TokenSource(tokenContext(ctx), token)
+	a.refreshToken = token.RefreshToken
+	a.save(token)
 	return token, nil
+}
+
+// fromCache returns a usable token from the cache, refreshing it with the
+// stored refresh token when the access token has expired. It returns nil, nil
+// when there is nothing usable, including when the identity provider rejects
+// the refresh token. Any other refresh failure (network, server error) is
+// returned, so it never opens a browser.
+func (a *browserAuthenticator) fromCache(ctx context.Context) (*oauth2.Token, error) {
+	if a.cache == nil {
+		return nil, nil
+	}
+	cached := a.cache.read(a.cfg.host, a.cfg.clientID, a.cfg.scopes)
+	if cached == nil || (cached.RefreshToken != "" && cached.RefreshToken == a.rejected && !cached.Valid()) {
+		return nil, nil
+	}
+	source := a.oauthConfig.TokenSource(tokenContext(ctx), cached)
+	token, err := source.Token()
+	if err != nil {
+		if isRejectedGrant(err) {
+			a.rejected = cached.RefreshToken
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unable to refresh the cached login token: %w", err)
+	}
+	a.tokenSource = source
+	a.refreshToken = token.RefreshToken
+	a.save(token)
+	return token, nil
+}
+
+// save writes the token to the cache when it changed. A failure does not stop
+// the login; it is reported once.
+func (a *browserAuthenticator) save(token *oauth2.Token) {
+	if a.cache == nil || token.AccessToken == a.lastSaved {
+		return
+	}
+	if err := a.cache.write(a.cfg.host, a.cfg.clientID, a.cfg.scopes, token); err != nil {
+		if !a.cacheWarning {
+			a.cacheWarning = true
+			_, _ = fmt.Fprintf(a.cfg.out, "Warning: could not cache the login token: %v\n", err)
+		}
+		return
+	}
+	a.lastSaved = token.AccessToken
 }
 
 type callbackResult struct {

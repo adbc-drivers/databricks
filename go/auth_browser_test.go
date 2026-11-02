@@ -212,6 +212,7 @@ func newBrowserHarness(t *testing.T) *browserHarness {
 		host:          "fake.cloud.databricks.com",
 		redirectURL:   freeAddr(t),
 		timeout:       10 * time.Second,
+		tokenCacheDir: t.TempDir(),
 		resolveConfig: h.idp.discover,
 		out:           h.out,
 	}
@@ -530,4 +531,8 @@ func TestBrowserRedirectURLReachesAuthenticator(t *testing.T) {
 	db := &databaseImpl{oauthRedirectURL: "localhost:9000"}
 	a := db.newBrowserAuthenticator().(*browserAuthenticator)
 	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
+}
+
+func newTestRequest() (*http.Request, error) {
+	return http.NewRequest(http.MethodGet, "http://example.invalid", nil)
 }
