@@ -30,7 +30,6 @@ import (
 	"maps"
 	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,7 +37,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"net/http"
-	"os"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -370,93 +368,22 @@ func (d *databaseImpl) Close(ctx context.Context) error {
 }
 
 func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
-	switch key {
-	case adbc.OptionKeyURI:
-		return d.uri, nil
-	case OptionServerHostname:
-		return d.serverHostname, nil
-	case OptionHTTPPath:
-		return d.httpPath, nil
-	case OptionAccessToken:
-		return d.accessToken, nil
-	case OptionAuthType:
-		return d.authType, nil
-	case OptionUserAgent:
-		return d.userAgent, nil
-	case OptionPort:
-		return strconv.Itoa(d.port), nil
-	case OptionCatalog:
-		return d.catalog, nil
-	case OptionSchema:
-		return d.schema, nil
-	case OptionQueryTimeout:
-		if d.queryTimeout > 0 {
-			return d.queryTimeout.String(), nil
-		}
-		return "", nil
-	case OptionMaxRows:
-		if d.maxRows > 0 {
-			return strconv.Itoa(d.maxRows), nil
-		}
-		return "", nil
-	case OptionQueryRetryCount:
-		if d.queryRetryCount > 0 {
-			return strconv.Itoa(d.queryRetryCount), nil
-		}
-		return "", nil
-	case OptionDownloadThreadCount:
-		if d.downloadThreadCount > 0 {
-			return strconv.Itoa(d.downloadThreadCount), nil
-		}
-		return "", nil
-	case OptionSSLMode:
-		return d.sslMode, nil
-	case OptionSSLRootCert:
-		return d.sslRootCert, nil
-	case OptionOAuthClientID:
-		return d.oauthClientID, nil
-	case OptionOAuthClientSecret:
-		return d.oauthClientSecret, nil
-	case OptionOAuthRefreshToken:
-		return d.oauthRefreshToken, nil
-	case OptionAzureClientID:
-		return d.azureClientID, nil
-	case OptionAzureClientSecret:
-		return d.azureClientSecret, nil
-	case OptionAzureTenantID:
-		return d.azureTenantID, nil
-	case OptionGoogleCredentials:
-		return d.googleCredentials, nil
-	case OptionGoogleServiceAccount:
-		return d.googleServiceAccount, nil
-	case OptionOIDCClientID:
-		return d.oidcClientID, nil
-	case OptionOIDCTokenFilepath:
-		return d.oidcTokenFilepath, nil
-	case OptionOAuthRedirectURL:
-		return d.oauthRedirectURL, nil
-	case OptionOAuthScopes:
-		return strings.Join(d.oauthScopes, " "), nil
-	case OptionExternalBrowserTimeout:
-		if d.oauthU2MTimeout > 0 {
-			return d.oauthU2MTimeout.String(), nil
-		}
-		return "", nil
-	default:
-		if name, ok := sessionParamName(key); ok {
-			if v, ok := d.sessionParams[name]; ok {
-				return v, nil
-			}
-			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "session parameter not set: %s", name)
-		}
-		if name, ok := queryTagName(key); ok {
-			if v, ok := d.queryTags[name]; ok {
-				return v, nil
-			}
-			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
-		}
-		return d.DatabaseImplBase.GetOption(ctx, key)
+	if def, ok := databaseOptions[key]; ok {
+		return def.get(d), nil
 	}
+	if name, ok := sessionParamName(key); ok {
+		if v, ok := d.sessionParams[name]; ok {
+			return v, nil
+		}
+		return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "session parameter not set: %s", name)
+	}
+	if name, ok := queryTagName(key); ok {
+		if v, ok := d.queryTags[name]; ok {
+			return v, nil
+		}
+		return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+	}
+	return d.DatabaseImplBase.GetOption(ctx, key)
 }
 
 func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
@@ -493,189 +420,14 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
-	switch key {
-	case adbc.OptionKeyURI:
-		// Strip the databricks:// scheme since databricks-sql-go expects raw DSN format
-		if after, ok := strings.CutPrefix(value, "databricks://"); ok {
-			d.uri = after
-		} else {
-			return adbc.Error{
-				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
-			}
-		}
-	case OptionServerHostname:
-		d.serverHostname = value
-	case OptionHTTPPath:
-		d.httpPath = value
-	case OptionAccessToken:
-		d.accessToken = value
-	case OptionAuthType:
-		if _, ok := loginMethods[value]; !ok && value != "" {
-			return adbc.Error{
-				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("[db] unknown auth type '%s'", value),
-			}
-		}
-		d.authType = value
-	case OptionUserAgent:
-		d.userAgent = value
-	case OptionPort:
-		port, err := strconv.Atoi(value)
-		if err != nil || port < 1 || port > 65535 {
-			return adbc.Error{
-				Code: adbc.StatusInvalidArgument,
-				Msg:  "invalid port number",
-			}
-		}
-		d.port = port
-	case OptionCatalog:
-		d.catalog = value
-	case OptionSchema:
-		d.schema = value
-	case OptionQueryTimeout:
-		if value != "" {
-			timeout, err := time.ParseDuration(value)
-			if err != nil {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("invalid query timeout: %v", err),
-				}
-			}
-			d.queryTimeout = timeout
-		}
-	case OptionMaxRows:
-		if value != "" {
-			maxRows, err := strconv.Atoi(value)
-			if err != nil {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("invalid max rows: %v", err),
-				}
-			}
-			d.maxRows = maxRows
-		}
-	case OptionQueryRetryCount:
-		if value != "" {
-			retryCount, err := strconv.Atoi(value)
-			if err != nil {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("invalid query retry count: %v", err),
-				}
-			}
-			d.queryRetryCount = retryCount
-		}
-	case OptionDownloadThreadCount:
-		if value != "" {
-			threadCount, err := strconv.Atoi(value)
-			if err != nil {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("invalid download thread count: %v", err),
-				}
-			}
-			d.downloadThreadCount = threadCount
-		}
-	case OptionSSLMode:
-		if value != "" {
-			lowerValue := strings.ToLower(value)
-			switch lowerValue {
-			case "insecure":
-				d.sslMode = lowerValue
-				d.sslInsecure = true
-			case "require":
-				d.sslMode = lowerValue
-				d.sslInsecure = false
-			default:
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("invalid SSL mode: %s (supported: 'require', 'insecure')", value),
-				}
-			}
-		} else {
-			d.sslMode = value
-			d.sslInsecure = false
-		}
-	case OptionSSLRootCert:
-		if value != "" {
-			// Validate that the certificate file exists and can be read.
-			// Then, store valid cert.
-
-			caCert, err := os.ReadFile(value)
-			if err != nil {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  fmt.Sprintf("failed to read SSL root certificate: %v", err),
-				}
-			}
-
-			caCertPool := x509.NewCertPool()
-			if !caCertPool.AppendCertsFromPEM(caCert) {
-				return adbc.Error{
-					Code: adbc.StatusInvalidArgument,
-					Msg:  "failed to parse SSL root certificate",
-				}
-			}
-
-			d.sslRootCert = value
-			d.sslCertPool = caCertPool
-		} else {
-			d.sslRootCert = value
-			d.sslCertPool = nil
-		}
-	case OptionOAuthClientID:
-		d.oauthClientID = value
-	case OptionOAuthClientSecret:
-		d.oauthClientSecret = value
-	case OptionOAuthRefreshToken:
-		d.oauthRefreshToken = value
-	case OptionAzureClientID:
-		d.azureClientID = value
-	case OptionAzureClientSecret:
-		d.azureClientSecret = value
-	case OptionAzureTenantID:
-		d.azureTenantID = value
-	case OptionGoogleCredentials:
-		d.googleCredentials = value
-	case OptionGoogleServiceAccount:
-		d.googleServiceAccount = value
-	case OptionOIDCClientID:
-		d.oidcClientID = value
-	case OptionOIDCTokenFilepath:
-		d.oidcTokenFilepath = value
-	case OptionOAuthRedirectURL:
-		if err := validateBrowserRedirectURL(value); err != nil {
-			return err
-		}
-		d.oauthRedirectURL = value
-	case OptionOAuthScopes:
-		scopes, err := parseScopes(value)
-		if err != nil {
-			return err
-		}
-		d.oauthScopes = scopes
-	case OptionExternalBrowserTimeout:
-		if value == "" {
-			d.oauthU2MTimeout = 0
-			break
-		}
-		timeout, err := time.ParseDuration(value)
-		if err != nil || timeout <= 0 {
-			return adbc.Error{
-				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("[db] invalid external browser timeout '%s': must be a positive duration such as '2m'", value),
-			}
-		}
-		d.oauthU2MTimeout = timeout
-	default:
-		if name, ok := sessionParamName(key); ok {
-			return d.setSessionParam(name, value)
-		}
-		if name, ok := queryTagName(key); ok {
-			return d.setQueryTag(name, value)
-		}
-		return d.DatabaseImplBase.SetOption(ctx, key, value)
+	if def, ok := databaseOptions[key]; ok {
+		return def.set(d, value)
 	}
-	return nil
+	if name, ok := sessionParamName(key); ok {
+		return d.setSessionParam(name, value)
+	}
+	if name, ok := queryTagName(key); ok {
+		return d.setQueryTag(name, value)
+	}
+	return d.DatabaseImplBase.SetOption(ctx, key, value)
 }
