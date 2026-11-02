@@ -27,6 +27,9 @@ import (
 type authContract struct {
 	Options map[string]struct {
 		Secret bool `json:"secret"`
+		// Example is a valid value for options that do not accept any string;
+		// the default is "v".
+		Example string `json:"example"`
 	} `json:"options"`
 	Inferred  map[string][]string `json:"inferred_when_unset"`
 	AuthTypes map[string]struct {
@@ -87,12 +90,16 @@ func TestAuthContractMatchesDriver(t *testing.T) {
 		}
 	}
 
-	for option := range contract.Options {
+	for option, info := range contract.Options {
+		value := "v"
+		if info.Example != "" {
+			value = info.Example
+		}
 		db := &databaseImpl{}
-		require.NoError(t, db.SetOption(ctx, option, "v"), option)
+		require.NoError(t, db.SetOption(ctx, option, value), option)
 		got, err := db.GetOption(ctx, option)
 		require.NoError(t, err, option)
-		require.Equal(t, "v", got, option)
+		require.Equal(t, value, got, option)
 	}
 
 	// The documentation names every auth type and option of the contract.

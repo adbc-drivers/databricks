@@ -100,6 +100,7 @@ type databaseImpl struct {
 	oidcClientID      string
 	oidcTokenFilepath string
 	oauthScopes       []string
+	oauthU2MTimeout   time.Duration
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -377,6 +378,11 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcTokenFilepath, nil
 	case OptionOAuthScopes:
 		return strings.Join(d.oauthScopes, " "), nil
+	case OptionExternalBrowserTimeout:
+		if d.oauthU2MTimeout > 0 {
+			return d.oauthU2MTimeout.String(), nil
+		}
+		return "", nil
 	default:
 		if name, ok := queryTagName(key); ok {
 			if v, ok := d.queryTags[name]; ok {
@@ -577,6 +583,19 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			return err
 		}
 		d.oauthScopes = scopes
+	case OptionExternalBrowserTimeout:
+		if value == "" {
+			d.oauthU2MTimeout = 0
+			break
+		}
+		timeout, err := time.ParseDuration(value)
+		if err != nil || timeout <= 0 {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] invalid external browser timeout '%s': must be a positive duration such as '2m'", value),
+			}
+		}
+		d.oauthU2MTimeout = timeout
 	default:
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)

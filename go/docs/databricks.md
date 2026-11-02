@@ -121,12 +121,13 @@ Examples:
 The auth types, the options each one uses and the options it requires are also listed in machine-readable form in [`go/auth_contract.json`](../auth_contract.json).
 
 `databricks.auth_type`
-: **Values:** `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials`, `google-id`. **Default:** (empty, inferred from the options that are set)
+: **Values:** `pat`, `oauth-m2m`, `external-browser`, `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials`, `google-id`. **Default:** (empty, inferred from the options that are set)
 
   How to authenticate.
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL and tries to open it, then waits for the redirect on `localhost:8020`. Optional: `databricks.oauth.client_id` (default: the built-in client of the cloud), `databricks.oauth.scopes` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly.
   - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
@@ -138,6 +139,11 @@ The auth types, the options each one uses and the options it requires are also l
   The methods backed by the Databricks SDK (for example `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials` and `google-id`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
+
+`databricks.oauth.external_browser.timeout`
+: **Values:** a positive Go duration such as `90s` or `2m`. **Default:** `1m`
+
+  How long `external-browser` login waits for the sign-in to finish before it fails.
 
 `databricks.azure.client_id`
 : **Default:** (empty)

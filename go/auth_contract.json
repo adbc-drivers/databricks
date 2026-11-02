@@ -15,6 +15,7 @@
     "databricks.azure.tenant_id": {"secret": false},
     "databricks.google.credentials": {"secret": true},
     "databricks.google.service_account": {"secret": false},
+    "databricks.oauth.external_browser.timeout": {"secret": false, "example": "1m0s"},
     "databricks.oidc.client_id": {"secret": false},
     "databricks.oidc.token_filepath": {"secret": false}
   },
@@ -26,6 +27,10 @@
     "oauth-m2m": {
       "required": ["databricks.oauth.client_id", "databricks.oauth.client_secret"],
       "optional": ["databricks.oauth.scopes"]
+    },
+    "external-browser": {
+      "required": [],
+      "optional": ["databricks.oauth.external_browser.timeout"]
     },
     "env-oidc": {
       "required": ["databricks.oidc.client_id"],

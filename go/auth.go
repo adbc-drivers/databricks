@@ -76,6 +76,7 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
 		},
 	},
+	OptionValueAuthTypeExternalBrowser: externalBrowserMethod,
 	// OIDC token federation, spelled as in dbt-databricks. The SDK exchanges
 	// the ID token for a Databricks token.
 	OptionValueAuthTypeEnvOIDC: {
