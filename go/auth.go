@@ -97,6 +97,24 @@ var loginMethods = map[string]loginMethod{
 			},
 		},
 	},
+	// Microsoft Entra ID service principal on Azure Databricks. The SDK only
+	// activates this credential when the tenant is set, so it is required.
+	OptionValueAuthTypeAzureClientSecret: {
+		required: []authField{
+			{OptionAzureClientID, "azure client ID", func(d *databaseImpl) string { return d.azureClientID }},
+			{OptionAzureClientSecret, "azure client secret", func(d *databaseImpl) string { return d.azureClientSecret }},
+			{OptionAzureTenantID, "azure tenant ID", func(d *databaseImpl) string { return d.azureTenantID }},
+		},
+		sdk: &sdkLogin{
+			cloud:       environment.CloudAzure,
+			credentials: sdkconfig.AzureClientSecretCredentials{},
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				cfg.AzureClientID = d.azureClientID
+				cfg.AzureClientSecret = d.azureClientSecret
+				cfg.AzureTenantID = d.azureTenantID
+			},
+		},
+	},
 }
 
 // splitHost splits the server host name into its URL scheme and bare host.
