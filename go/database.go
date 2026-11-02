@@ -214,7 +214,19 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	// it, so pass a copy. Applied before the query tags, so that the query tag options
 	// win over a raw "databricks.session_param.QUERY_TAGS".
 	if len(d.sessionParams) > 0 {
-		opts = append(opts, dbsql.WithSessionParams(maps.Clone(d.sessionParams)))
+		params := maps.Clone(d.sessionParams)
+		if len(d.queryTags) > 0 {
+			// Session parameter names are case-insensitive on the warehouse and
+			// databricks-sql-go sends the keys as given, so a "query_tags"
+			// spelled in another case would be sent next to the QUERY_TAGS built
+			// from the query tag options.
+			for name := range params {
+				if strings.EqualFold(name, "QUERY_TAGS") {
+					delete(params, name)
+				}
+			}
+		}
+		opts = append(opts, dbsql.WithSessionParams(params))
 	}
 
 	if len(d.queryTags) > 0 {

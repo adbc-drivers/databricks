@@ -212,7 +212,7 @@ Session parameters are Databricks SQL configuration settings (such as `ansi_mode
   - Reading a parameter that is not set returns `NOT_FOUND`.
   - The name must not be empty or blank; an empty name is rejected with `INVALID_ARGUMENT` and the parameters already set are left unchanged. The driver does not check the name or value; Databricks reports an unknown parameter or a bad value when the session opens.
   - The parameters are used when connecting with the individual connection options. They are not applied when the connection is given as a `uri`.
-  - `QUERY_TAGS` set this way is replaced by the tags set with the `databricks.query_tag.<name>` options (see [Query Tag Options](#query-tag-options)).
+  - `QUERY_TAGS` set this way (in any letter case) is replaced by the tags set with the `databricks.query_tag.<name>` options (see [Query Tag Options](#query-tag-options)).
 
 ### Query Tag Options
 
