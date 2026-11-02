@@ -254,3 +254,48 @@ func TestSplitHost(t *testing.T) {
 		require.Equal(t, want, [2]string{scheme, name}, host)
 	}
 }
+
+func TestOAuthScopesOption(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+
+	got, err := db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "", got)
+
+	for value, want := range map[string][]string{
+		"sql":                      {"sql"},
+		"sql,offline_access":       {"sql", "offline_access"},
+		"  sql   offline_access  ": {"sql", "offline_access"},
+		"":                         nil,
+	} {
+		require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, value))
+		require.Equal(t, want, db.oauthScopes, "value %q", value)
+	}
+
+	// A bad value is rejected and leaves the existing setting alone.
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "sql"))
+	err = db.SetOption(ctx, OptionOAuthScopes, `sql "quoted"`)
+	require.ErrorContains(t, err, "invalid OAuth scope")
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	got, err = db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "sql", got)
+}
+
+func TestM2MAuthenticatorScopes(t *testing.T) {
+	scopesOf := func(db *databaseImpl) []string {
+		a := db.newM2MAuthenticator()
+		p, ok := a.(interface{ M2MScopes() []string })
+		require.True(t, ok)
+		return p.M2MScopes()
+	}
+
+	db := &databaseImpl{serverHostname: "https://host.example.com", oauthClientID: "id", oauthClientSecret: "secret"}
+	require.Equal(t, []string{"all-apis"}, scopesOf(db), "no scopes keeps the default")
+
+	db.oauthScopes = []string{"sql"}
+	require.Equal(t, []string{"sql"}, scopesOf(db))
+}

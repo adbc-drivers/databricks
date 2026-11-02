@@ -132,6 +132,11 @@ Examples:
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
+`databricks.oauth.scopes`
+: **Default:** (empty, requests `all-apis`)
+
+  The OAuth scopes `oauth-m2m` requests, separated by spaces or commas (for example `sql`). Set this when the service principal's secret is limited to scopes other than `all-apis`.
+
 `databricks.oidc.client_id`
 : **Default:** (empty)
 

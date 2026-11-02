@@ -74,6 +74,7 @@ const (
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
+	OptionOAuthScopes       = "databricks.oauth.scopes"
 
 	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
 	// Settable on the database (defaults) and on a statement (overrides the default per tag).

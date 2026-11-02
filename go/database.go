@@ -90,6 +90,7 @@ type databaseImpl struct {
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
+	oauthScopes       []string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -355,6 +356,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
 		return d.oidcTokenFilepath, nil
+	case OptionOAuthScopes:
+		return strings.Join(d.oauthScopes, " "), nil
 	default:
 		if name, ok := queryTagName(key); ok {
 			if v, ok := d.queryTags[name]; ok {
@@ -539,6 +542,12 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:
 		d.oidcTokenFilepath = value
+	case OptionOAuthScopes:
+		scopes, err := parseScopes(value)
+		if err != nil {
+			return err
+		}
+		d.oauthScopes = scopes
 	default:
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)
