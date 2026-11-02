@@ -101,6 +101,7 @@ type databaseImpl struct {
 	oidcTokenFilepath string
 	oauthScopes       []string
 	oauthU2MTimeout   time.Duration
+	oauthRedirectURL  string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -376,6 +377,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
 		return d.oidcTokenFilepath, nil
+	case OptionOAuthRedirectURL:
+		return d.oauthRedirectURL, nil
 	case OptionOAuthScopes:
 		return strings.Join(d.oauthScopes, " "), nil
 	case OptionExternalBrowserTimeout:
@@ -577,6 +580,11 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:
 		d.oidcTokenFilepath = value
+	case OptionOAuthRedirectURL:
+		if err := validateBrowserRedirectURL(value); err != nil {
+			return err
+		}
+		d.oauthRedirectURL = value
 	case OptionOAuthScopes:
 		scopes, err := parseScopes(value)
 		if err != nil {

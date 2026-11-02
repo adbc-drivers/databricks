@@ -504,3 +504,30 @@ func TestBrowserClientAndScopeOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "databricks-sql-connector", id)
 }
+
+func TestBrowserRedirectURLOption(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	for _, good := range []string{"localhost:9000", "http://localhost:9000/callback", "127.0.0.1:8030", "http://[::1]:8020"} {
+		require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, good), good)
+		got, _ := db.GetOption(ctx, OptionOAuthRedirectURL)
+		require.Equal(t, good, got)
+	}
+	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, "localhost:9000"))
+	for _, bad := range []string{"localhost", "localhost:0", "localhost:70000", "localhost:abc", "https://localhost:9000", "example.com:9000", "http://%zz"} {
+		err := db.SetOption(ctx, OptionOAuthRedirectURL, bad)
+		var adbcErr adbc.Error
+		require.ErrorAs(t, err, &adbcErr, bad)
+		require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code, bad)
+		got, _ := db.GetOption(ctx, OptionOAuthRedirectURL)
+		require.Equal(t, "localhost:9000", got, "a bad value must not change the setting")
+	}
+	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, ""))
+}
+
+func TestBrowserRedirectURLReachesAuthenticator(t *testing.T) {
+	isolateHome(t)
+	db := &databaseImpl{oauthRedirectURL: "localhost:9000"}
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
+}

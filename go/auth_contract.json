@@ -15,6 +15,7 @@
     "databricks.azure.tenant_id": {"secret": false},
     "databricks.google.credentials": {"secret": true},
     "databricks.google.service_account": {"secret": false},
+    "databricks.oauth.redirect_url": {"secret": false, "example": "localhost:9000"},
     "databricks.oauth.external_browser.timeout": {"secret": false, "example": "1m0s"},
     "databricks.oidc.client_id": {"secret": false},
     "databricks.oidc.token_filepath": {"secret": false}
@@ -30,7 +31,7 @@
     },
     "external-browser": {
       "required": [],
-      "optional": ["databricks.oauth.client_id", "databricks.oauth.scopes", "databricks.oauth.external_browser.timeout"]
+      "optional": ["databricks.oauth.client_id", "databricks.oauth.scopes", "databricks.oauth.redirect_url", "databricks.oauth.external_browser.timeout"]
     },
     "env-oidc": {
       "required": ["databricks.oidc.client_id"],
