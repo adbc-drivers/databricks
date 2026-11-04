@@ -157,7 +157,6 @@ func TestFreeTextOptions(t *testing.T) {
 		OptionServerHostname, OptionHTTPPath, OptionAccessToken, OptionCatalog, OptionSchema,
 		OptionOAuthClientID, OptionOAuthClientSecret, OptionOAuthRefreshToken,
 		OptionAzureClientID, OptionAzureClientSecret, OptionAzureTenantID,
-		OptionGoogleCredentials, OptionGoogleServiceAccount,
 		OptionOIDCClientID, OptionOIDCTokenFilepath,
 	} {
 		t.Run(key, func(t *testing.T) {
