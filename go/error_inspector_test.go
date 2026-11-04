@@ -26,9 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testExecutionError implements dbsqlerr.DBExecutionError. The driver's own
-// implementation lives in an internal package of databricks-sql-go and cannot
-// be constructed here; the live test in error_inspector_e2e_test.go covers it.
+// testExecutionError implements dbsqlerr.DBExecutionError. The real error type
+// is private in databricks-sql-go, so it cannot be constructed here.
 type testExecutionError struct {
 	sqlState string
 	cause    error
