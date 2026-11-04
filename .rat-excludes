@@ -21,6 +21,7 @@ csharp/test/Resources/result_get_column_extended_all_types.json
 csharp/AdbcDrivers.snk
 csharp/Benchmarks/benchmark-queries.json
 test-infrastructure/proxy-server/go.sum
+go/auth_contract.json
 go/go.sum
 go/license.tpl
 go/pixi.lock
