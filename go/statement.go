@@ -27,11 +27,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"sync/atomic"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	dbsqlctx "github.com/databricks/databricks-sql-go/driverctx"
 )
 
 type statementImpl struct {
@@ -41,6 +43,9 @@ type statementImpl struct {
 	prepared          *sql.Stmt
 	boundStream       array.RecordReader
 	bulkIngestOptions driverbase.BulkIngestOptions
+
+	// Per-statement query tag overrides, keyed by tag name
+	queryTags map[string]string
 }
 
 func (s *statementImpl) Close(ctx context.Context) error {
@@ -62,6 +67,9 @@ func (s *statementImpl) Close(ctx context.Context) error {
 }
 
 func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
+	if name, ok := queryTagName(key); ok {
+		return s.setQueryTag(name, val)
+	}
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {
@@ -69,6 +77,16 @@ func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	}
 
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported statement option: %s=%s", key, val)
+}
+
+func (s *statementImpl) GetOption(ctx context.Context, key string) (string, error) {
+	if name, ok := queryTagName(key); ok {
+		if v, ok := s.getQueryTag(name); ok {
+			return v, nil
+		}
+		return "", queryTagNotSet(&s.ErrorHelper, name)
+	}
+	return s.StatementImplBase.GetOption(ctx, key)
 }
 
 func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
@@ -101,6 +119,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	if s.query == "" {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
 	}
+	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.boundStream != nil {
 		stream := s.boundStream
 		s.boundStream = nil
@@ -137,6 +156,9 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 	// Execute query using raw driver interface to get Arrow batches
 	// This works for both prepared and unprepared statements since
 	// databricks-sql-go doesn't do server-side preparation
+	var qid atomic.Value
+	ctx = dbsqlctx.NewContextWithQueryIdCallback(ctx, func(id string) { qid.Store(id) })
+
 	var driverRows driver.Rows
 	var err error
 	err = conn.Raw(func(driverConn interface{}) error {
@@ -162,8 +184,13 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 		}
 	}()
 
+	// The query ID is reported when the statement is submitted, so it is set
+	// by the time QueryContext returns. A server that sends none leaves it empty
+	// and the schema carries no query ID.
+	queryID, _ := qid.Load().(string)
+
 	// Use the IPC stream interface (zero-copy)
-	reader, err := newIPCReaderAdapter(ctx, driverRows)
+	reader, err := newIPCReaderAdapter(ctx, driverRows, queryID)
 	if err != nil {
 		return nil, errorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
 	}
@@ -173,6 +200,7 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 }
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.bulkIngestOptions.IsSet() {
 		return s.executeIngest(ctx)
 	}

@@ -49,6 +49,7 @@ const (
 	OptionHTTPPath       = "databricks.http_path"
 	OptionAccessToken    = "databricks.access_token"
 	OptionPort           = "databricks.port"
+	OptionUserAgent      = "databricks.user_agent"
 	OptionCatalog        = "databricks.catalog"
 	OptionSchema         = "databricks.schema"
 
@@ -64,14 +65,35 @@ const (
 
 	// Authentication. When auth_type is not set, the method is inferred from the
 	// other options that are set.
-	OptionAuthType              = "databricks.auth_type"
-	OptionValueAuthTypePAT      = "pat"
-	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
+	OptionAuthType                       = "databricks.auth_type"
+	OptionValueAuthTypePAT               = "pat"
+	OptionValueAuthTypeOAuthM2M          = "oauth-m2m"
+	OptionValueAuthTypeEnvOIDC           = "env-oidc"
+	OptionValueAuthTypeFileOIDC          = "file-oidc"
+	OptionValueAuthTypeAzureClientSecret = "azure-client-secret"
 
 	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
+	OptionOAuthScopes       = "databricks.oauth.scopes"
+
+	// Session parameters sent to the SQL session when it opens, one per option:
+	// append the parameter name, e.g. "databricks.session_param.ansi_mode".
+	OptionSessionParamPrefix = "databricks.session_param."
+
+	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
+	// Settable on the database (defaults) and on a statement (overrides the default per tag).
+	OptionQueryTagPrefix = "databricks.query_tag."
+
+	// Azure service principal (Microsoft Entra ID) options, auth type azure-client-secret
+	OptionAzureClientID     = "databricks.azure.client_id"
+	OptionAzureClientSecret = "databricks.azure.client_secret"
+	OptionAzureTenantID     = "databricks.azure.tenant_id"
+
+	// OIDC token federation options (auth types env-oidc and file-oidc)
+	OptionOIDCClientID      = "databricks.oidc.client_id"
+	OptionOIDCTokenFilepath = "databricks.oidc.token_filepath"
 
 	// Default values
 	DefaultPort    = 443
