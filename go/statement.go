@@ -84,7 +84,7 @@ func (s *statementImpl) GetOption(ctx context.Context, key string) (string, erro
 		if v, ok := s.getQueryTag(name); ok {
 			return v, nil
 		}
-		return "", s.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+		return "", queryTagNotSet(&s.ErrorHelper, name)
 	}
 	return s.StatementImplBase.GetOption(ctx, key)
 }
@@ -116,10 +116,10 @@ func (s *statementImpl) Prepare(ctx context.Context) error {
 }
 
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
-	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.query == "" {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
 	}
+	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.boundStream != nil {
 		stream := s.boundStream
 		s.boundStream = nil

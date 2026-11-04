@@ -63,6 +63,15 @@ const (
 	// tokenRequestTimeout bounds each request to the token endpoint.
 	tokenRequestTimeout = 30 * time.Second
 
+	// callbackReadHeaderTimeout and callbackWriteTimeout bound the loopback
+	// server that receives the redirect.
+	callbackReadHeaderTimeout = 3 * time.Second
+	callbackWriteTimeout      = 30 * time.Second
+
+	// stateBytes is the size of the random state value that ties the redirect to
+	// the login that started it.
+	stateBytes = 16
+
 	// defaultBrowserRedirectURL is where the identity provider sends the
 	// browser back to. It matches the redirect registered for the built-in
 	// clients.
@@ -344,7 +353,7 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 		redirect.Path = "/"
 	}
 
-	state, err := randomState(16)
+	state, err := randomState(stateBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -367,8 +376,8 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 	})
 	srv := &http.Server{
 		Handler:           mux,
-		ReadHeaderTimeout: 3 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadHeaderTimeout: callbackReadHeaderTimeout,
+		WriteTimeout:      callbackWriteTimeout,
 	}
 	go func() { _ = srv.Serve(listener) }()
 	defer srv.Close() //nolint:errcheck

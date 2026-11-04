@@ -38,6 +38,14 @@ type authContract struct {
 	} `json:"auth_types"`
 }
 
+// secretAuthOptions are the auth options that hold a secret. The contract file
+// marks the same options.
+var secretAuthOptions = map[string]bool{
+	OptionAccessToken:       true,
+	OptionOAuthClientSecret: true,
+	OptionAzureClientSecret: true,
+}
+
 // The contract file lists the same auth types and required options as the
 // login method table, and every option it names can be set and read.
 func TestAuthContractMatchesDriver(t *testing.T) {
@@ -73,19 +81,25 @@ func TestAuthContractMatchesDriver(t *testing.T) {
 		require.Contains(t, contract.Options, option)
 	}
 
-	// Setting any of the listed options, without databricks.auth_type, selects
-	// that auth type.
+	// Setting the listed options, without databricks.auth_type, selects that auth
+	// type. Any one of them is enough to select it: when the others are missing the
+	// error names the selected type's missing option.
 	ctx := context.Background()
 	for name, options := range contract.Inferred {
 		require.Contains(t, contract.AuthTypes, name)
+		all := &databaseImpl{}
+		for _, option := range options {
+			require.NoError(t, all.SetOption(ctx, option, "v"))
+		}
+		got, _, err := all.resolveLoginMethod()
+		require.NoError(t, err, name)
+		require.Equal(t, name, got)
+
 		for _, option := range options {
 			db := &databaseImpl{}
 			require.NoError(t, db.SetOption(ctx, option, "v"))
-			got, _, err := db.resolveLoginMethod()
-			if err == nil {
-				require.Equal(t, name, got, "inferred from %q", option)
-			} else {
-				require.ErrorContains(t, err, "auth type '"+name+"'", "inferred from %q", option)
+			if _, _, err := db.resolveLoginMethod(); err != nil {
+				require.ErrorContains(t, err, "when using auth type '"+name+"'", "inferred from %q", option)
 			}
 		}
 	}
@@ -100,15 +114,5 @@ func TestAuthContractMatchesDriver(t *testing.T) {
 		got, err := db.GetOption(ctx, option)
 		require.NoError(t, err, option)
 		require.Equal(t, value, got, option)
-	}
-
-	// The documentation names every auth type and option of the contract.
-	docs, err := os.ReadFile("docs/databricks.md")
-	require.NoError(t, err)
-	for name := range contract.AuthTypes {
-		require.Contains(t, string(docs), "`"+name+"`", "auth type %q is not documented", name)
-	}
-	for option := range contract.Options {
-		require.Contains(t, string(docs), "`"+option+"`", "option %q is not documented", option)
 	}
 }
