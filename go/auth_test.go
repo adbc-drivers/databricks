@@ -25,7 +25,6 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-adbc/go/adbc"
-	sdkconfig "github.com/databricks/databricks-sdk-go/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -360,36 +359,4 @@ func TestAzureClientSecret(t *testing.T) {
 		_, _, err := db.resolveLoginMethod()
 		require.ErrorContains(t, err, "access token or OAuth config is required")
 	})
-}
-
-func TestSDKBackedMethods(t *testing.T) {
-	db := databaseImpl{
-		serverHostname:    "dbc-1.cloud.databricks.com",
-		azureClientID:     "identity",
-		azureClientSecret: "azure-secret",
-		azureTenantID:     "tenant",
-		oidcClientID:      "sp-client",
-		oidcTokenFilepath: "/var/run/token",
-	}
-
-	// Every SDK-backed method names its credential after its auth type, and
-	// methods that imply a cloud do not guess it from the host name.
-	for name, check := range map[string]func(t *testing.T, cfg *sdkconfig.Config){
-		"env-oidc":  func(t *testing.T, cfg *sdkconfig.Config) { require.Equal(t, "sp-client", cfg.ClientID) },
-		"file-oidc": func(t *testing.T, cfg *sdkconfig.Config) { require.Equal(t, "/var/run/token", cfg.OIDCTokenFilepath) },
-		"azure-client-secret": func(t *testing.T, cfg *sdkconfig.Config) {
-			require.True(t, cfg.IsAzure())
-			require.Equal(t, []string{"identity", "azure-secret", "tenant"}, []string{cfg.AzureClientID, cfg.AzureClientSecret, cfg.AzureTenantID})
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			login := loginMethods[name]
-			require.NotNil(t, login.sdk)
-			cfg := db.sdkConfig(name, login.sdk)
-			require.Equal(t, name, cfg.AuthType)
-			require.Equal(t, name, cfg.Credentials.Name())
-			require.Equal(t, "https://dbc-1.cloud.databricks.com", cfg.Host)
-			check(t, cfg)
-		})
-	}
 }

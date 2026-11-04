@@ -134,7 +134,7 @@ The auth types, the options each one uses and the options it requires are also l
   - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
-  The methods backed by the Databricks SDK (for example `env-oidc`, `file-oidc` and `azure-client-secret`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
+  The methods backed by the Databricks SDK (`env-oidc`, `file-oidc`, `azure-client-secret`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
