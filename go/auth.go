@@ -17,6 +17,7 @@ package databricks
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/databricks/databricks-sdk-go/common/environment"
@@ -117,14 +118,6 @@ var loginMethods = map[string]loginMethod{
 	},
 }
 
-// secretAuthOptions are the auth options that hold a secret. The contract file
-// marks the same options.
-var secretAuthOptions = map[string]bool{
-	OptionAccessToken:       true,
-	OptionOAuthClientSecret: true,
-	OptionAzureClientSecret: true,
-}
-
 // splitHost splits the server host name into its URL scheme and bare host.
 // The scheme defaults to https, as in the SQL client.
 func splitHost(host string) (scheme, name string) {
@@ -170,16 +163,22 @@ func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
 	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, host, d.oauthScopes)
 }
 
+// isScopeChar reports whether r may appear in an OAuth scope token:
+// %x21 / %x23-5B / %x5D-7E (RFC 6749 section 3.3).
+func isScopeChar(r rune) bool {
+	return r == 0x21 || (r >= 0x23 && r <= 0x5b) || (r >= 0x5d && r <= 0x7e)
+}
+
 // parseScopes splits a comma or whitespace separated list of OAuth scopes.
 // Each scope must be a valid RFC 6749 scope token.
 func parseScopes(value string) ([]string, error) {
-	scopes := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
+	scopes := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
 	if len(scopes) == 0 {
 		return nil, nil
 	}
 	for _, scope := range scopes {
 		for _, r := range scope {
-			if r < 0x21 || r > 0x7e || r == '"' || r == '\\' {
+			if !isScopeChar(r) {
 				return nil, adbc.Error{
 					Code: adbc.StatusInvalidArgument,
 					Msg:  fmt.Sprintf("[db] invalid OAuth scope '%s' for '%s'", scope, OptionOAuthScopes),
