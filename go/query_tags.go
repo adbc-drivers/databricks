@@ -18,11 +18,15 @@ import (
 	"context"
 	"maps"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	dbsqlctx "github.com/databricks/databricks-sql-go/driverctx"
 )
+
+// sessionParamQueryTags is the session parameter the query tags are sent as.
+const sessionParamQueryTags = "QUERY_TAGS"
 
 const (
 	// The limits dbt-databricks enforces in QueryTagsUtils (MAX_TAGS and the
@@ -37,10 +41,10 @@ func queryTagName(key string) (name string, isQueryTag bool) {
 	return strings.CutPrefix(key, OptionQueryTagPrefix)
 }
 
-// escapedQueryTagValueLength is the length of a tag value on the wire, where
-// backslash, comma and colon are each escaped with a backslash.
+// escapedQueryTagValueLength is the length in characters of a tag value on the
+// wire, where backslash, comma and colon are each escaped with a backslash.
 func escapedQueryTagValueLength(value string) int {
-	return len(value) + strings.Count(value, `\`) + strings.Count(value, ",") + strings.Count(value, ":")
+	return utf8.RuneCountInString(value) + strings.Count(value, `\`) + strings.Count(value, ",") + strings.Count(value, ":")
 }
 
 // validateQueryTag checks one tag before it is stored, so that an invalid tag
@@ -71,6 +75,11 @@ func validateQueryTag(eh *driverbase.ErrorHelper, name, value string, total int)
 			"cannot set query tag %q: at most %d query tags are allowed", name, maxQueryTags)
 	}
 	return nil
+}
+
+// queryTagNotSet is the error for reading a query tag that is not set.
+func queryTagNotSet(eh *driverbase.ErrorHelper, name string) error {
+	return eh.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
 }
 
 // mergeQueryTags layers overrides on top of defaults: an override with the same

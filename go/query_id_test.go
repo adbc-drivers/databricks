@@ -41,6 +41,8 @@ func (c *queryIDConn) Close() error                        { return nil }
 func (c *queryIDConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
 func (c *queryIDConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
 	if c.queryID != "" {
+		// NewContextWithQueryId calls the callback the driver put on the context,
+		// which is how databricks-sql-go reports the ID; the returned context is not needed.
 		dbsqlctx.NewContextWithQueryId(ctx, c.queryID)
 	}
 	return c.rows, nil
@@ -49,7 +51,7 @@ func (c *queryIDConn) QueryContext(ctx context.Context, _ string, _ []driver.Nam
 type queryIDConnector struct{ conn *queryIDConn }
 
 func (c queryIDConnector) Connect(context.Context) (driver.Conn, error) { return c.conn, nil }
-func (c queryIDConnector) Driver() driver.Driver                        { return nil }
+func (c queryIDConnector) Driver() driver.Driver                        { return stubDriver{} }
 
 func schemaOnlyRows(t *testing.T, schema *arrow.Schema) *mockRows {
 	t.Helper()

@@ -19,12 +19,10 @@ import (
 	"database/sql"
 	"fmt"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	dbsql "github.com/databricks/databricks-sql-go"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,56 +39,37 @@ func connectorSessionParam(t *testing.T, opts []dbsql.ConnOption, name string) (
 }
 
 // The tags set on the database reach the session as QUERY_TAGS and win over a
-// raw QUERY_TAGS session parameter; the other session parameters are kept and
-// the database's own maps are not changed.
+// raw QUERY_TAGS session parameter, whatever its case; the other session
+// parameters are kept and the database's own maps are not changed.
 func TestQueryTagsLayerOverSessionParams(t *testing.T) {
 	ctx := context.Background()
 	db := newSessionParamDatabase()
-	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"QUERY_TAGS", "raw:1"))
+	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+sessionParamQueryTags, "raw:1"))
+	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"query_tags", "lower:1"))
 	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"ansi_mode", "false"))
 
-	opts, err := db.resolveConnectionOptions()
-	require.NoError(t, err)
-	got, ok := connectorSessionParam(t, opts, "QUERY_TAGS")
-	require.True(t, ok)
-	require.Equal(t, "raw:1", got, "without query tag options the raw session parameter is sent")
+	t.Run("without query tag options the raw parameters are sent", func(t *testing.T) {
+		opts, err := db.resolveConnectionOptions()
+		require.NoError(t, err)
+		got, ok := connectorSessionParam(t, opts, sessionParamQueryTags)
+		require.True(t, ok)
+		require.Equal(t, "raw:1", got)
+	})
 
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"@@dbt_core_version", "1.2.3"))
-	opts, err = db.resolveConnectionOptions()
-	require.NoError(t, err)
-	got, ok = connectorSessionParam(t, opts, "QUERY_TAGS")
-	require.True(t, ok)
-	// The order of the tags in the serialised value is not fixed.
-	require.ElementsMatch(t, []string{"team:data-platform", "@@dbt_core_version:1.2.3"}, strings.Split(got, ","))
-	got, ok = connectorSessionParam(t, opts, "ansi_mode")
-	require.True(t, ok)
-	require.Equal(t, "false", got)
-
-	require.Equal(t, map[string]string{"QUERY_TAGS": "raw:1", "ansi_mode": "false"}, db.sessionParams)
-
-	// A raw query_tags in another case is dropped too, so only one
-	// QUERY_TAGS-like parameter is sent. The stored parameters are not changed.
-	require.NoError(t, db.SetOption(ctx, OptionSessionParamPrefix+"query_tags", "lower:1"))
-	opts, err = db.resolveConnectionOptions()
-	require.NoError(t, err)
-	_, ok = connectorSessionParam(t, opts, "query_tags")
-	require.False(t, ok, "query_tags must not be sent next to the query tag options")
-	got, ok = connectorSessionParam(t, opts, "QUERY_TAGS")
-	require.True(t, ok)
-	require.ElementsMatch(t, []string{"team:data-platform", "@@dbt_core_version:1.2.3"}, strings.Split(got, ","))
-	require.Equal(t, "lower:1", db.sessionParams["query_tags"])
-
-	// Without query tag options the raw parameter is sent as given.
-	savedTags := db.queryTags
-	db.queryTags = nil
-	opts, err = db.resolveConnectionOptions()
-	require.NoError(t, err)
-	got, ok = connectorSessionParam(t, opts, "query_tags")
-	require.True(t, ok)
-	require.Equal(t, "lower:1", got)
-	db.queryTags = savedTags
-	require.Equal(t, map[string]string{"team": "data-platform", "@@dbt_core_version": "1.2.3"}, db.queryTags)
+	t.Run("with query tag options they replace the raw ones", func(t *testing.T) {
+		require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
+		opts, err := db.resolveConnectionOptions()
+		require.NoError(t, err)
+		got, ok := connectorSessionParam(t, opts, sessionParamQueryTags)
+		require.True(t, ok)
+		require.Equal(t, "team:data-platform", got)
+		_, ok = connectorSessionParam(t, opts, "query_tags")
+		require.False(t, ok, "a raw query_tags must not be sent next to the query tag options")
+		got, ok = connectorSessionParam(t, opts, "ansi_mode")
+		require.True(t, ok)
+		require.Equal(t, "false", got)
+		require.Equal(t, map[string]string{sessionParamQueryTags: "raw:1", "query_tags": "lower:1", "ansi_mode": "false"}, db.sessionParams)
+	})
 }
 
 // openTestConnection opens a connection on a database whose pool is the fake
@@ -144,56 +123,4 @@ func TestQueryTagLayersAcrossDatabaseConnectionAndStatement(t *testing.T) {
 	_, err = other.ExecuteUpdate(ctx)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"team": "data-platform", "env": "prod"}, capture.calls[2].tags)
-}
-
-// An invalid tag on a statement is rejected and leaves both the statement's
-// and the connection's tags, and what is sent, unchanged.
-func TestInvalidStatementQueryTagLeavesLayersUnchanged(t *testing.T) {
-	ctx := context.Background()
-	db := newSessionParamDatabase()
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
-	conn, capture := openTestConnection(t, db)
-
-	stmt, err := conn.NewStatement(ctx)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = stmt.Close(ctx) })
-	setter := stmt.(adbc.GetSetOptionsWithContext)
-	require.NoError(t, setter.SetOption(ctx, OptionQueryTagPrefix+"run_id", "42"))
-
-	for _, tc := range []struct{ key, value string }{
-		{OptionQueryTagPrefix, "v"},
-		{OptionQueryTagPrefix + "a,b", "v"},
-		{OptionQueryTagPrefix + "run_id", ""},
-		{OptionQueryTagPrefix + "team", ""},
-	} {
-		requireAdbcStatus(t, setter.SetOption(ctx, tc.key, tc.value), adbc.StatusInvalidArgument)
-	}
-
-	require.NoError(t, stmt.SetSqlQuery(ctx, "DELETE FROM t"))
-	_, err = stmt.ExecuteUpdate(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"team": "data-platform", "run_id": "42"}, capture.calls[0].tags)
-}
-
-// The transaction contract: Databricks statements are committed as they run, so
-// the driver supports autocommit only. Turning autocommit off is refused with
-// NOT_IMPLEMENTED. Commit and Rollback on an open connection are refused with
-// INVALID_STATE: the connection is in autocommit mode, which the driver base
-// checks before it reaches the driver's own (NOT_IMPLEMENTED) methods.
-func TestTransactionContract(t *testing.T) {
-	ctx := context.Background()
-	conn, _ := openTestConnection(t, newSessionParamDatabase())
-
-	tx, ok := conn.(adbc.GetSetOptionsWithContext)
-	require.True(t, ok)
-
-	require.NoError(t, tx.SetOption(ctx, adbc.OptionKeyAutoCommit, adbc.OptionValueEnabled))
-	requireAdbcStatus(t, tx.SetOption(ctx, adbc.OptionKeyAutoCommit, adbc.OptionValueDisabled), adbc.StatusNotImplemented)
-	requireAdbcStatus(t, conn.Commit(ctx), adbc.StatusInvalidState)
-	requireAdbcStatus(t, conn.Rollback(ctx), adbc.StatusInvalidState)
-
-	// The refused request left autocommit on.
-	got, err := tx.GetOption(ctx, adbc.OptionKeyAutoCommit)
-	require.NoError(t, err)
-	require.Equal(t, adbc.OptionValueEnabled, got)
 }

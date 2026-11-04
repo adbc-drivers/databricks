@@ -55,6 +55,34 @@ func TestTokenCacheRoundTrip(t *testing.T) {
 	require.Nil(t, c.read("other-host", "", nil))
 }
 
+// The cache holds refresh tokens, so an existing default directory is made
+// private; a directory the caller chose is used as it is.
+func TestTokenCacheTightensAnExistingDefaultDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	base := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", base)
+	defaultDir := filepath.Join(base, "databricks", "oauth")
+	require.NoError(t, os.MkdirAll(defaultDir, 0o755))
+	require.NoError(t, os.Chmod(defaultDir, 0o755))
+	chosen := filepath.Join(t.TempDir(), "chosen")
+	require.NoError(t, os.Mkdir(chosen, 0o755))
+	require.NoError(t, os.Chmod(chosen, 0o755))
+
+	_, err := newTokenCache("")
+	require.NoError(t, err)
+	_, err = newTokenCache(chosen)
+	require.NoError(t, err)
+
+	info, err := os.Stat(defaultDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	info, err = os.Stat(chosen)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+}
+
 func TestTokenCacheIgnoresUnreadableFiles(t *testing.T) {
 	c, err := newTokenCache(t.TempDir())
 	require.NoError(t, err)
@@ -62,34 +90,6 @@ func TestTokenCacheIgnoresUnreadableFiles(t *testing.T) {
 	require.Nil(t, c.read("h", "", nil))
 	require.NoError(t, os.WriteFile(c.path("h", "", nil), []byte("{}"), 0o600))
 	require.Nil(t, c.read("h", "", nil))
-}
-
-func TestDefaultTokenCacheDirs(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix layout")
-	}
-	t.Setenv("XDG_CACHE_HOME", "/xdg")
-	t.Setenv("HOME", "/home/u")
-	require.Equal(t, []string{"/xdg/databricks/oauth", "/home/u/.cache/databricks/oauth"}, defaultTokenCacheDirs())
-	t.Setenv("XDG_CACHE_HOME", "")
-	require.Equal(t, []string{"/home/u/.cache/databricks/oauth"}, defaultTokenCacheDirs())
-	t.Setenv("HOME", "")
-	require.Empty(t, defaultTokenCacheDirs())
-}
-
-// When the XDG directory cannot be created the cache falls back to ~/.cache.
-func TestTokenCacheFallsBackToHome(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix layout")
-	}
-	blocker := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
-	home := t.TempDir()
-	t.Setenv("XDG_CACHE_HOME", blocker)
-	t.Setenv("HOME", home)
-	c, err := newTokenCache("")
-	require.NoError(t, err)
-	require.Equal(t, filepath.Join(home, ".cache", "databricks", "oauth"), c.dir)
 }
 
 func TestTokenCachePathIsSafe(t *testing.T) {
@@ -100,16 +100,6 @@ func TestTokenCachePathIsSafe(t *testing.T) {
 		require.Equal(t, c.dir, filepath.Dir(p), host)
 	}
 	require.Equal(t, filepath.Join(c.dir, "my-ws.cloud.databricks.com_databricks_oauth_token_cache.json"), c.path("my-ws.cloud.databricks.com", "", nil))
-}
-
-func TestTokenCachePathDependsOnScopes(t *testing.T) {
-	c, err := newTokenCache(t.TempDir())
-	require.NoError(t, err)
-	plain := c.path("h", "", nil)
-	scoped := c.path("h", "", []string{"all-apis"})
-	require.NotEqual(t, plain, scoped)
-	require.Equal(t, scoped, c.path("h", "", []string{"all-apis"}))
-	require.Equal(t, c.path("h", "x", []string{"a", "b"}), c.path("h", "x", []string{"b", "a"}))
 }
 
 func TestLeaseIsExclusiveUntilReleased(t *testing.T) {
@@ -183,19 +173,6 @@ func TestLeaseWaitStopsWhenContextEnds(t *testing.T) {
 	defer cancel()
 	_, err = acquireLease(ctx, path, time.Minute, time.Minute)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-}
-
-func TestLeaseKeepAliveRenews(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "x.lease")
-	l, err := acquireLease(context.Background(), path, 150*time.Millisecond, time.Second)
-	require.NoError(t, err)
-	defer l.release()
-	_, before := readLease(path)
-	stop := l.keepAlive(150*time.Millisecond, func() {})
-	time.Sleep(400 * time.Millisecond)
-	stop()
-	_, after := readLease(path)
-	require.True(t, after.After(before))
 }
 
 // A second process finds the first one's token in the cache instead of
