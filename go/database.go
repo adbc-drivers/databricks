@@ -83,6 +83,11 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+	oauthU2MTimeout  time.Duration
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
@@ -95,8 +100,6 @@ type databaseImpl struct {
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
-	oauthScopes       []string
-	oauthU2MTimeout   time.Duration
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -369,7 +372,7 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 	case OptionOIDCTokenFilepath:
 		return d.oidcTokenFilepath, nil
 	case OptionOAuthScopes:
-		return strings.Join(d.oauthScopes, " "), nil
+		return d.oauthScopesValue, nil
 	case OptionExternalBrowserTimeout:
 		if d.oauthU2MTimeout > 0 {
 			return d.oauthU2MTimeout.String(), nil
@@ -380,7 +383,7 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 			if v, ok := d.queryTags[name]; ok {
 				return v, nil
 			}
-			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+			return "", queryTagNotSet(&d.ErrorHelper, name)
 		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
@@ -571,6 +574,7 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			return err
 		}
 		d.oauthScopes = scopes
+		d.oauthScopesValue = value
 	case OptionExternalBrowserTimeout:
 		if value == "" {
 			d.oauthU2MTimeout = 0
