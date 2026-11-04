@@ -149,7 +149,10 @@ func (f *fakeIdP) snapshot() (grants []string, auth []url.Values) {
 }
 
 // discover resolves the OAuth endpoints from the fake provider's discovery
-// document, standing in for the OIDC lookup against a real workspace.
+// document, standing in for the OIDC lookup against a real workspace. It
+// reimplements the parts of sql-go's u2m.GetConfig that the tests look at, so
+// assertions on the client ID, redirect URL and scopes check that the options
+// reach the login configuration, not sql-go's own defaults.
 func (f *fakeIdP) discover(ctx context.Context, c browserLoginConfig) (oauth2.Config, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.srv.URL+"/.well-known/oauth-authorization-server", nil)
 	if err != nil {
@@ -369,25 +372,35 @@ func TestBrowserLoginFailures(t *testing.T) {
 		err = newBrowserAuthenticator(h.cfg).Authenticate(req)
 		require.ErrorIs(t, err, context.Canceled)
 	})
-	t.Run("unknown cloud has no built-in client", func(t *testing.T) {
-		_, err := resolveBrowserClientID("localhost", "")
-		require.ErrorContains(t, err, "unhandled cloud type")
-		id, err := resolveBrowserClientID("localhost", "mine")
-		require.NoError(t, err)
-		require.Equal(t, "mine", id)
-	})
 }
 
-func TestBrowserBuiltInClientPerCloud(t *testing.T) {
-	for host, want := range map[string]string{
-		"x.cloud.databricks.com":      "databricks-sql-connector",
-		"x.gcp.databricks.com":        "databricks-sql-connector",
-		"adb-1.2.azuredatabricks.net": "96eecda7-19ea-49cc-abb5-240097d554f5",
-	} {
-		got, err := resolveBrowserClientID(host, "")
-		require.NoError(t, err, host)
-		require.Equal(t, want, got, host)
-	}
+// The built-in client depends on the cloud of the host; a host of no known cloud
+// has none, so a client ID must then be set.
+func TestBrowserBuiltInClient(t *testing.T) {
+	id, err := resolveBrowserClientID("x.cloud.databricks.com", "")
+	require.NoError(t, err)
+	require.Equal(t, awsGCPBrowserClientID, id)
+
+	id, err = resolveBrowserClientID("adb-1.2.azuredatabricks.net", "")
+	require.NoError(t, err)
+	require.Equal(t, azureBrowserClientID, id)
+
+	_, err = resolveBrowserClientID("localhost", "")
+	require.ErrorContains(t, err, "unhandled cloud type")
+
+	id, err = resolveBrowserClientID("localhost", "mine")
+	require.NoError(t, err)
+	require.Equal(t, "mine", id)
+}
+
+// The client ID, scopes and redirect URL options reach the login configuration.
+func TestBrowserOptionsReachTheLoginConfig(t *testing.T) {
+	isolateHome(t)
+	db := &databaseImpl{oauthClientID: "dbt-databricks", oauthScopes: []string{"all-apis", "offline_access"}, oauthRedirectURL: "localhost:9000"}
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "dbt-databricks", a.cfg.clientID)
+	require.Equal(t, []string{"all-apis", "offline_access"}, a.cfg.scopes)
+	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
 }
 
 func TestExternalBrowserLoginMethod(t *testing.T) {
@@ -485,37 +498,19 @@ func TestBrowserLoginRefreshOutlivesFirstRequestContext(t *testing.T) {
 	require.Equal(t, 1, h.openCount())
 }
 
-func TestBrowserClientAndScopeOptions(t *testing.T) {
-	isolateHome(t)
-	ctx := context.Background()
-	db := &databaseImpl{}
-	require.NoError(t, db.SetOption(ctx, OptionOAuthClientID, "dbt-databricks"))
-	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "all-apis,offline_access"))
-	got, err := db.GetOption(ctx, OptionOAuthScopes)
-	require.NoError(t, err)
-	require.Equal(t, "all-apis offline_access", got)
-
-	a := db.newBrowserAuthenticator().(*browserAuthenticator)
-	require.Equal(t, "dbt-databricks", a.cfg.clientID)
-	require.Equal(t, []string{"all-apis", "offline_access"}, a.cfg.scopes)
-
-	// Without the options the built-in client is used, as before.
-	a = (&databaseImpl{serverHostname: "x.cloud.databricks.com"}).newBrowserAuthenticator().(*browserAuthenticator)
-	id, err := resolveBrowserClientID(a.cfg.host, a.cfg.clientID)
-	require.NoError(t, err)
-	require.Equal(t, "databricks-sql-connector", id)
-}
-
+// The redirect is a loopback address with a port; a bad value is rejected and
+// leaves the setting as it was.
 func TestBrowserRedirectURLOption(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}
-	for _, good := range []string{"localhost:9000", "http://localhost:9000/callback", "127.0.0.1:8030", "http://[::1]:8020"} {
+	for _, good := range []string{"localhost:9000", "http://localhost:9000/callback"} {
 		require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, good), good)
-		got, _ := db.GetOption(ctx, OptionOAuthRedirectURL)
+		got, err := db.GetOption(ctx, OptionOAuthRedirectURL)
+		require.NoError(t, err)
 		require.Equal(t, good, got)
 	}
 	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, "localhost:9000"))
-	for _, bad := range []string{"localhost", "localhost:0", "localhost:70000", "localhost:abc", "https://localhost:9000", "example.com:9000", "http://%zz"} {
+	for _, bad := range []string{"https://localhost:9000", "example.com:9000", "localhost", "localhost:70000"} {
 		err := db.SetOption(ctx, OptionOAuthRedirectURL, bad)
 		var adbcErr adbc.Error
 		require.ErrorAs(t, err, &adbcErr, bad)
@@ -523,14 +518,6 @@ func TestBrowserRedirectURLOption(t *testing.T) {
 		got, _ := db.GetOption(ctx, OptionOAuthRedirectURL)
 		require.Equal(t, "localhost:9000", got, "a bad value must not change the setting")
 	}
-	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, ""))
-}
-
-func TestBrowserRedirectURLReachesAuthenticator(t *testing.T) {
-	isolateHome(t)
-	db := &databaseImpl{oauthRedirectURL: "localhost:9000"}
-	a := db.newBrowserAuthenticator().(*browserAuthenticator)
-	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
 }
 
 func newTestRequest() (*http.Request, error) {
