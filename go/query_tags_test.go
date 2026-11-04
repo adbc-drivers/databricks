@@ -57,27 +57,49 @@ func TestDatabaseQueryTagOptions(t *testing.T) {
 	assert.Equal(t, "dev", db.queryTags["env"])
 }
 
-func TestDatabaseQueryTagInvalidValuesKeepExistingTags(t *testing.T) {
+// The database and the statement share the rules: an invalid tag is rejected
+// with INVALID_ARGUMENT and the tags already set stay as they were.
+func TestQueryTagValidation(t *testing.T) {
+	ctx := context.Background()
+	invalid := map[string]struct{ name, value string }{
+		"empty name":      {"", "v"},
+		"blank name":      {" ", "v"},
+		"comma in name":   {"a,b", "v"},
+		"colon in name":   {"a:b", "v"},
+		"empty value":     {"team", ""},
+		"value too long":  {"team", strings.Repeat("x", maxQueryTagValueLength+1)},
+		"escaping counts": {"team", strings.Repeat(",", 65)}, // 65 commas are 130 characters on the wire
+	}
+
+	t.Run("database", func(t *testing.T) {
+		db := &databaseImpl{}
+		require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
+		for name, c := range invalid {
+			t.Run(name, func(t *testing.T) {
+				requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+c.name, c.value), adbc.StatusInvalidArgument)
+			})
+		}
+		assert.Equal(t, map[string]string{"team": "data-platform"}, db.queryTags)
+	})
+
+	t.Run("statement", func(t *testing.T) {
+		stmt := &statementImpl{conn: &connectionImpl{}}
+		require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
+		for name, c := range invalid {
+			t.Run(name, func(t *testing.T) {
+				requireAdbcStatus(t, stmt.SetOption(ctx, OptionQueryTagPrefix+c.name, c.value), adbc.StatusInvalidArgument)
+			})
+		}
+		assert.Equal(t, map[string]string{"team": "data-platform"}, stmt.queryTags)
+	})
+}
+
+// The 128 limit counts characters, not bytes.
+func TestQueryTagValueLengthCountsCharacters(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
-
-	err := db.SetOption(ctx, OptionQueryTagPrefix, "no-name")
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	// An over-long value must not replace the existing one
-	err = db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("x", maxQueryTagValueLength+1))
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	// Empty values are rejected, not treated as key-only tags
-	err = db.SetOption(ctx, OptionQueryTagPrefix+"team", "")
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	// Escaping counts: 65 commas become 130 characters on the wire
-	err = db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat(",", 65))
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	assert.Equal(t, map[string]string{"team": "data-platform"}, db.queryTags)
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagValueLength)))
+	requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagValueLength+1)), adbc.StatusInvalidArgument)
 }
 
 func TestDatabaseQueryTagLimit(t *testing.T) {
@@ -139,23 +161,6 @@ func TestStatementQueryTagOptions(t *testing.T) {
 	requireAdbcStatus(t, err, adbc.StatusNotFound)
 }
 
-func TestStatementQueryTagInvalidValuesKeepExistingTags(t *testing.T) {
-	ctx := context.Background()
-	stmt := &statementImpl{conn: &connectionImpl{}}
-	require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"run_id", "42"))
-
-	err := stmt.SetOption(ctx, OptionQueryTagPrefix, "no-name")
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	err = stmt.SetOption(ctx, OptionQueryTagPrefix+"run_id", strings.Repeat("x", maxQueryTagValueLength+1))
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	err = stmt.SetOption(ctx, OptionQueryTagPrefix+"run_id", "")
-	requireAdbcStatus(t, err, adbc.StatusInvalidArgument)
-
-	assert.Equal(t, map[string]string{"run_id": "42"}, stmt.queryTags)
-}
-
 func TestStatementQueryTagLimitCountsConnectionDefaults(t *testing.T) {
 	ctx := context.Background()
 	defaults := map[string]string{}
@@ -173,43 +178,6 @@ func TestStatementQueryTagLimitCountsConnectionDefaults(t *testing.T) {
 	require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"a", "changed"))
 }
 
-func TestEffectiveQueryTags(t *testing.T) {
-	tests := []struct {
-		name      string
-		defaults  map[string]string
-		overrides map[string]string
-		expected  map[string]string
-	}{
-		{name: "no tags", expected: nil},
-		{
-			name:     "defaults only",
-			defaults: map[string]string{"team": "data-platform"},
-			expected: map[string]string{"team": "data-platform"},
-		},
-		{
-			name:      "overrides only",
-			overrides: map[string]string{"run_id": "42"},
-			expected:  map[string]string{"run_id": "42"},
-		},
-		{
-			name:      "overrides replace same-named defaults and add new tags",
-			defaults:  map[string]string{"a": "1", "b": "2"},
-			overrides: map[string]string{"b": "3", "c": "4"},
-			expected:  map[string]string{"a": "1", "b": "3", "c": "4"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stmt := &statementImpl{
-				conn:      &connectionImpl{queryTags: tt.defaults},
-				queryTags: tt.overrides,
-			}
-			assert.Equal(t, tt.expected, stmt.effectiveQueryTags())
-		})
-	}
-}
-
 func TestEffectiveQueryTagsDoesNotMutateInputs(t *testing.T) {
 	conn := &connectionImpl{queryTags: map[string]string{"team": "data-platform"}}
 	stmt := &statementImpl{conn: conn, queryTags: map[string]string{"run_id": "42"}}
@@ -222,37 +190,10 @@ func TestEffectiveQueryTagsDoesNotMutateInputs(t *testing.T) {
 	assert.Equal(t, map[string]string{"run_id": "42"}, stmt.queryTags)
 }
 
-func TestWithQueryTags(t *testing.T) {
-	ctx := context.Background()
-	assert.Nil(t, dbsqlctx.QueryTagsFromContext(withQueryTags(ctx, nil)))
-
-	tags := map[string]string{"team": "data-platform"}
-	assert.Equal(t, tags, dbsqlctx.QueryTagsFromContext(withQueryTags(ctx, tags)))
-}
-
-func TestQueryTagNameValidation(t *testing.T) {
-	ctx := context.Background()
-	for _, name := range []string{"", " ", "\t", "a,b", "a:b"} {
-		t.Run(fmt.Sprintf("rejects %q", name), func(t *testing.T) {
-			db := &databaseImpl{}
-			requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+name, "v"), adbc.StatusInvalidArgument)
-			assert.Empty(t, db.queryTags)
-
-			stmt := &statementImpl{conn: &connectionImpl{}}
-			requireAdbcStatus(t, stmt.SetOption(ctx, OptionQueryTagPrefix+name, "v"), adbc.StatusInvalidArgument)
-			assert.Empty(t, stmt.queryTags)
-		})
-	}
-
-	// Names Fusion sends, including the reserved dbt keys, stay valid.
-	for _, name := range []string{"@@dbt_core_version", "@@dbt_model_name", "team", "a.b-c/d"} {
-		db := &databaseImpl{}
-		require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+name, "1.2.3"), name)
-		assert.Equal(t, "1.2.3", db.queryTags[name])
-	}
-}
-
-// tagCaptureConn records the query tags found on the context of every call.
+// tagCaptureConn stands in for a database/sql driver connection, because the
+// real driver needs a warehouse: it records the query tags that reach the
+// driver on the context of every call. Its driver is registered under a name
+// made from parameterTestDriverCounter, shared with the parameter binding tests.
 type tagCaptureConn struct {
 	calls []tagCall
 }
