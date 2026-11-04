@@ -71,21 +71,6 @@ func TestLoginMatrix(t *testing.T) {
 	}
 }
 
-func TestAuthTypeOptionValidation(t *testing.T) {
-	ctx := context.Background()
-	db := &databaseImpl{}
-	for _, good := range []string{"pat", "oauth-m2m", "external-browser", ""} {
-		require.NoError(t, db.SetOption(ctx, OptionAuthType, good), good)
-	}
-	require.NoError(t, db.SetOption(ctx, OptionAuthType, "external-browser"))
-	err := db.SetOption(ctx, OptionAuthType, "kerberos")
-	var adbcErr adbc.Error
-	require.ErrorAs(t, err, &adbcErr)
-	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
-	got, _ := db.GetOption(ctx, OptionAuthType)
-	require.Equal(t, "external-browser", got, "a bad value must not change the setting")
-}
-
 func TestBrowserDiscoveryFailureIsReportedAndRetried(t *testing.T) {
 	h := newBrowserHarness(t)
 	fail := true

@@ -80,10 +80,25 @@ func newTokenCache(dir string) (*tokenCache, error) {
 	if dir == "" {
 		dirs = defaultTokenCacheDirs()
 	}
+	var lastErr error
 	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0o700); err == nil {
-			return &tokenCache{dir: d}, nil
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			lastErr = err
+			continue
 		}
+		// MkdirAll leaves the mode of an existing directory as it is, and the cache
+		// holds refresh tokens: use a default directory only if it can be made
+		// private. A directory the caller chose is used as it is.
+		if dir == "" {
+			if err := os.Chmod(d, 0o700); err != nil {
+				lastErr = err
+				continue
+			}
+		}
+		return &tokenCache{dir: d}, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("unable to create the token cache directory: %w", lastErr)
 	}
 	return nil, errors.New("unable to create the token cache directory")
 }
