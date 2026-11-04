@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"strconv"
@@ -82,6 +83,24 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+	oauthU2MTimeout  time.Duration
+
+	// Default query tags, keyed by tag name
+	queryTags map[string]string
+
+	// Azure service principal options
+	azureClientID     string
+	azureClientSecret string
+	azureTenantID     string
+
+	// OIDC token federation options
+	oidcClientID      string
+	oidcTokenFilepath string
+	oauthRedirectURL  string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -99,7 +118,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	_, login, err := d.resolveLoginMethod()
+	loginName, login, err := d.resolveLoginMethod()
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +127,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
 		dbsql.WithArrowNativeDecimal(true),
-		login.build(d),
+		login.connOption(loginName, d),
 	}
 
 	// Validate and set custom port
@@ -172,6 +191,10 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 			MaxConnsPerHost:       100,
 		}
 		opts = append(opts, dbsql.WithTransport(transport))
+	}
+
+	if len(d.queryTags) > 0 {
+		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
 	}
 
 	return opts, nil
@@ -267,6 +290,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		catalog:            d.catalog,
 		dbSchema:           d.schema,
+		queryTags:          maps.Clone(d.queryTags),
 		conn:               c,
 	}
 
@@ -338,7 +362,32 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionAzureClientID:
+		return d.azureClientID, nil
+	case OptionAzureClientSecret:
+		return d.azureClientSecret, nil
+	case OptionAzureTenantID:
+		return d.azureTenantID, nil
+	case OptionOIDCClientID:
+		return d.oidcClientID, nil
+	case OptionOIDCTokenFilepath:
+		return d.oidcTokenFilepath, nil
+	case OptionOAuthRedirectURL:
+		return d.oauthRedirectURL, nil
+	case OptionOAuthScopes:
+		return d.oauthScopesValue, nil
+	case OptionExternalBrowserTimeout:
+		if d.oauthU2MTimeout > 0 {
+			return d.oauthU2MTimeout.String(), nil
+		}
+		return "", nil
 	default:
+		if name, ok := queryTagName(key); ok {
+			if v, ok := d.queryTags[name]; ok {
+				return v, nil
+			}
+			return "", queryTagNotSet(&d.ErrorHelper, name)
+		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
@@ -512,7 +561,45 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionAzureClientID:
+		d.azureClientID = value
+	case OptionAzureClientSecret:
+		d.azureClientSecret = value
+	case OptionAzureTenantID:
+		d.azureTenantID = value
+	case OptionOIDCClientID:
+		d.oidcClientID = value
+	case OptionOIDCTokenFilepath:
+		d.oidcTokenFilepath = value
+	case OptionOAuthRedirectURL:
+		if err := validateBrowserRedirectURL(value); err != nil {
+			return err
+		}
+		d.oauthRedirectURL = value
+	case OptionOAuthScopes:
+		scopes, err := parseScopes(value)
+		if err != nil {
+			return err
+		}
+		d.oauthScopes = scopes
+		d.oauthScopesValue = value
+	case OptionExternalBrowserTimeout:
+		if value == "" {
+			d.oauthU2MTimeout = 0
+			break
+		}
+		timeout, err := time.ParseDuration(value)
+		if err != nil || timeout <= 0 {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] invalid external browser timeout '%s': must be a positive duration such as '2m'", value),
+			}
+		}
+		d.oauthU2MTimeout = timeout
 	default:
+		if name, ok := queryTagName(key); ok {
+			return d.setQueryTag(name, value)
+		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
