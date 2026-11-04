@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"strconv"
@@ -82,6 +83,17 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+
+	// Default query tags, keyed by tag name
+	queryTags map[string]string
+
+	// OIDC token federation options
+	oidcClientID      string
+	oidcTokenFilepath string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -99,7 +111,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	_, login, err := d.resolveLoginMethod()
+	loginName, login, err := d.resolveLoginMethod()
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +120,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
 		dbsql.WithArrowNativeDecimal(true),
-		login.build(d),
+		login.connOption(loginName, d),
 	}
 
 	// Validate and set custom port
@@ -172,6 +184,10 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 			MaxConnsPerHost:       100,
 		}
 		opts = append(opts, dbsql.WithTransport(transport))
+	}
+
+	if len(d.queryTags) > 0 {
+		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
 	}
 
 	return opts, nil
@@ -267,6 +283,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		catalog:            d.catalog,
 		dbSchema:           d.schema,
+		queryTags:          maps.Clone(d.queryTags),
 		conn:               c,
 	}
 
@@ -338,7 +355,19 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionOIDCClientID:
+		return d.oidcClientID, nil
+	case OptionOIDCTokenFilepath:
+		return d.oidcTokenFilepath, nil
+	case OptionOAuthScopes:
+		return d.oauthScopesValue, nil
 	default:
+		if name, ok := queryTagName(key); ok {
+			if v, ok := d.queryTags[name]; ok {
+				return v, nil
+			}
+			return "", queryTagNotSet(&d.ErrorHelper, name)
+		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
@@ -512,7 +541,21 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionOIDCClientID:
+		d.oidcClientID = value
+	case OptionOIDCTokenFilepath:
+		d.oidcTokenFilepath = value
+	case OptionOAuthScopes:
+		scopes, err := parseScopes(value)
+		if err != nil {
+			return err
+		}
+		d.oauthScopes = scopes
+		d.oauthScopesValue = value
 	default:
+		if name, ok := queryTagName(key); ok {
+			return d.setQueryTag(name, value)
+		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
