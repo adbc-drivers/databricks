@@ -71,6 +71,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
+        public void Constructor_RealWorldWarehousePathWithOrgId_ExtractsWarehouseIdAndOrgId()
+        {
+            // Production-shaped path: 16-char hex warehouse id and a long numeric org id.
+            using var connection = new StatementExecutionConnection(
+                BaseProperties("/sql/1.0/warehouses/8d1707669a5ea9e2?o=6051921418418893"));
+
+            Assert.Equal("8d1707669a5ea9e2", GetWarehouseId(connection));
+            Assert.Equal("6051921418418893", GetOrgId(connection));
+        }
+
+        [Fact]
         public void Constructor_PathWithoutQueryString_OrgIdIsNull()
         {
             using var connection = new StatementExecutionConnection(
