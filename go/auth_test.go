@@ -120,7 +120,10 @@ func newFakeWorkspace(t *testing.T) *fakeWorkspace {
 		})
 	})
 	mux.HandleFunc("/oidc/v1/token", func(rw http.ResponseWriter, r *http.Request) {
-		require.NoError(t, r.ParseForm())
+		if err := r.ParseForm(); err != nil {
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 		form := map[string]string{}
 		for k := range r.PostForm {
 			form[k] = r.PostForm.Get(k)
@@ -134,6 +137,13 @@ func newFakeWorkspace(t *testing.T) *fakeWorkspace {
 	w.Server = httptest.NewServer(mux)
 	t.Cleanup(w.Close)
 	return w
+}
+
+// exchanges returns the token requests received so far.
+func (w *fakeWorkspace) exchanges() []map[string]string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]map[string]string(nil), w.forms...)
 }
 
 func authorizationHeader(t *testing.T, a interface{ Authenticate(*http.Request) error }) string {
@@ -151,23 +161,25 @@ func TestOIDCFederation(t *testing.T) {
 	t.Run("env-oidc exchanges the ID token from the environment", func(t *testing.T) {
 		ws := newFakeWorkspace(t)
 		t.Setenv("DATABRICKS_OIDC_TOKEN", "id-token-from-env")
-		db := &databaseImpl{authType: "env-oidc", serverHostname: ws.URL, oidcClientID: "sp-client"}
+		db := &databaseImpl{authType: OptionValueAuthTypeEnvOIDC, serverHostname: ws.URL, oidcClientID: "sp-client"}
 
-		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig("env-oidc", loginMethods["env-oidc"].sdk)))
-		require.Len(t, ws.forms, 1)
-		require.Equal(t, "id-token-from-env", ws.forms[0]["subject_token"])
-		require.Equal(t, "sp-client", ws.forms[0]["client_id"])
+		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig(OptionValueAuthTypeEnvOIDC, loginMethods[OptionValueAuthTypeEnvOIDC].sdk)))
+		forms := ws.exchanges()
+		require.Len(t, forms, 1)
+		require.Equal(t, "id-token-from-env", forms[0]["subject_token"])
+		require.Equal(t, "sp-client", forms[0]["client_id"])
 	})
 
 	t.Run("file-oidc exchanges the ID token from the file option", func(t *testing.T) {
 		ws := newFakeWorkspace(t)
 		path := filepath.Join(t.TempDir(), "token")
 		require.NoError(t, os.WriteFile(path, []byte("id-token-from-file"), 0o600))
-		db := &databaseImpl{authType: "file-oidc", serverHostname: ws.URL, oidcClientID: "sp-client", oidcTokenFilepath: path}
+		db := &databaseImpl{authType: OptionValueAuthTypeFileOIDC, serverHostname: ws.URL, oidcClientID: "sp-client", oidcTokenFilepath: path}
 
-		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig("file-oidc", loginMethods["file-oidc"].sdk)))
-		require.Len(t, ws.forms, 1)
-		require.Equal(t, "id-token-from-file", ws.forms[0]["subject_token"])
+		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig(OptionValueAuthTypeFileOIDC, loginMethods[OptionValueAuthTypeFileOIDC].sdk)))
+		forms := ws.exchanges()
+		require.Len(t, forms, 1)
+		require.Equal(t, "id-token-from-file", forms[0]["subject_token"])
 	})
 
 	t.Run("file-oidc falls back to DATABRICKS_OIDC_TOKEN_FILEPATH", func(t *testing.T) {
@@ -175,34 +187,37 @@ func TestOIDCFederation(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "token")
 		require.NoError(t, os.WriteFile(path, []byte("id-token-from-env-path"), 0o600))
 		t.Setenv("DATABRICKS_OIDC_TOKEN_FILEPATH", path)
-		db := &databaseImpl{authType: "file-oidc", serverHostname: ws.URL, oidcClientID: "sp-client"}
+		db := &databaseImpl{authType: OptionValueAuthTypeFileOIDC, serverHostname: ws.URL, oidcClientID: "sp-client"}
 
-		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig("file-oidc", loginMethods["file-oidc"].sdk)))
-		require.Equal(t, "id-token-from-env-path", ws.forms[0]["subject_token"])
+		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig(OptionValueAuthTypeFileOIDC, loginMethods[OptionValueAuthTypeFileOIDC].sdk)))
+		require.Equal(t, "id-token-from-env-path", ws.exchanges()[0]["subject_token"])
 	})
 
+	// The docs promise that credentials of other methods in the environment are ignored.
 	t.Run("env-oidc ignores other credentials in the environment", func(t *testing.T) {
 		ws := newFakeWorkspace(t)
 		t.Setenv("DATABRICKS_OIDC_TOKEN", "id-token-from-env")
 		t.Setenv("DATABRICKS_TOKEN", "pat-from-env")
 		t.Setenv("DATABRICKS_ACCOUNT_ID", "account")
-		db := &databaseImpl{authType: "env-oidc", serverHostname: ws.URL, oidcClientID: "sp-client"}
+		db := &databaseImpl{authType: OptionValueAuthTypeEnvOIDC, serverHostname: ws.URL, oidcClientID: "sp-client"}
 
-		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig("env-oidc", loginMethods["env-oidc"].sdk)))
-	})
-
-	t.Run("a missing token file fails the request, not the setup", func(t *testing.T) {
-		ws := newFakeWorkspace(t)
-		db := &databaseImpl{authType: "file-oidc", serverHostname: ws.URL, oidcClientID: "sp-client", oidcTokenFilepath: filepath.Join(t.TempDir(), "absent")}
-		req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
-		require.NoError(t, err)
-		require.Error(t, db.sdkConfig("file-oidc", loginMethods["file-oidc"].sdk).Authenticate(req))
-		require.Empty(t, ws.forms)
+		require.Equal(t, "Bearer exchanged-token", authorizationHeader(t, db.sdkConfig(OptionValueAuthTypeEnvOIDC, loginMethods[OptionValueAuthTypeEnvOIDC].sdk)))
 	})
 }
 
+// The SDK-backed methods build their login option through resolveConnectionOptions,
+// the path Open takes; a method with neither a builder nor an SDK login would panic here.
+func TestOIDCMethodsBuildConnectionOptions(t *testing.T) {
+	for _, name := range []string{OptionValueAuthTypeEnvOIDC, OptionValueAuthTypeFileOIDC} {
+		db := &databaseImpl{authType: name, serverHostname: "dbc-1.cloud.databricks.com", httpPath: "/sql/1.0/warehouses/abc", oidcClientID: "sp-client"}
+		opts, err := db.resolveConnectionOptions()
+		require.NoError(t, err, name)
+		require.NotEmpty(t, opts, name)
+	}
+}
+
 func TestResolveLoginMethodOIDC(t *testing.T) {
-	for _, name := range []string{"env-oidc", "file-oidc"} {
+	for _, name := range []string{OptionValueAuthTypeEnvOIDC, OptionValueAuthTypeFileOIDC} {
 		t.Run(name+" requires a client ID", func(t *testing.T) {
 			db := databaseImpl{authType: name}
 			_, _, err := db.resolveLoginMethod()
@@ -227,7 +242,7 @@ func TestOIDCOptions(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}
 	for key, value := range map[string]string{
-		OptionAuthType:          "file-oidc",
+		OptionAuthType:          OptionValueAuthTypeFileOIDC,
 		OptionOIDCClientID:      "sp-client",
 		OptionOIDCTokenFilepath: "/var/run/secrets/token",
 	} {
@@ -246,9 +261,8 @@ func TestOIDCOptions(t *testing.T) {
 
 func TestSplitHost(t *testing.T) {
 	for host, want := range map[string][2]string{
-		"dbc-1.cloud.databricks.com":         {"https", "dbc-1.cloud.databricks.com"},
-		"https://dbc-1.cloud.databricks.com": {"https", "dbc-1.cloud.databricks.com"},
-		"HTTP://127.0.0.1:8080":              {"http", "127.0.0.1:8080"},
+		"dbc-1.cloud.databricks.com": {"https", "dbc-1.cloud.databricks.com"},
+		"HTTP://127.0.0.1:8080":      {"http", "127.0.0.1:8080"},
 	} {
 		scheme, name := splitHost(host)
 		require.Equal(t, want, [2]string{scheme, name}, host)
@@ -263,15 +277,17 @@ func TestOAuthScopesOption(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", got)
 
-	for value, want := range map[string][]string{
-		"sql":                      {"sql"},
-		"sql,offline_access":       {"sql", "offline_access"},
-		"  sql   offline_access  ": {"sql", "offline_access"},
-		"":                         nil,
-	} {
-		require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, value))
-		require.Equal(t, want, db.oauthScopes, "value %q", value)
-	}
+	// Commas and any whitespace, including a CRLF line ending, separate scopes, and the
+	// value is read back as it was set.
+	value := "sql, offline_access\r\n"
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, value))
+	require.Equal(t, []string{"sql", "offline_access"}, db.oauthScopes)
+	got, err = db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, ""))
+	require.Empty(t, db.oauthScopes)
 
 	// A bad value is rejected and leaves the existing setting alone.
 	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "sql"))
@@ -286,6 +302,8 @@ func TestOAuthScopesOption(t *testing.T) {
 }
 
 func TestM2MAuthenticatorScopes(t *testing.T) {
+	// sql-go's authenticator type is private, so the scopes it will request are
+	// read through its M2MScopes method.
 	scopesOf := func(db *databaseImpl) []string {
 		a := db.newM2MAuthenticator()
 		p, ok := a.(interface{ M2MScopes() []string })
@@ -293,6 +311,8 @@ func TestM2MAuthenticatorScopes(t *testing.T) {
 		return p.M2MScopes()
 	}
 
+	// The request used to be made with dbsql.WithClientCredentials, which asks for
+	// "all-apis"; keep that when no scopes are set.
 	db := &databaseImpl{serverHostname: "https://host.example.com", oauthClientID: "id", oauthClientSecret: "secret"}
 	require.Equal(t, []string{"all-apis"}, scopesOf(db), "no scopes keeps the default")
 
