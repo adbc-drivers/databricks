@@ -15,53 +15,71 @@
 package databricks
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	dbsqlerr "github.com/databricks/databricks-sql-go/errors"
+	pkgerrors "github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
-// fakeExecutionError implements only the parts of DBExecutionError the inspector uses.
-type fakeExecutionError struct {
-	dbsqlerr.DBExecutionError
+// testExecutionError implements dbsqlerr.DBExecutionError. The driver's own
+// implementation lives in an internal package of databricks-sql-go and cannot
+// be constructed here; the live test in error_inspector_e2e_test.go covers it.
+type testExecutionError struct {
 	sqlState string
 	cause    error
 }
 
-func (e fakeExecutionError) Error() string    { return "fake execution error" }
-func (e fakeExecutionError) Unwrap() error    { return e.cause }
-func (e fakeExecutionError) SqlState() string { return e.sqlState }
+var _ dbsqlerr.DBExecutionError = testExecutionError{}
 
-func TestInspectErrorStatus(t *testing.T) {
-	tests := []struct {
-		name     string
-		inspect  DatabricksErrorInspector
-		sqlState string
-		expected adbc.Status
-	}{
-		{"table or view not found", DatabricksErrorInspector{}, "42P01", adbc.StatusNotFound},
-		{"schema or catalog not found", DatabricksErrorInspector{}, "42704", adbc.StatusNotFound},
-		{"table already exists", DatabricksErrorInspector{}, "42P07", adbc.StatusAlreadyExists},
-		{"unresolved column", DatabricksErrorInspector{}, "42703", adbc.StatusInvalidArgument},
-		{"unresolved column on ingest", DatabricksErrorInspector{ingest: true}, "42703", adbc.StatusAlreadyExists},
-		{"unresolved routine", DatabricksErrorInspector{}, "42883", adbc.StatusNotFound},
-		{"unknown SQLSTATE keeps default", DatabricksErrorInspector{}, "22012", adbc.StatusInternal},
-		{"no SQLSTATE keeps default", DatabricksErrorInspector{}, "", adbc.StatusInternal},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.inspect.InspectError(fakeExecutionError{sqlState: tt.sqlState}, adbc.StatusInternal)
-			require.Equal(t, tt.expected, got.Code)
-			require.Equal(t, tt.sqlState, string(got.SqlState[:len(tt.sqlState)]))
-			require.Equal(t, "fake execution error", got.Msg)
-		})
-	}
+func (e testExecutionError) Error() string                    { return "test execution error" }
+func (e testExecutionError) CorrelationId() string            { return "" }
+func (e testExecutionError) ConnectionId() string             { return "" }
+func (e testExecutionError) StackTrace() pkgerrors.StackTrace { return nil }
+func (e testExecutionError) Cause() error                     { return e.cause }
+func (e testExecutionError) Unwrap() error                    { return e.cause }
+func (e testExecutionError) IsRetryable() bool                { return false }
+func (e testExecutionError) RetryAfter() time.Duration        { return 0 }
+func (e testExecutionError) QueryId() string                  { return "" }
+func (e testExecutionError) SqlState() string                 { return e.sqlState }
+
+func TestInspectErrorMappedSQLState(t *testing.T) {
+	got := DatabricksErrorInspector{}.InspectError(testExecutionError{sqlState: "42P01"}, adbc.StatusInternal)
+	require.Equal(t, adbc.StatusNotFound, got.Code)
+	require.Equal(t, [5]byte{'4', '2', 'P', '0', '1'}, got.SqlState)
+	require.Equal(t, "test execution error", got.Msg)
 }
 
-func TestInspectErrorWrappedSQLState(t *testing.T) {
-	wrapped := fmt.Errorf("outer: %w", fakeExecutionError{cause: fakeExecutionError{sqlState: "42P01"}})
+func TestInspectErrorUnresolvedColumn(t *testing.T) {
+	err := testExecutionError{sqlState: "42703"}
+	require.Equal(t, adbc.StatusInvalidArgument,
+		DatabricksErrorInspector{}.InspectError(err, adbc.StatusInternal).Code)
+	require.Equal(t, adbc.StatusAlreadyExists,
+		DatabricksErrorInspector{ingest: true}.InspectError(err, adbc.StatusInternal).Code)
+}
+
+func TestInspectErrorUnmappedSQLStateKeepsDefault(t *testing.T) {
+	got := DatabricksErrorInspector{}.InspectError(testExecutionError{sqlState: "22012"}, adbc.StatusInternal)
+	require.Equal(t, adbc.StatusInternal, got.Code)
+	require.Equal(t, [5]byte{'2', '2', '0', '1', '2'}, got.SqlState)
+}
+
+func TestInspectErrorNoSQLStateKeepsDefault(t *testing.T) {
+	got := DatabricksErrorInspector{}.InspectError(testExecutionError{}, adbc.StatusInternal)
+	require.Equal(t, adbc.StatusInternal, got.Code)
+	require.Equal(t, [5]byte{}, got.SqlState)
+
+	got = DatabricksErrorInspector{}.InspectError(errors.New("plain"), adbc.StatusInternal)
+	require.Equal(t, adbc.StatusInternal, got.Code)
+}
+
+func TestInspectErrorWrapperWithoutSQLState(t *testing.T) {
+	wrapped := fmt.Errorf("outer: %w", testExecutionError{cause: testExecutionError{sqlState: "42P01"}})
 	got := DatabricksErrorInspector{}.InspectError(wrapped, adbc.StatusInternal)
 	require.Equal(t, adbc.StatusNotFound, got.Code)
+	require.Equal(t, [5]byte{'4', '2', 'P', '0', '1'}, got.SqlState)
 }
