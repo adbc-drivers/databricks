@@ -27,10 +27,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"crypto/tls"
@@ -52,9 +54,16 @@ const (
 type databaseImpl struct {
 	driverbase.DatabaseImplBase
 
-	// Connection Pool
+	// Connection Pool. mu serialises pool start-up and Close so that concurrent
+	// Open calls cannot each run a login (two browser logins would race for the
+	// same local callback port).
+	mu           sync.Mutex
 	db           *sql.DB
 	needsRefresh bool // Whether we need to re-initialize
+
+	// newPool creates the connection pool; nil means initializeConnectionPool.
+	// Tests replace it to observe start-up without a workspace.
+	newPool func(ctx context.Context) (*sql.DB, error)
 
 	// Connection parameters
 	uri            string
@@ -62,6 +71,7 @@ type databaseImpl struct {
 	httpPath       string
 	accessToken    string
 	authType       string
+	userAgent      string
 	port           int
 	catalog        string
 	schema         string
@@ -82,6 +92,27 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+	oauthU2MTimeout  time.Duration
+
+	// Default query tags, keyed by tag name
+	queryTags map[string]string
+
+	// Session parameters sent when the session opens (databricks.session_param.<name>).
+	sessionParams map[string]string
+
+	// Azure service principal options
+	azureClientID     string
+	azureClientSecret string
+	azureTenantID     string
+
+	// OIDC token federation options
+	oidcClientID      string
+	oidcTokenFilepath string
+	oauthRedirectURL  string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -99,7 +130,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	_, login, err := d.resolveLoginMethod()
+	loginName, login, err := d.resolveLoginMethod()
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +139,11 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
 		dbsql.WithArrowNativeDecimal(true),
-		login.build(d),
+		login.connOption(loginName, d),
 	}
+
+	// An empty entry adds nothing to the User-Agent, so it is passed as is.
+	opts = append(opts, dbsql.WithUserAgentEntry(d.userAgent))
 
 	// Validate and set custom port
 	// Defaults to 443
@@ -174,6 +208,17 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
 
+	// databricks-sql-go keeps the map it is given and WithQueryTags adds QUERY_TAGS to
+	// it, so pass a copy. Applied before the query tags, so that the query tag options
+	// win over a raw "databricks.session_param.QUERY_TAGS".
+	if len(d.sessionParams) > 0 {
+		opts = append(opts, dbsql.WithSessionParams(maps.Clone(d.sessionParams)))
+	}
+
+	if len(d.queryTags) > 0 {
+		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
+	}
+
 	return opts, nil
 }
 
@@ -236,37 +281,61 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
-	// Re-initialize the connection pool and settings if anything
-	// has changed, or we have not initialized yet
-	if d.needsRefresh || d.db == nil {
-		db, err := d.initializeConnectionPool(ctx)
+// getOrCreatePool returns the connection pool, creating it first when it does
+// not exist yet or an option changed. Callers share one start-up: the lock is
+// held while the pool is created, so concurrent callers wait for it and reuse it.
+func (d *databaseImpl) getOrCreatePool(ctx context.Context) (*sql.DB, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-		if err != nil {
-			return nil, err
-		}
-
-		// Close the existing connection pool
-		if d.db != nil {
-			err = d.db.Close()
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		d.db = db
+	if d.db != nil && !d.needsRefresh {
+		return d.db, nil
 	}
 
-	c, err := d.db.Conn(ctx)
-
+	newPool := d.initializeConnectionPool
+	if d.newPool != nil {
+		newPool = d.newPool
+	}
+	db, err := newPool(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	// Close the existing connection pool
+	if d.db != nil {
+		if err := d.db.Close(); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+
+	d.db = db
+	d.needsRefresh = false
+	return d.db, nil
+}
+
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
+	db, err := d.getOrCreatePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// The connection starts from the options as they are now; read them under the
+	// lock that SetOption writes them under.
+	d.mu.Lock()
+	catalog, schema, queryTags := d.catalog, d.schema, maps.Clone(d.queryTags)
+	d.mu.Unlock()
+
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
+		catalog:            catalog,
+		dbSchema:           schema,
+		queryTags:          queryTags,
 		conn:               c,
 	}
 
@@ -280,6 +349,8 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 }
 
 func (d *databaseImpl) Close(ctx context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	defer func() {
 		d.needsRefresh = true
 		d.db = nil
@@ -291,6 +362,12 @@ func (d *databaseImpl) Close(ctx context.Context) error {
 }
 
 func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.getOption(ctx, key)
+}
+
+func (d *databaseImpl) getOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyURI:
 		return d.uri, nil
@@ -302,6 +379,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.accessToken, nil
 	case OptionAuthType:
 		return d.authType, nil
+	case OptionUserAgent:
+		return d.userAgent, nil
 	case OptionPort:
 		return strconv.Itoa(d.port), nil
 	case OptionCatalog:
@@ -338,12 +417,46 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionAzureClientID:
+		return d.azureClientID, nil
+	case OptionAzureClientSecret:
+		return d.azureClientSecret, nil
+	case OptionAzureTenantID:
+		return d.azureTenantID, nil
+	case OptionOIDCClientID:
+		return d.oidcClientID, nil
+	case OptionOIDCTokenFilepath:
+		return d.oidcTokenFilepath, nil
+	case OptionOAuthRedirectURL:
+		return d.oauthRedirectURL, nil
+	case OptionOAuthScopes:
+		return d.oauthScopesValue, nil
+	case OptionExternalBrowserTimeout:
+		if d.oauthU2MTimeout > 0 {
+			return d.oauthU2MTimeout.String(), nil
+		}
+		return "", nil
 	default:
+		if name, ok := sessionParamName(key); ok {
+			if v, ok := d.sessionParams[name]; ok {
+				return v, nil
+			}
+			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "session parameter not set: %s", name)
+		}
+		if name, ok := queryTagName(key); ok {
+			if v, ok := d.queryTags[name]; ok {
+				return v, nil
+			}
+			return "", queryTagNotSet(&d.ErrorHelper, name)
+		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
 func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -366,7 +479,7 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	}
 
 	for k, v := range options {
-		err := d.SetOption(ctx, k, v)
+		err := d.setOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -374,7 +487,15 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	return nil
 }
 
+// SetOption and GetOption share d.mu with pool start-up, so they wait for a
+// login that is in progress and never race with it.
 func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.setOption(ctx, key, value)
+}
+
+func (d *databaseImpl) setOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
@@ -402,6 +523,8 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			}
 		}
 		d.authType = value
+	case OptionUserAgent:
+		d.userAgent = value
 	case OptionPort:
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
@@ -512,7 +635,48 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionAzureClientID:
+		d.azureClientID = value
+	case OptionAzureClientSecret:
+		d.azureClientSecret = value
+	case OptionAzureTenantID:
+		d.azureTenantID = value
+	case OptionOIDCClientID:
+		d.oidcClientID = value
+	case OptionOIDCTokenFilepath:
+		d.oidcTokenFilepath = value
+	case OptionOAuthRedirectURL:
+		if err := validateBrowserRedirectURL(value); err != nil {
+			return err
+		}
+		d.oauthRedirectURL = value
+	case OptionOAuthScopes:
+		scopes, err := parseScopes(value)
+		if err != nil {
+			return err
+		}
+		d.oauthScopes = scopes
+		d.oauthScopesValue = value
+	case OptionExternalBrowserTimeout:
+		if value == "" {
+			d.oauthU2MTimeout = 0
+			break
+		}
+		timeout, err := time.ParseDuration(value)
+		if err != nil || timeout <= 0 {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] invalid external browser timeout '%s': must be a positive duration such as '2m'", value),
+			}
+		}
+		d.oauthU2MTimeout = timeout
 	default:
+		if name, ok := sessionParamName(key); ok {
+			return d.setSessionParam(name, value)
+		}
+		if name, ok := queryTagName(key); ok {
+			return d.setQueryTag(name, value)
+		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
