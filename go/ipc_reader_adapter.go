@@ -38,6 +38,10 @@ import (
 	dbsqlrows "github.com/databricks/databricks-sql-go/rows"
 )
 
+// MetadataKeyDatabricksQueryID is the schema metadata key under which the result
+// carries the ID Databricks assigned to the query (see system.query.history).
+const MetadataKeyDatabricksQueryID = "DATABRICKS_QUERY_ID"
+
 // ipcReaderAdapter uses the new IPC stream interface for Arrow access
 type ipcReaderAdapter struct {
 	rows          driver.Rows
@@ -51,7 +55,7 @@ type ipcReaderAdapter struct {
 }
 
 // newIPCReaderAdapter creates a RecordReader using direct IPC stream access
-func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordReader, error) {
+func newIPCReaderAdapter(ctx context.Context, rows driver.Rows, queryID string) (array.RecordReader, error) {
 	ipcRows, ok := rows.(dbsqlrows.Rows)
 	if !ok {
 		return nil, adbc.Error{
@@ -127,7 +131,20 @@ func newIPCReaderAdapter(ctx context.Context, rows driver.Rows) (array.RecordRea
 		}
 	}
 
+	if queryID != "" {
+		adapter.schema = schemaWithQueryID(adapter.schema, queryID)
+	}
+
 	return adapter, nil
+}
+
+// schemaWithQueryID returns schema with the query ID added to its metadata. The
+// input schema is not modified.
+func schemaWithQueryID(schema *arrow.Schema, queryID string) *arrow.Schema {
+	meta := schema.Metadata().ToMap()
+	meta[MetadataKeyDatabricksQueryID] = queryID
+	finalMeta := arrow.MetadataFrom(meta)
+	return arrow.NewSchema(schema.Fields(), &finalMeta)
 }
 
 func (r *ipcReaderAdapter) loadNextReader() error {
