@@ -41,6 +41,9 @@ type statementImpl struct {
 	prepared          *sql.Stmt
 	boundStream       array.RecordReader
 	bulkIngestOptions driverbase.BulkIngestOptions
+
+	// Per-statement query tag overrides, keyed by tag name
+	queryTags map[string]string
 }
 
 func (s *statementImpl) Close(ctx context.Context) error {
@@ -62,6 +65,9 @@ func (s *statementImpl) Close(ctx context.Context) error {
 }
 
 func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
+	if name, ok := queryTagName(key); ok {
+		return s.setQueryTag(name, val)
+	}
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {
@@ -69,6 +75,16 @@ func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	}
 
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported statement option: %s=%s", key, val)
+}
+
+func (s *statementImpl) GetOption(ctx context.Context, key string) (string, error) {
+	if name, ok := queryTagName(key); ok {
+		if v, ok := s.getQueryTag(name); ok {
+			return v, nil
+		}
+		return "", queryTagNotSet(&s.ErrorHelper, name)
+	}
+	return s.StatementImplBase.GetOption(ctx, key)
 }
 
 func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
@@ -101,6 +117,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	if s.query == "" {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
 	}
+	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.boundStream != nil {
 		stream := s.boundStream
 		s.boundStream = nil
@@ -173,6 +190,7 @@ func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driv
 }
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	ctx = withQueryTags(ctx, s.effectiveQueryTags())
 	if s.bulkIngestOptions.IsSet() {
 		return s.executeIngest(ctx)
 	}

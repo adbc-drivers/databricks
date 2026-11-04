@@ -43,6 +43,9 @@ type connectionImpl struct {
 	catalog  string
 	dbSchema string
 
+	// Default query tags inherited from the database
+	queryTags map[string]string
+
 	// Database connection
 	conn *sql.Conn
 }
