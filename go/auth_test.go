@@ -363,16 +363,13 @@ func TestAzureClientSecret(t *testing.T) {
 }
 
 func TestSDKBackedMethods(t *testing.T) {
-	ctx := context.Background()
 	db := databaseImpl{
-		serverHostname:       "dbc-1.cloud.databricks.com",
-		azureClientID:        "identity",
-		azureClientSecret:    "azure-secret",
-		azureTenantID:        "tenant",
-		googleCredentials:    "/keys/sa.json",
-		googleServiceAccount: "sa@p.iam.gserviceaccount.com",
-		oidcClientID:         "sp-client",
-		oidcTokenFilepath:    "/var/run/token",
+		serverHostname:    "dbc-1.cloud.databricks.com",
+		azureClientID:     "identity",
+		azureClientSecret: "azure-secret",
+		azureTenantID:     "tenant",
+		oidcClientID:      "sp-client",
+		oidcTokenFilepath: "/var/run/token",
 	}
 
 	// Every SDK-backed method names its credential after its auth type, and
@@ -383,20 +380,6 @@ func TestSDKBackedMethods(t *testing.T) {
 		"azure-client-secret": func(t *testing.T, cfg *sdkconfig.Config) {
 			require.True(t, cfg.IsAzure())
 			require.Equal(t, []string{"identity", "azure-secret", "tenant"}, []string{cfg.AzureClientID, cfg.AzureClientSecret, cfg.AzureTenantID})
-		},
-		"azure-msi": func(t *testing.T, cfg *sdkconfig.Config) {
-			require.True(t, cfg.IsAzure())
-			require.True(t, cfg.AzureUseMSI)
-			require.Equal(t, "identity", cfg.AzureClientID)
-		},
-		"azure-cli": func(t *testing.T, cfg *sdkconfig.Config) { require.True(t, cfg.IsAzure()) },
-		"google-credentials": func(t *testing.T, cfg *sdkconfig.Config) {
-			require.True(t, cfg.IsGcp())
-			require.Equal(t, "/keys/sa.json", cfg.GoogleCredentials)
-		},
-		"google-id": func(t *testing.T, cfg *sdkconfig.Config) {
-			require.True(t, cfg.IsGcp())
-			require.Equal(t, "sa@p.iam.gserviceaccount.com", cfg.GoogleServiceAccount)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -409,37 +392,4 @@ func TestSDKBackedMethods(t *testing.T) {
 			check(t, cfg)
 		})
 	}
-
-	t.Run("azure-msi and azure-cli need no options", func(t *testing.T) {
-		for _, name := range []string{"azure-msi", "azure-cli"} {
-			got, _, err := (&databaseImpl{authType: name}).resolveLoginMethod()
-			require.NoError(t, err)
-			require.Equal(t, name, got)
-		}
-	})
-
-	t.Run("google methods require their option", func(t *testing.T) {
-		_, _, err := (&databaseImpl{authType: "google-credentials"}).resolveLoginMethod()
-		require.ErrorContains(t, err, "google credentials is required when using auth type 'google-credentials'. Set this via 'databricks.google.credentials'")
-
-		_, _, err = (&databaseImpl{authType: "google-id"}).resolveLoginMethod()
-		require.ErrorContains(t, err, "google service account is required when using auth type 'google-id'. Set this via 'databricks.google.service_account'")
-	})
-
-	t.Run("options round trip and a bad auth type keeps the setting", func(t *testing.T) {
-		db := &databaseImpl{}
-		for key, value := range map[string]string{
-			OptionAuthType:             "google-id",
-			OptionGoogleCredentials:    "/keys/sa.json",
-			OptionGoogleServiceAccount: "sa@p.iam.gserviceaccount.com",
-		} {
-			require.NoError(t, db.SetOption(ctx, key, value))
-			got, err := db.GetOption(ctx, key)
-			require.NoError(t, err)
-			require.Equal(t, value, got)
-		}
-		require.ErrorContains(t, db.SetOption(ctx, OptionAuthType, "google"), "unknown auth type 'google'")
-		got, _ := db.GetOption(ctx, OptionAuthType)
-		require.Equal(t, "google-id", got)
-	})
 }

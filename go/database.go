@@ -102,10 +102,6 @@ type databaseImpl struct {
 	azureClientSecret string
 	azureTenantID     string
 
-	// Google options
-	googleCredentials    string
-	googleServiceAccount string
-
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
