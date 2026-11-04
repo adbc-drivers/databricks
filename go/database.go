@@ -91,6 +91,11 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+	oauthU2MTimeout  time.Duration
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
@@ -106,8 +111,6 @@ type databaseImpl struct {
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
-	oauthScopes       []string
-	oauthU2MTimeout   time.Duration
 	oauthRedirectURL  string
 }
 
@@ -318,11 +321,17 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		return nil, err
 	}
 
+	// The connection starts from the options as they are now; read them under the
+	// lock that SetOption writes them under.
+	d.mu.Lock()
+	catalog, schema, queryTags := d.catalog, d.schema, maps.Clone(d.queryTags)
+	d.mu.Unlock()
+
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
-		queryTags:          maps.Clone(d.queryTags),
+		catalog:            catalog,
+		dbSchema:           schema,
+		queryTags:          queryTags,
 		conn:               c,
 	}
 
@@ -349,6 +358,12 @@ func (d *databaseImpl) Close(ctx context.Context) error {
 }
 
 func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.getOption(ctx, key)
+}
+
+func (d *databaseImpl) getOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyURI:
 		return d.uri, nil
@@ -409,7 +424,7 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 	case OptionOAuthRedirectURL:
 		return d.oauthRedirectURL, nil
 	case OptionOAuthScopes:
-		return strings.Join(d.oauthScopes, " "), nil
+		return d.oauthScopesValue, nil
 	case OptionExternalBrowserTimeout:
 		if d.oauthU2MTimeout > 0 {
 			return d.oauthU2MTimeout.String(), nil
@@ -426,13 +441,16 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 			if v, ok := d.queryTags[name]; ok {
 				return v, nil
 			}
-			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+			return "", queryTagNotSet(&d.ErrorHelper, name)
 		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
 func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -455,7 +473,7 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	}
 
 	for k, v := range options {
-		err := d.SetOption(ctx, k, v)
+		err := d.setOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -463,7 +481,15 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	return nil
 }
 
+// SetOption and GetOption share d.mu with pool start-up, so they wait for a
+// login that is in progress and never race with it.
 func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.setOption(ctx, key, value)
+}
+
+func (d *databaseImpl) setOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
@@ -622,6 +648,7 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			return err
 		}
 		d.oauthScopes = scopes
+		d.oauthScopesValue = value
 	case OptionExternalBrowserTimeout:
 		if value == "" {
 			d.oauthU2MTimeout = 0
