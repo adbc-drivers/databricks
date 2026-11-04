@@ -352,7 +352,7 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 			if v, ok := d.queryTags[name]; ok {
 				return v, nil
 			}
-			return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+			return "", queryTagNotSet(&d.ErrorHelper, name)
 		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
