@@ -115,46 +115,6 @@ var loginMethods = map[string]loginMethod{
 			},
 		},
 	},
-	// Azure managed identity. The client ID is optional and selects a
-	// user-assigned identity.
-	OptionValueAuthTypeAzureMSI: {
-		optional: []string{OptionAzureClientID},
-		sdk: &sdkLogin{
-			cloud:       environment.CloudAzure,
-			credentials: sdkconfig.AzureMsiCredentials{},
-			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
-				cfg.AzureUseMSI = true
-				cfg.AzureClientID = d.azureClientID
-			},
-		},
-	},
-	// Azure CLI: uses the current `az login` session.
-	OptionValueAuthTypeAzureCLI: {
-		sdk: &sdkLogin{cloud: environment.CloudAzure, credentials: sdkconfig.AzureCliCredentials{}},
-	},
-	// Google service account key, as JSON or the path of a JSON file.
-	OptionValueAuthTypeGoogleCredentials: {
-		required: []authField{
-			{OptionGoogleCredentials, "google credentials", func(d *databaseImpl) string { return d.googleCredentials }},
-		},
-		sdk: &sdkLogin{
-			cloud:       environment.CloudGCP,
-			credentials: sdkconfig.GoogleCredentials{},
-			apply:       func(d *databaseImpl, cfg *sdkconfig.Config) { cfg.GoogleCredentials = d.googleCredentials },
-		},
-	},
-	// Google ID token of a service account, from the application default
-	// credentials of the environment.
-	OptionValueAuthTypeGoogleID: {
-		required: []authField{
-			{OptionGoogleServiceAccount, "google service account", func(d *databaseImpl) string { return d.googleServiceAccount }},
-		},
-		sdk: &sdkLogin{
-			cloud:       environment.CloudGCP,
-			credentials: sdkconfig.GoogleDefaultCredentials{},
-			apply:       func(d *databaseImpl, cfg *sdkconfig.Config) { cfg.GoogleServiceAccount = d.googleServiceAccount },
-		},
-	},
 }
 
 // secretAuthOptions are the auth options that hold a secret. The contract file
@@ -163,7 +123,6 @@ var secretAuthOptions = map[string]bool{
 	OptionAccessToken:       true,
 	OptionOAuthClientSecret: true,
 	OptionAzureClientSecret: true,
-	OptionGoogleCredentials: true,
 }
 
 // splitHost splits the server host name into its URL scheme and bare host.

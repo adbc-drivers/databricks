@@ -121,7 +121,7 @@ Examples:
 The auth types, the options each one uses and the options it requires are also listed in machine-readable form in [`go/auth_contract.json`](../auth_contract.json).
 
 `databricks.auth_type`
-: **Values:** `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials`, `google-id`. **Default:** (empty, inferred from the options that are set)
+: **Values:** `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
 
   How to authenticate.
 
@@ -130,19 +130,15 @@ The auth types, the options each one uses and the options it requires are also l
   - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
-  - `azure-msi`: Azure managed identity. `databricks.azure.client_id` is optional and selects a user-assigned identity.
-  - `azure-cli`: the current Azure CLI (`az login`) session. Needs no options.
-  - `google-credentials`: Google service account key. Requires `databricks.google.credentials`.
-  - `google-id`: Google ID token of a service account, from the application default credentials of the environment. Requires `databricks.google.service_account`.
 
-  The methods backed by the Databricks SDK (for example `env-oidc`, `file-oidc`, `azure-client-secret`, `azure-msi`, `azure-cli`, `google-credentials` and `google-id`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
+  The methods backed by the Databricks SDK (`env-oidc`, `file-oidc`, `azure-client-secret`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
 `databricks.azure.client_id`
 : **Default:** (empty)
 
-  The application (client) ID of the Entra ID service principal. Required for `azure-client-secret`. For `azure-msi`, the optional client ID of a user-assigned managed identity.
+  The application (client) ID of the Entra ID service principal. Required for `azure-client-secret`.
 
 `databricks.azure.client_secret`
 : **Default:** (empty)
@@ -153,16 +149,6 @@ The auth types, the options each one uses and the options it requires are also l
 : **Default:** (empty)
 
   The Entra ID tenant ID. Required for `azure-client-secret`; the driver does not discover it.
-
-`databricks.google.credentials`
-: **Default:** (empty)
-
-  The Google service account key, as JSON or the path of a JSON file. Required for `google-credentials`.
-
-`databricks.google.service_account`
-: **Default:** (empty)
-
-  The email of the Google service account to get an ID token for. Required for `google-id`.
 
 `databricks.oauth.scopes`
 : **Default:** (empty, requests `all-apis`)

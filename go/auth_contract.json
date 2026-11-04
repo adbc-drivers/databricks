@@ -13,8 +13,6 @@
     "databricks.azure.client_id": {"secret": false},
     "databricks.azure.client_secret": {"secret": true},
     "databricks.azure.tenant_id": {"secret": false},
-    "databricks.google.credentials": {"secret": true},
-    "databricks.google.service_account": {"secret": false},
     "databricks.oidc.client_id": {"secret": false},
     "databricks.oidc.token_filepath": {"secret": false}
   },
@@ -37,22 +35,6 @@
     },
     "azure-client-secret": {
       "required": ["databricks.azure.client_id", "databricks.azure.client_secret", "databricks.azure.tenant_id"],
-      "optional": []
-    },
-    "azure-msi": {
-      "required": [],
-      "optional": ["databricks.azure.client_id"]
-    },
-    "azure-cli": {
-      "required": [],
-      "optional": []
-    },
-    "google-credentials": {
-      "required": ["databricks.google.credentials"],
-      "optional": []
-    },
-    "google-id": {
-      "required": ["databricks.google.service_account"],
       "optional": []
     }
   }
