@@ -53,7 +53,7 @@ conn = dbapi.connect(
 
 Note: The example above is for Python using the [adbc-driver-manager](https://pypi.org/project/adbc-driver-manager) package but the process will be similar for other driver managers.
 
-Several connections can be opened from one database at the same time (for example from several threads). The first one starts the connection pool, including any login; the others wait for it and share the pool. This keeps two browser logins from competing for the same local callback port. Changing a database option makes the next connection start a new pool.
+Several connections can be opened from one database at the same time. The first one starts the connection pool, including any login, and the others wait for it and share the pool. Changing a database option makes the next connection start a new pool. Setting or reading an option, and closing the database, wait for a start-up that is in progress.
 
 ### Connection String Format
 
@@ -161,12 +161,12 @@ The auth types, the options each one uses and the options it requires are also l
 `databricks.azure.tenant_id`
 : **Default:** (empty)
 
-  The Entra ID tenant ID. Required for `azure-client-secret`; the driver does not discover it.
+  The Entra ID tenant ID. Required for `azure-client-secret`.
 
 `databricks.oauth.scopes`
-: **Default:** (empty, requests `all-apis`)
+: **Default:** (empty; `oauth-m2m` requests `all-apis`)
 
-  The OAuth scopes `oauth-m2m` and `external-browser` request, separated by spaces or commas (for example `sql`). Set this when the service principal's secret is limited to scopes other than `all-apis`. For `external-browser`, `offline_access` and the cloud's SQL scope are always added, and nothing else by default: dbt-databricks v1 defaults to `all-apis offline_access`, so a client that wants the same scopes must set this option.
+  The OAuth scopes `oauth-m2m` and `external-browser` request, separated by spaces or commas (for example `sql`). For `oauth-m2m`, set this when the service principal's secret is limited to scopes other than `all-apis`. For `external-browser`, `offline_access` and the cloud's SQL scope are always added, and nothing else by default; dbt-databricks v1 (`credentials.py`) defaults to `all-apis offline_access`, so a client that wants the same scopes must set this option.
 
 `databricks.oidc.client_id`
 : **Default:** (empty)
@@ -183,44 +183,27 @@ The auth types, the options each one uses and the options it requires are also l
 `databricks.user_agent`
 : **Default:** (empty)
 
-  A client name, such as `dbt`, that the driver adds to the `User-Agent` of its requests so that Databricks can attribute the traffic (for example in `system.access.audit`). The `User-Agent` is then `<driver name>/<driver version> (<entry>)`, built by [`BuildUserAgent`](https://github.com/databricks/databricks-sql-go/blob/v1.17.0/internal/client/useragent.go) in databricks-sql-go; with no entry it is `<driver name>/<driver version>`. A `uri` cannot be combined with individual options, so with a `uri` use the `userAgentEntry=<name>` parameter in its query instead.
+  A client name, such as `dbt`, that the driver adds to the `User-Agent` of its requests so that Databricks can attribute the traffic (for example in `system.access.audit`). With a `uri`, use the `userAgentEntry=<name>` parameter in its query instead.
 
 ### Session Parameter Options
-
-Session parameters are Databricks SQL configuration settings (such as `ansi_mode` or `timezone`) that the driver sends when it opens the session. Set one per option, by appending the parameter name to the option prefix.
 
 `databricks.session_param.<name>`
 : **Values:** a string. **Default:** (not set)
 
-  Sets the session parameter `<name>`, for example `databricks.session_param.ansi_mode` set to `false`.
-
-  - The parameters are sent once, when the session opens, and apply to every statement on it.
-  - Reading a parameter that is not set returns `NOT_FOUND`.
-  - The name must not be empty or blank; an empty name is rejected with `INVALID_ARGUMENT` and the parameters already set are left unchanged. The driver does not check the name or value; Databricks reports an unknown parameter or a bad value when the session opens.
-  - The parameters are used when connecting with the individual connection options. They are not applied when the connection is given as a `uri`.
-  - `QUERY_TAGS` set this way (in any letter case) is replaced by the tags set with the `databricks.query_tag.<name>` options (see [Query Tag Options](#query-tag-options)).
+  Sets the Databricks SQL session parameter `<name>` (such as `ansi_mode` or `timezone`), for example `databricks.session_param.ansi_mode` set to `false`. The parameters are sent when the session opens, and are not applied when the connection is given as a `uri`. The driver does not check the name or value, and rejects an empty name with `INVALID_ARGUMENT`. `QUERY_TAGS` set this way (in any letter case) is replaced by the tags set with the `databricks.query_tag.<name>` options.
 
 ### Query Tag Options
-
-Query tags label the statements the driver runs. Databricks records them in `system.query.history` (the `query_tags` column). Tags are set one per option, by appending the tag name to the option prefix.
 
 `databricks.query_tag.<name>`
 : **Values:** a non-empty string. **Default:** (not set)
 
-  Sets the query tag `<name>`, for example `databricks.query_tag.team` set to `data-platform`.
+  Sets the query tag `<name>`, for example `databricks.query_tag.team`. Databricks records query tags in `system.query.history`. Set on the database, a tag is a default for every statement; set on a statement, it overrides the default of the same name for that statement only. Reading a tag that is not set returns `NOT_FOUND`.
 
-  - On the database, the tag is a default. The driver sends the defaults as the session-level `QUERY_TAGS` setting when it connects, and again with each statement.
-  - On a statement, the tag adds to the defaults or, when a default has the same name, overrides it in the tags the driver sends with that statement. It applies to that statement only. A tag cannot be removed on a statement. How Databricks combines the session-level and statement-level tags on the server is not asserted here.
-  - The tags are sent with statements run through `ExecuteQuery` and `ExecuteUpdate` (including bulk ingest). Calls the driver makes for metadata (such as `GetObjects`) carry only the session-level tags.
-  - Reading the option on a statement returns the statement's value, or the connection default when the statement has none. Reading a tag that is not set returns `NOT_FOUND`.
-
-  The name must not be empty or blank and must not contain `,` or `:` (the wire format is comma-separated `name:value` pairs and escapes only backslashes in names). The value must not be empty. A value may be at most 128 characters after escaping (the driver escapes backslash, comma and colon), and at most 20 tags may be sent with a statement. These are the limits dbt-databricks enforces in [`QueryTagsUtils`](https://github.com/databricks/dbt-databricks/blob/main/dbt/adapters/databricks/utils.py). An invalid option is rejected with `INVALID_ARGUMENT` and the tags already set are left unchanged.
+  The name must not be empty or contain `,` or `:`. The value must not be empty and may be at most 128 characters after escaping (backslash, comma and colon each count twice), and at most 20 tags are sent with a statement, the limits dbt-databricks enforces. An invalid option is rejected with `INVALID_ARGUMENT` and the tags already set are left unchanged.
 
 ### Result Metadata
 
-Each result stream returned by `ExecuteQuery` has the ID that Databricks assigned to the query in its schema metadata, under the key `DATABRICKS_QUERY_ID` (the Go constant `MetadataKeyDatabricksQueryID`). Use it to find the query in `system.query.history` or in the Databricks query profile.
-
-In Python, for example, `reader.schema.metadata[b"DATABRICKS_QUERY_ID"]`. If Databricks does not report an ID for the statement, the key is absent. The ID is not on the schemas of individual record batches.
+Each result stream returned by `ExecuteQuery` has the ID that Databricks assigned to the query in its schema metadata, under the key `DATABRICKS_QUERY_ID` (the Go constant `MetadataKeyDatabricksQueryID`). Use it to find the query in `system.query.history`. If Databricks does not report an ID for the statement, the key is absent.
 
 ## Feature & Type Support
 

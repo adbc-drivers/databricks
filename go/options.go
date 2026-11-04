@@ -225,9 +225,10 @@ var databaseOptions = map[string]optionDef{
 				return err
 			}
 			d.oauthScopes = scopes
+			d.oauthScopesValue = value
 			return nil
 		},
-		get: func(d *databaseImpl) string { return strings.Join(d.oauthScopes, " ") },
+		get: func(d *databaseImpl) string { return d.oauthScopesValue },
 	},
 	OptionExternalBrowserTimeout: {
 		set: func(d *databaseImpl, value string) error {

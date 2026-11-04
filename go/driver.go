@@ -65,12 +65,11 @@ const (
 
 	// Authentication. When auth_type is not set, the method is inferred from the
 	// other options that are set.
-	OptionAuthType              = "databricks.auth_type"
-	OptionValueAuthTypePAT      = "pat"
-	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
-	OptionValueAuthTypeEnvOIDC  = "env-oidc"
-	OptionValueAuthTypeFileOIDC = "file-oidc"
-
+	OptionAuthType                       = "databricks.auth_type"
+	OptionValueAuthTypePAT               = "pat"
+	OptionValueAuthTypeOAuthM2M          = "oauth-m2m"
+	OptionValueAuthTypeEnvOIDC           = "env-oidc"
+	OptionValueAuthTypeFileOIDC          = "file-oidc"
 	OptionValueAuthTypeAzureClientSecret = "azure-client-secret"
 
 	// OAuth options

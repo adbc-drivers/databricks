@@ -90,6 +90,11 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+	// oauthScopes is the parsed list and oauthScopesValue the value as set, which
+	// GetOption returns.
+	oauthScopes      []string
+	oauthScopesValue string
+	oauthU2MTimeout  time.Duration
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
@@ -105,8 +110,6 @@ type databaseImpl struct {
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
-	oauthScopes       []string
-	oauthU2MTimeout   time.Duration
 	oauthRedirectURL  string
 }
 
@@ -137,8 +140,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		login.connOption(loginName, d),
 	}
 
-	// An empty entry adds nothing to the User-Agent, so it is passed as is
-	// (the fork does the same).
+	// An empty entry adds nothing to the User-Agent, so it is passed as is.
 	opts = append(opts, dbsql.WithUserAgentEntry(d.userAgent))
 
 	// Validate and set custom port
@@ -210,12 +212,11 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	if len(d.sessionParams) > 0 {
 		params := maps.Clone(d.sessionParams)
 		if len(d.queryTags) > 0 {
-			// Session parameter names are case-insensitive on the warehouse and
-			// databricks-sql-go sends the keys as given, so a "query_tags"
+			// databricks-sql-go sends the keys as given, so a raw "query_tags"
 			// spelled in another case would be sent next to the QUERY_TAGS built
-			// from the query tag options.
+			// from the query tag options; drop it whatever its case.
 			for name := range params {
-				if strings.EqualFold(name, "QUERY_TAGS") {
+				if strings.EqualFold(name, sessionParamQueryTags) {
 					delete(params, name)
 				}
 			}
@@ -333,11 +334,17 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		return nil, err
 	}
 
+	// The connection starts from the options as they are now; read them under the
+	// lock that SetOption writes them under.
+	d.mu.Lock()
+	catalog, schema, queryTags := d.catalog, d.schema, maps.Clone(d.queryTags)
+	d.mu.Unlock()
+
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		catalog:            d.catalog,
-		dbSchema:           d.schema,
-		queryTags:          maps.Clone(d.queryTags),
+		catalog:            catalog,
+		dbSchema:           schema,
+		queryTags:          queryTags,
 		conn:               c,
 	}
 
@@ -364,6 +371,12 @@ func (d *databaseImpl) Close(ctx context.Context) error {
 }
 
 func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.getOption(ctx, key)
+}
+
+func (d *databaseImpl) getOption(ctx context.Context, key string) (string, error) {
 	if def, ok := databaseOptions[key]; ok {
 		return def.get(d), nil
 	}
@@ -377,12 +390,15 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		if v, ok := d.queryTags[name]; ok {
 			return v, nil
 		}
-		return "", d.ErrorHelper.Errorf(adbc.StatusNotFound, "query tag not set: %s", name)
+		return "", queryTagNotSet(&d.ErrorHelper, name)
 	}
 	return d.DatabaseImplBase.GetOption(ctx, key)
 }
 
 func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -405,7 +421,7 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	}
 
 	for k, v := range options {
-		err := d.SetOption(ctx, k, v)
+		err := d.setOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -413,7 +429,15 @@ func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string
 	return nil
 }
 
+// SetOption and GetOption share d.mu with pool start-up, so they wait for a
+// login that is in progress and never race with it.
 func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.setOption(ctx, key, value)
+}
+
+func (d *databaseImpl) setOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	if def, ok := databaseOptions[key]; ok {

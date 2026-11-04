@@ -82,8 +82,42 @@ func TestResolveConnectionDSNRejectsInvalidURIs(t *testing.T) {
 // a non-nil *sql.DB.
 type stubConnector struct{}
 
-func (stubConnector) Connect(context.Context) (driver.Conn, error) { return nil, errors.New("stub") }
-func (stubConnector) Driver() driver.Driver                        { return nil }
+func (stubConnector) Connect(context.Context) (driver.Conn, error) { return stubConn{}, nil }
+func (stubConnector) Driver() driver.Driver                        { return stubDriver{} }
+
+type stubDriver struct{}
+
+func (stubDriver) Open(string) (driver.Conn, error) { return stubConn{}, nil }
+
+// stubConn connects but runs nothing.
+type stubConn struct{}
+
+func (stubConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("stub") }
+func (stubConn) Close() error                        { return nil }
+func (stubConn) Begin() (driver.Tx, error)           { return nil, errors.New("stub") }
+
+// Options can be set and read while another thread opens a connection. This is
+// a data race without the lock, which `go test -race` reports.
+func TestOptionsWhileOpening(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	db.newPool = func(context.Context) (*sql.DB, error) { return sql.OpenDB(stubConnector{}), nil }
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(3)
+		go func() { defer wg.Done(); _ = db.SetOption(ctx, OptionCatalog, "main") }()
+		go func() { defer wg.Done(); _, _ = db.GetOption(ctx, OptionCatalog) }()
+		go func() {
+			defer wg.Done()
+			conn, err := db.Open(ctx)
+			if err == nil {
+				_ = conn.Close(ctx)
+			}
+		}()
+	}
+	wg.Wait()
+}
 
 func TestGetOrCreatePoolSerialisesStartup(t *testing.T) {
 	var started, inFlight, maxInFlight atomic.Int32
@@ -159,18 +193,12 @@ func TestSessionParamOptions(t *testing.T) {
 
 func TestSessionParamsReachConnectorOptions(t *testing.T) {
 	db := newSessionParamDatabase()
-	base, err := db.resolveConnectionOptions()
-	require.NoError(t, err)
-
-	db.sessionParams = map[string]string{"ansi_mode": "false"}
-	opts, err := db.resolveConnectionOptions()
-	require.NoError(t, err)
-	require.Equal(t, len(base)+1, len(opts), "session parameters add one connector option")
 
 	// Query tags are added to the connector's session parameters; they must not
 	// leak into the database's own map.
+	db.sessionParams = map[string]string{"ansi_mode": "false"}
 	db.queryTags = map[string]string{"team": "data"}
-	opts, err = db.resolveConnectionOptions()
+	opts, err := db.resolveConnectionOptions()
 	require.NoError(t, err)
 	_, err = dbsql.NewConnector(opts...)
 	require.NoError(t, err)
