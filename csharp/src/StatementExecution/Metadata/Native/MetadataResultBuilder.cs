@@ -16,29 +16,60 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Types;
 
-namespace AdbcDrivers.Databricks.StatementExecution
+namespace AdbcDrivers.Databricks.StatementExecution.Metadata.Native
 {
-    internal static class NativeMetadataResultBuilder
+    // Passes the server's Thrift-shaped columns through, filling the few values Thrift derives.
+    internal sealed class MetadataResultBuilder : IMetadataResultBuilder
     {
-        internal static QueryResult Build(
-            MetadataBatches result, Schema schema, MetadataOperation operation,
-            IReadOnlyCollection<string>? tableTypes = null,
-            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
-            => Build(new[] { result }, schema, operation, tableTypes, parentCatalog, parentSchema, parentTable);
+        internal static readonly MetadataResultBuilder Instance = new();
 
-        internal static QueryResult Build(
-            IReadOnlyList<MetadataBatches> results, Schema schema, MetadataOperation operation,
-            IReadOnlyCollection<string>? tableTypes = null,
-            string? parentCatalog = null, string? parentSchema = null, string? parentTable = null)
+        private MetadataResultBuilder() { }
+
+        public QueryResult Catalogs(MetadataBatches result)
+            => Build(result, MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs);
+
+        public QueryResult Schemas(MetadataBatches result)
+            => Build(result, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas);
+
+        public QueryResult Tables(MetadataBatches result, IReadOnlyCollection<string>? tableTypes)
+            => Build(MetadataDecoder.TableRows(result, tableTypes),
+                MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables);
+
+        public QueryResult Columns(IReadOnlyList<MetadataBatches> results, IReadOnlyList<ColumnRow> rows)
         {
-            var rows = MetadataRowReader.NativeRows(
-                results, schema, operation, tableTypes, parentCatalog, parentSchema, parentTable);
+            var schema = MetadataSchemaFactory.CreateColumnMetadataSchema();
+            return Build(NativeMetadataRow.Read(results, schema, MetadataOperation.GetColumns),
+                schema, MetadataOperation.GetColumns);
+        }
+
+        public QueryResult PrimaryKeys(MetadataBatches result, string catalog, string schema, string table)
+            => Build(result, MetadataSchemaFactory.CreatePrimaryKeysSchema(), MetadataOperation.GetPrimaryKeys);
+
+        public QueryResult ForeignKeys(MetadataBatches result,
+            string? parentCatalog, string? parentSchema, string? parentTable,
+            string catalog, string schema, string table)
+        {
+            var resultSchema = MetadataSchemaFactory.CreateCrossReferenceSchema();
+            var rows = NativeMetadataRow.Read(result, resultSchema, MetadataOperation.GetCrossReference)
+                .Where(row => MetadataRowReader.MatchesParent(parentCatalog, parentSchema, parentTable,
+                    row.String("PKTABLE_CAT"), row.String("PKTABLE_SCHEM"), row.String("PKTABLE_NAME")))
+                .ToList();
+            return Build(rows, resultSchema, MetadataOperation.GetCrossReference);
+        }
+
+        private static QueryResult Build(MetadataBatches result, Schema schema, MetadataOperation operation)
+            => Build(NativeMetadataRow.Read(result, schema, operation), schema, operation);
+
+        private static QueryResult Build(
+            IReadOnlyList<NativeMetadataRow> rows, Schema schema, MetadataOperation operation)
+        {
             var arrays = new List<IArrowArray>(schema.FieldsList.Count);
             foreach (var field in schema.FieldsList)
             {

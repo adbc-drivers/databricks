@@ -23,6 +23,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
@@ -253,9 +254,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.All(columns.Results, response => Assert.Equal(2, Assert.Single(response.Batches).Length));
             Assert.Equal(new[] { "foo_bar", "fooxbar" }, columns.Rows.Select(row => row.Catalog));
 
-            var result = NativeMetadataResultBuilder.Build(
-                columns.Results,
-                MetadataSchemaFactory.CreateColumnMetadataSchema(), MetadataOperation.GetColumns);
+            var result = await MetadataRowReader.ColumnsResultAsync(columns, CancellationToken.None);
             using var stream = result.Stream!;
             Assert.Equal(2, result.RowCount);
 

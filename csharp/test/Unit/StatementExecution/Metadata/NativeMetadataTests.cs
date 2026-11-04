@@ -18,16 +18,22 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.StatementExecution;
-using AdbcDrivers.HiveServer2;
+using AdbcDrivers.Databricks.StatementExecution.Metadata;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Types;
 using Xunit;
+using static AdbcDrivers.Databricks.Tests.Unit.StatementExecution.Metadata.MetadataFixtures;
+using Native = AdbcDrivers.Databricks.StatementExecution.Metadata.Native;
 
-namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
+namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution.Metadata
 {
-    public class NativeMetadataResultBuilderTests
+    // Native-only compensation: catalog re-filtering, Thrift ordering and defaults, server passthrough.
+    public class NativeMetadataTests
     {
+        private static IMetadataResultBuilder Builder => Native.MetadataResultBuilder.Instance;
+
         [Theory]
         [InlineData("DECIMAL(10,2)", 0, 0, 10, 2)]
         [InlineData("INT", 10, 0, 10, 0)]
@@ -71,9 +77,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }
 
             using var nativeBatch = new RecordBatch(source, arrays.ToArray(), 1);
-            var result = NativeMetadataResultBuilder.Build(
-                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, "main"),
-                target, MetadataOperation.GetColumns);
+            var result = Columns(new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, "main"));
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
@@ -98,9 +102,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             })).ToArray();
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
 
-            var result = NativeMetadataResultBuilder.Build(
+            var result = Builder.Tables(
                 new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, "main", CatalogFilter.Exact("main")),
-                schema, MetadataOperation.GetTables, tableTypes: new[] { "TABLE" });
+                new[] { "TABLE" });
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
@@ -121,7 +125,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true,
                 "main", CatalogFilter.Exact("main"));
 
-            var result = NativeMetadataResultBuilder.Build(response, schema, MetadataOperation.GetSchemas);
+            var result = Builder.Schemas(response);
             using var reader = result.Stream!;
             using var batch = (await reader.ReadNextRecordBatchAsync())!;
 
@@ -137,7 +141,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData(null, true)]
         [InlineData("main", false)]
         [InlineData("main", true)]
-        public async Task GetTables_FlatAndDecodedResultsShareCatalogFilteringAndOrdering(
+        public async Task GetTables_FlatAndDecodedResultsShareCatalogFilteringAndThriftOrder(
             string? catalog, bool filterTypes)
         {
             var schema = MetadataSchemaFactory.CreateTablesSchema();
@@ -151,30 +155,19 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 ("main", "b", "b_z", "TABLE"),
                 ("main", "a", "a_b", "TABLE"),
             };
-            var arrays = schema.FieldsList.Select(field =>
+            using var nativeBatch = NativeBatch(schema, tables.Length, (field, row) => field switch
             {
-                var builder = new StringArray.Builder();
-                foreach (var table in tables)
-                {
-                    string? value = field.Name switch
-                    {
-                        "TABLE_CAT" => table.Catalog,
-                        "TABLE_SCHEM" => table.Schema,
-                        "TABLE_NAME" => table.Table,
-                        "TABLE_TYPE" => table.Type,
-                        _ => "server_value",
-                    };
-                    if (value == null) builder.AppendNull(); else builder.Append(value);
-                }
-                return (IArrowArray)builder.Build();
-            }).ToArray();
-            using var nativeBatch = new RecordBatch(schema, arrays, tables.Length);
+                "TABLE_CAT" => tables[row].Catalog,
+                "TABLE_SCHEM" => tables[row].Schema,
+                "TABLE_NAME" => tables[row].Table,
+                "TABLE_TYPE" => tables[row].Type,
+                _ => "server_value",
+            });
             string[]? tableTypes = filterTypes ? new[] { "TABLE" } : null;
             var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true,
                 catalog, CatalogFilter.Exact(catalog));
             var decoded = MetadataRowReader.Tables(response, tableTypes);
-            var result = NativeMetadataResultBuilder.Build(
-                response, schema, MetadataOperation.GetTables, tableTypes: tableTypes);
+            var result = Builder.Tables(response, tableTypes);
             using var reader = result.Stream!;
             using var batch = (await reader.ReadNextRecordBatchAsync())!;
             var names = (StringArray)batch.Column("TABLE_NAME");
@@ -203,28 +196,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var target = operation == MetadataOperation.GetSchemas
                 ? MetadataSchemaFactory.CreateSchemasSchema()
                 : MetadataSchemaFactory.CreateColumnMetadataSchema();
-            var fields = operation == MetadataOperation.GetColumns
-                ? target.FieldsList.Take(23).ToArray()
-                : target.FieldsList.ToArray();
             string catalogField = operation == MetadataOperation.GetSchemas ? "TABLE_CATALOG" : "TABLE_CAT";
-            var source = new Schema(fields, null);
-            var arrays = fields.Select(field => field.DataType.TypeId switch
-            {
-                ArrowTypeId.String when field.Name == catalogField =>
-                    (IArrowArray)new StringArray.Builder().Append("comparator_tests").Append("comparator-tests").Build(),
-                ArrowTypeId.String => new StringArray.Builder().Append(field.Name == "TYPE_NAME" ? "INT" : "value")
-                    .Append(field.Name == "TYPE_NAME" ? "INT" : "value").Build(),
-                ArrowTypeId.Int8 => new Int8Array.Builder().Append(0).Append(0).Build(),
-                ArrowTypeId.Int16 => new Int16Array.Builder().Append(0).Append(0).Build(),
-                ArrowTypeId.Int32 => new Int32Array.Builder().Append(0).Append(0).Build(),
-                _ => (IArrowArray)new Int64Array.Builder().Append(0).Append(0).Build(),
-            }).ToArray();
-            using var nativeBatch = new RecordBatch(source, arrays, 2);
+            string[] catalogs = { "comparator_tests", "comparator-tests" };
+            using var nativeBatch = NativeBatch(target, 2, (field, row) =>
+                field == catalogField ? catalogs[row] : field == "TYPE_NAME" ? "INT" : "value");
+            var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, requestedCatalog,
+                CatalogFilter.Exact(requireExactCatalog ? requestedCatalog : null));
 
-            var result = NativeMetadataResultBuilder.Build(
-                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true, requestedCatalog,
-                    CatalogFilter.Exact(requireExactCatalog ? requestedCatalog : null)),
-                target, operation);
+            var result = operation == MetadataOperation.GetSchemas ? Builder.Schemas(response) : Columns(response);
 
             Assert.Equal(expectedRows, result.RowCount);
         }
@@ -253,9 +232,15 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 _ => (IArrowArray)new Int64Array.Builder().Append(1).Build(),
             }).ToArray();
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
+            var response = new MetadataBatches(new List<RecordBatch> { nativeBatch }, true);
 
-            var result = NativeMetadataResultBuilder.Build(
-                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), schema, operation);
+            var result = operation switch
+            {
+                MetadataOperation.GetCatalogs => Builder.Catalogs(response),
+                MetadataOperation.GetSchemas => Builder.Schemas(response),
+                MetadataOperation.GetPrimaryKeys => Builder.PrimaryKeys(response, "main", "default", "t"),
+                _ => Builder.ForeignKeys(response, null, null, null, "main", "default", "t"),
+            };
             using var reader = result.Stream!;
             using var batch = await reader.ReadNextRecordBatchAsync();
 
@@ -284,8 +269,146 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             }).ToArray();
             using var nativeBatch = new RecordBatch(schema, arrays, 1);
 
-            Assert.Throws<DatabricksException>(() => NativeMetadataResultBuilder.Build(
-                new MetadataBatches(new List<RecordBatch> { nativeBatch }, true), target, MetadataOperation.GetColumns));
+            Assert.Throws<DatabricksException>(() =>
+                Columns(new MetadataBatches(new List<RecordBatch> { nativeBatch }, true)));
         }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task NativeColumns_ShareCatalogFilterAndConcreteFallback(bool pattern)
+        {
+            using var batch = NativeColumns("foo_bar", "fooxbar", null);
+            var result = new ColumnMetadataResult(new[]
+            {
+                new MetadataBatches(new List<RecordBatch> { batch }, true, "foo_bar",
+                    pattern ? CatalogFilter.Pattern("foo_bar") : CatalogFilter.Exact("foo_bar")),
+            });
+
+            Assert.True(result.IsNative);
+            Assert.Equal(3, Assert.Single(Assert.Single(result.Results).Batches).Length);
+            Assert.Equal(pattern ? new[] { "foo_bar", "fooxbar" } : new[] { "foo_bar", "foo_bar" },
+                result.Rows.Select(row => row.Catalog));
+            Assert.All(result.Rows, row =>
+            {
+                Assert.Equal(7, row.Ordinal);
+                Assert.Equal("7", row.Default);
+                Assert.True(row.Nullable);
+                Assert.True(row.IsAutoIncrement);
+            });
+
+            var flat = Builder.Columns(result.Results, result.Rows);
+            using var stream = flat.Stream!;
+            using var output = (await stream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(result.Rows.Count, output.Length);
+            var catalogs = (StringArray)output.Column("TABLE_CAT");
+            Assert.Equal(result.Rows.Select(row => row.Catalog),
+                Enumerable.Range(0, output.Length).Select(row => catalogs.GetString(row)));
+        }
+
+        public static IEnumerable<object?[]> NativeCatalogFallbacks()
+        {
+            foreach (var operation in new[]
+            {
+                MetadataOperation.GetSchemas, MetadataOperation.GetTables, MetadataOperation.GetColumns,
+            })
+                foreach (var (pattern, scope, expected) in new[]
+                {
+                    (false, "foo_bar", "foo_bar"),
+                    (true, "main", "main"),
+                    (true, @"foo\_bar", "foo_bar"),
+                    (true, @"foo\%bar", "foo%bar"),
+                    (true, "ma%", (string?)null),
+                    (true, "foo_bar", (string?)null),
+                })
+                    yield return new object?[] { operation.ToString(), pattern, scope, expected };
+        }
+
+        [Theory]
+        [MemberData(nameof(NativeCatalogFallbacks))]
+        public async Task MissingNativeCatalog_OnlyUsesConcreteScope(
+            string operationName, bool pattern, string scope, string? expectedCatalog)
+        {
+            var operation = (MetadataOperation)System.Enum.Parse(typeof(MetadataOperation), operationName);
+            using var batch = operation switch
+            {
+                MetadataOperation.GetSchemas => NativeBatch(MetadataSchemaFactory.CreateSchemasSchema(), 1,
+                    (field, _) => field == "TABLE_SCHEM" ? "default" : null),
+                MetadataOperation.GetTables => NativeBatch(MetadataSchemaFactory.CreateTablesSchema(), 1,
+                    (field, _) => field switch
+                    {
+                        "TABLE_SCHEM" => "default",
+                        "TABLE_NAME" => "t",
+                        "TABLE_TYPE" => "TABLE",
+                        _ => null,
+                    }),
+                _ => NativeColumns(new string?[] { null }),
+            };
+            var result = new MetadataBatches(new List<RecordBatch> { batch }, true, scope,
+                pattern ? CatalogFilter.Pattern(scope) : CatalogFilter.Exact(scope));
+            var catalogs = operation switch
+            {
+                MetadataOperation.GetSchemas => MetadataRowReader.Schemas(result).Select(row => row.Catalog),
+                MetadataOperation.GetTables => MetadataRowReader.Tables(result).Select(row => row.Catalog),
+                _ => MetadataRowReader.Columns(new[] { result }).Select(row => row.Catalog),
+            };
+            var expected = expectedCatalog == null ? System.Array.Empty<string>() : new[] { expectedCatalog };
+            Assert.Equal(expected, catalogs);
+
+            var flat = operation switch
+            {
+                MetadataOperation.GetSchemas => Builder.Schemas(result),
+                MetadataOperation.GetTables => Builder.Tables(result, null),
+                _ => Columns(result),
+            };
+            using var stream = flat.Stream!;
+            using var output = (await stream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(expected.Length, output.Length);
+            if (expectedCatalog != null)
+                Assert.Equal(expectedCatalog, ((StringArray)output.Column(
+                    operation == MetadataOperation.GetSchemas ? "TABLE_CATALOG" : "TABLE_CAT")).GetString(0));
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task NativeKeys_PassServerFieldsThroughAndFilterParents(bool foreign)
+        {
+            var schema = foreign ? MetadataSchemaFactory.CreateCrossReferenceSchema() : MetadataSchemaFactory.CreatePrimaryKeysSchema();
+            schema = new Schema(schema.FieldsList.Reverse(), null);
+            var arrays = schema.FieldsList.Select(field => field.DataType.TypeId == ArrowTypeId.String
+                ? (IArrowArray)new StringArray.Builder().Append(field.Name switch
+                {
+                    "TABLE_CAT" or "PKTABLE_CAT" => "Main",
+                    "TABLE_SCHEM" or "PKTABLE_SCHEM" => "Sales",
+                    "TABLE_NAME" or "PKTABLE_NAME" => "Customers",
+                    _ => field.Name,
+                }).Build()
+                : new Int32Array.Builder().Append(7).Build()).ToArray();
+            using var batch = new RecordBatch(schema, arrays, 1);
+            var response = new MetadataBatches(new List<RecordBatch> { batch }, true);
+
+            // Native keys ignore the requested-table fallbacks; parents match case-insensitively.
+            var result = foreign
+                ? Builder.ForeignKeys(response, "main", "sales", "customers", "foreign", "default", "orders")
+                : Builder.PrimaryKeys(response, "fallback", "fallback", "fallback");
+            using var stream = result.Stream!;
+            using var flat = (await stream.ReadNextRecordBatchAsync())!;
+            Assert.Equal(1, flat.Length);
+            Assert.Equal(7, ((Int32Array)flat.Column("KEQ_SEQ")).GetValue(0));
+            Assert.Equal("PK_NAME", ((StringArray)flat.Column("PK_NAME")).GetString(0));
+            Assert.Equal("Main", ((StringArray)flat.Column(foreign ? "PKTABLE_CAT" : "TABLE_CAT")).GetString(0));
+
+            if (foreign)
+            {
+                Assert.Equal("FKTABLE_CAT", ((StringArray)flat.Column("FKTABLE_CAT")).GetString(0));
+                var filtered = Builder.ForeignKeys(response, "other", null, null, "foreign", "default", "orders");
+                using var filteredStream = filtered.Stream!;
+                Assert.Equal(0, filtered.RowCount);
+            }
+        }
+
+        private static QueryResult Columns(MetadataBatches response)
+            => Builder.Columns(new[] { response }, System.Array.Empty<ColumnRow>());
     }
 }
