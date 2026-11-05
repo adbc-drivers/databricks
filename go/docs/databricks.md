@@ -44,10 +44,10 @@ To connect, edit the `uri` option below to match your environment and run the fo
 from adbc_driver_manager import dbapi
 
 conn = dbapi.connect(
-  driver="databricks",
-  db_kwargs = {
-    "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
-  }
+    driver="databricks",
+    db_kwargs={
+        "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
+    },
 )
 ```
 
@@ -113,6 +113,20 @@ Examples:
 - `databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh`
 - `databricks://myworkspace.cloud.databricks.com:443/sql/1.0/warehouses/abc123def456?authType=OauthU2M`
 - `databricks://myworkspace.cloud.databricks.com:443/sql/1.0/warehouses/abc123def456?authType=OAuthM2M&clientID=12345678-1234-1234-1234-123456789012&clientSecret=mysecret123`
+
+## Options
+
+### Authentication Options
+
+`databricks.auth_type`
+: **Values:** `pat`, `oauth-m2m`. **Default:** (empty, inferred from the options that are set)
+
+  How to authenticate.
+
+  - `pat`: personal access token. Requires `databricks.access_token`.
+  - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
+
+  If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
 ## Feature & Type Support
 

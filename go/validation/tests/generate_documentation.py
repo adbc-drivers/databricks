@@ -15,9 +15,9 @@
 import argparse
 from pathlib import Path
 
-import adbc_drivers_validation.generate_documentation as generate_documentation
+from adbc_drivers_validation import generate_documentation
 
-from . import databricks
+from .databricks import get_quirks
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -27,9 +27,15 @@ if __name__ == "__main__":
     template = Path(__file__).parent.parent.parent / "docs/databricks.md"
     template = template.resolve()
 
+    reports = sorted(Path(".").glob("validation-report-*.xml"))
+    if not reports:
+        reports = [Path("validation-report.xml")]
+
     generate_documentation.generate(
-        databricks.QUIRKS,
-        Path("validation-report.xml").resolve(),
+        "databricks",
+        lambda version, vendor: get_quirks(version),
+        [("databricks", "Databricks")],
+        [report.resolve() for report in reports],
         template,
         args.output.resolve(),
     )

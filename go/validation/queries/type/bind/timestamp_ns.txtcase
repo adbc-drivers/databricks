@@ -1,4 +1,4 @@
-// Copyright (c) 2025 ADBC Drivers Contributors
+// Copyright (c) 2026 ADBC Drivers Contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,4 +14,23 @@
 
 // part: metadata
 
-skip = "https://github.com/databricks/databricks-sql-go/issues/274"
+[tags]
+sql-type-name = "TIMESTAMP_NTZ"
+partial-support = true
+caveats = ["Nanosecond timestamps are truncated to microseconds."]
+
+// part: setup_query
+
+CREATE TABLE test_timestamp (idx INT, res TIMESTAMP_NTZ);
+
+// part: expected_schema
+
+{"format": "+s", "children": [{"name": "res", "format": "tsu:", "flags": ["nullable"]}]}
+
+// part: expected
+
+{"res": null}
+{"res": -9223372036854776}
+{"res": 946684800000000}
+{"res": 1684158330000000}
+{"res": 9223372036854775}

@@ -143,6 +143,87 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
         }
 
         [Fact]
+        public async Task FetchResultsAsync_IssuesNextChunkFetch_BeforeCurrentBatchIsConsumed()
+        {
+            // Pipelining: the fetch for the NEXT chunk must be started while the CURRENT batch
+            // is still waiting to be enqueued/consumed. With a download queue that is already
+            // full, a non-pipelined fetcher would block on enqueueing the current batch and
+            // never reach the next GetResultChunk call; the pipelined fetcher issues it first.
+            var (manifest, initialExternalLinks) = CreateTestManifestWithExternalLinks(3);
+            var chunk2Fetched = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            _mockClient.Setup(c => c.GetResultChunkAsync(_testStatementId, 1, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new ResultData
+                {
+                    ChunkIndex = 1,
+                    RowOffset = 100,
+                    RowCount = 100,
+                    ByteCount = 1024,
+                    ExternalLinks = new List<ExternalLink>
+                    {
+                        new ExternalLink
+                        {
+                            ChunkIndex = 1,
+                            ExternalLinkUrl = "https://storage.example.com/result1.arrow",
+                            RowOffset = 100,
+                            RowCount = 100,
+                            ByteCount = 1024,
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O"),
+                            NextChunkIndex = 2
+                        }
+                    }
+                });
+
+            // Signal when chunk 2's fetch is actually invoked.
+            _mockClient.Setup(c => c.GetResultChunkAsync(_testStatementId, 2, It.IsAny<CancellationToken>()))
+                .Callback(() => chunk2Fetched.TrySetResult(true))
+                .ReturnsAsync(new ResultData
+                {
+                    ChunkIndex = 2,
+                    RowOffset = 200,
+                    RowCount = 100,
+                    ByteCount = 1024,
+                    ExternalLinks = new List<ExternalLink>
+                    {
+                        new ExternalLink
+                        {
+                            ChunkIndex = 2,
+                            ExternalLinkUrl = "https://storage.example.com/result2.arrow",
+                            RowOffset = 200,
+                            RowCount = 100,
+                            ByteCount = 1024,
+                            Expiration = DateTime.UtcNow.AddHours(1).ToString("O")
+                        }
+                    }
+                });
+
+            // Capacity-1 queue: chunk 0's link fills it, so enqueueing chunk 1 blocks until a
+            // consumer takes something (there is none until the assertion below passes).
+            using var boundedQueue = new BlockingCollection<IDownloadResult>(new ConcurrentQueue<IDownloadResult>(), 1);
+            var fetcher = new StatementExecutionResultFetcher(
+                _mockClient.Object,
+                _testStatementId,
+                manifest,
+                initialExternalLinks,
+                _mockMemoryManager.Object,
+                boundedQueue);
+
+            // Act
+            await fetcher.StartAsync(CancellationToken.None);
+
+            // Assert: chunk 2's fetch is issued even though the queue is full and nothing has
+            // been consumed — i.e. the fetch was pipelined ahead of enqueueing chunk 1.
+            var winner = await Task.WhenAny(chunk2Fetched.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.True(
+                winner == chunk2Fetched.Task,
+                "next-chunk fetch should be pipelined (issued before the current batch is consumed)");
+
+            // Cleanup: drain so the blocked enqueue can complete, then stop.
+            _ = Task.Run(() => { while (boundedQueue.TryTake(out _, 100)) { } });
+            await fetcher.StopAsync();
+        }
+
+        [Fact]
         public async Task FetchResultsAsync_WithHttpHeaders_PassesHeadersCorrectly()
         {
             // Arrange

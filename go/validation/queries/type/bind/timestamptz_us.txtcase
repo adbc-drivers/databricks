@@ -1,4 +1,4 @@
-// Copyright (c) 2025 ADBC Drivers Contributors
+// Copyright (c) 2026 ADBC Drivers Contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,4 +14,16 @@
 
 // part: metadata
 
-skip = "https://github.com/databricks/databricks-sql-go/issues/274"
+[tags]
+sql-type-name = "TIMESTAMP"
+
+// part: setup_query
+
+CREATE TABLE test_timestamptz (idx INT, res TIMESTAMP, res2 TIMESTAMP);
+
+// part: expected_schema
+
+{"format": "+s", "children": [
+    {"name": "res", "format": "tsu:Etc/UTC", "flags": ["nullable"]},
+    {"name": "res2", "format": "tsu:Etc/UTC", "flags": ["nullable"]}
+]}

@@ -1,4 +1,5 @@
-# Copyright (c) 2025 ADBC Drivers Contributors
+#:schema https://raw.githubusercontent.com/adbc-drivers/dev/refs/heads/main/schema/generate-schema.json
+# Copyright (c) 2025-2026 ADBC Drivers Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,16 +14,22 @@
 # limitations under the License.
 
 driver = "databricks"
+concurrency-key = "${{ github.ref }}-go-azure-prod"
+
+# Generate Go and shared dev workflows only. Leave the existing Rust workflows
+# and Rust Pixi configuration unchanged until a separate Rust migration.
+
+[lang.go.build]
 environment = "azure-prod"
 
-[lang]
-go = true
+[lang.go.test]
+environment = "azure-prod"
 
-[lang.rust]
-skip_validate = true
+[lang.go.test-packages]
+environment = "azure-prod"
 
-[lang.rust.build]
-additional-make-args = ["TARGET_NAME=databricks_adbc"]
+[[lang.go.validation.configs]]
+environment = "azure-prod"
 
 [secrets]
 DATABRICKS_HOST = { secret = "DATABRICKS_HOST", contexts = ["test", "validate"] }

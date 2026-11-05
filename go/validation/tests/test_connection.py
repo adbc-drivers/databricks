@@ -1,4 +1,4 @@
-# Copyright (c) 2025 ADBC Drivers Contributors
+# Copyright (c) 2025-2026 ADBC Drivers Contributors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import adbc_driver_manager.dbapi
+import pytest
 from adbc_drivers_validation import model
 from adbc_drivers_validation.tests.connection import (
     TestConnection as BaseTestConnection,
@@ -21,7 +22,7 @@ from adbc_drivers_validation.tests.connection import (
     generate_tests,
 )
 
-from . import databricks
+from .databricks import get_quirks
 
 
 class TestConnection(BaseTestConnection):
@@ -40,7 +41,7 @@ class TestConnection(BaseTestConnection):
             for obj in objects
             for schema in obj["catalog_db_schemas"]
         ]
-        assert list(sorted(set(schemas))) == list(sorted(schemas))
+        assert sorted(set(schemas)) == sorted(schemas)
         assert (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -60,7 +61,7 @@ class TestConnection(BaseTestConnection):
             for obj in objects
             for schema in obj["catalog_db_schemas"]
         ]
-        assert list(sorted(set(schemas))) == list(sorted(schemas))
+        assert sorted(set(schemas)) == sorted(schemas)
         assert (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -124,7 +125,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         table_id = (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -154,7 +155,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id in tables
 
     def test_get_objects_table_invalid_schema(
@@ -179,7 +180,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id not in tables
 
     def test_get_objects_table_invalid_table(
@@ -205,7 +206,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id not in tables
 
     def test_get_objects_table_exact_table(
@@ -231,7 +232,7 @@ class TestConnection(BaseTestConnection):
             for schema in obj["catalog_db_schemas"]
             for table in schema["db_schema_tables"]
         ]
-        assert list(sorted(set(tables))) == list(sorted(tables))
+        assert sorted(set(tables)) == sorted(tables)
         assert table_id in tables
 
     def test_get_objects_column_not_exist(
@@ -261,7 +262,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         table_id = (
             driver.features.current_catalog,
             driver.features.current_schema,
@@ -298,9 +299,23 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") in columns
+
+    # This scans columns across every visible schema in the current catalog.
+    # CI runs have stalled for tens of minutes, then failed with connection
+    # resets or "Command ... does not exist". Re-enable once this scan is reliable.
+    @pytest.mark.skip(
+        reason="Temporary: long-running catalog-wide GetObjects scans fail in CI"
+    )
+    def test_get_objects_column_filter_catalog(
+        self,
+        conn: adbc_driver_manager.dbapi.Connection,
+        driver: model.DriverQuirks,
+        get_objects_table,
+    ) -> None:
+        super().test_get_objects_column_filter_catalog(conn, driver, get_objects_table)
 
     def test_get_objects_column_filter_column_name(
         self,
@@ -331,7 +346,7 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") not in columns
 
@@ -364,11 +379,12 @@ class TestConnection(BaseTestConnection):
             for table in schema["db_schema_tables"]
             for column in table["table_columns"]
         ]
-        assert list(sorted(set(columns))) == list(sorted(columns))
+        assert sorted(set(columns)) == sorted(columns)
         assert (*table_id, "ints") in columns
         assert (*table_id, "strs") in columns
         assert len(columns) == 2
 
 
 def pytest_generate_tests(metafunc) -> None:
-    return generate_tests(databricks.QUIRKS, metafunc)
+    quirks = [get_quirks(metafunc.config.getoption("vendor_version"))]
+    return generate_tests(quirks, metafunc)

@@ -112,6 +112,20 @@ namespace AdbcDrivers.Databricks
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string ApplySSPWithQueries = "adbc.databricks.apply_ssp_with_queries";
 
+        /// <summary>
+        /// Whether the SEA (Statement Execution API) HTTP client requests response compression (gzip)
+        /// via Accept-Encoding. SEA inline results are base64-encoded LZ4-compressed Arrow wrapped in
+        /// JSON; the API proxy then gzips that JSON envelope, which is wasteful double-compression on
+        /// already-compressed data and measurably slower for multi-MB inline results in-region
+        /// (~40ms server-side; the gzipped wire is even larger than the Thrift binary). Disabling it
+        /// makes the proxy return the body uncompressed. Default is false (compression disabled) for
+        /// best in-region performance; set to true for bandwidth-constrained clients where the smaller
+        /// gzipped body outweighs the compression cost. Only affects the SEA statements client — not
+        /// CloudFetch (S3) or the Thrift path.
+        /// Default value is false if not specified.
+        /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
+        public const string SeaResponseCompressionEnabled = "adbc.databricks.sea_response_compression_enabled";
 
         /// <summary>
         /// Prefix for server-side properties. Properties with this prefix will be passed to the server
@@ -411,6 +425,12 @@ namespace AdbcDrivers.Databricks
         /// - "thrift": Use Thrift/HiveServer2 protocol (default)
         /// - "rest": Use Statement Execution REST API
         /// Default value is "thrift" if not specified.
+        ///
+        /// Note: "thrift" is best-effort. Some warehouses (Reyden / Lakehouse-RT) do not support
+        /// Thrift; against such a warehouse the driver transparently falls back to the Statement
+        /// Execution (REST) API even when "thrift" is requested explicitly. The fallback is cached
+        /// per warehouse for a bounded TTL and self-heals afterward. This is intentional so a
+        /// connection succeeds rather than hard-failing on the unsupported protocol.
         /// </summary>
         public const string Protocol = "adbc.databricks.protocol";
 
@@ -503,6 +523,18 @@ namespace AdbcDrivers.Databricks
         /// </summary>
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string EnableComplexDatatypeSupport = "adbc.databricks.enable_complex_datatype_support";
+
+        /// <summary>
+        /// Whether GEOMETRY and GEOGRAPHY results use GeoArrow WKB.
+        /// When true, values are returned as binary with the geoarrow.wkb extension;
+        /// legacy server-provided WKT / EWKT is converted locally. When false, native values are
+        /// rendered locally as WKT / EWKT strings, while legacy text is returned verbatim without
+        /// normalizing its formatting or revalidating an embedded SRID. The default is false to
+        /// preserve the existing string result contract. This is a client-side setting and is
+        /// never forwarded to SEA.
+        /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
+        public const string EnableGeospatialSupport = "adbc.databricks.enable_geospatial_support";
 
         /// <summary>
         /// Connection option (boolean, default false): opt in to statement-level catalog scoping.

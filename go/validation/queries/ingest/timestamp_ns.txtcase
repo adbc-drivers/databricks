@@ -15,6 +15,8 @@
 // part: metadata
 
 [tags]
+partial-support = true
+caveats = ["Nanosecond timestamps are truncated to microseconds."]
 sql-type-name = "TIMESTAMP_NTZ"
 
 // part: expected_schema

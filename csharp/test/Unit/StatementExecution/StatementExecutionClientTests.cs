@@ -239,6 +239,59 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region ExecuteStatementAsync Tests
 
         [Fact]
+        public async Task ExecuteStatementAsync_NativeMetadata_SendsHeadersAndReadsManifest()
+        {
+            var request = new ExecuteStatementRequest
+            {
+                Statement = "SHOW TABLES IN CATALOG `main`",
+                WarehouseId = "warehouse-123",
+                IsMetadata = true,
+                MetadataOperation = MetadataOperation.GetTables,
+            };
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-native",
+                status = new { state = "SUCCEEDED" },
+                manifest = new { is_native_metadata_result = true },
+            });
+            HttpRequestMessage? capturedRequest = null;
+            string? capturedContent = null;
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req, content => capturedContent = content);
+
+            var response = await new StatementExecutionClient(_httpClient, _testHost)
+                .ExecuteStatementAsync(request, CancellationToken.None);
+
+            Assert.Equal(true, response.Manifest?.IsNativeMetadataResult);
+            Assert.Equal("true", Assert.Single(capturedRequest!.Headers.GetValues("x-databricks-sea-can-run-fully-sync")));
+            Assert.Equal("GetTables", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-metadata-operation-type")));
+            Assert.Equal("true", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-require-thrift-native-metadata")));
+            using var requestJson = JsonDocument.Parse(capturedContent!);
+            foreach (var property in requestJson.RootElement.EnumerateObject())
+            {
+                Assert.False(string.Equals(property.Name, "MetadataOperation", StringComparison.OrdinalIgnoreCase));
+                Assert.False(string.Equals(property.Name, "IsNativeMetadataResult", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_MetadataWithoutOperation_OmitsNativeHeaders()
+        {
+            var request = new ExecuteStatementRequest { Statement = "DESC TABLE t", IsMetadata = true };
+            HttpRequestMessage? capturedRequest = null;
+            SetupMockResponseWithCapture(HttpStatusCode.OK,
+                "{\"statement_id\":\"stmt-1\",\"status\":{\"state\":\"SUCCEEDED\"}}",
+                req => capturedRequest = req, _ => { });
+
+            await new StatementExecutionClient(_httpClient, _testHost)
+                .ExecuteStatementAsync(request, CancellationToken.None);
+
+            Assert.True(capturedRequest!.Headers.Contains("x-databricks-sea-can-run-fully-sync"));
+            Assert.False(capturedRequest.Headers.Contains("x-databricks-metadata-operation-type"));
+            Assert.False(capturedRequest.Headers.Contains("x-databricks-require-thrift-native-metadata"));
+        }
+
+        [Fact]
         public async Task ExecuteStatementAsync_WithValidRequest_ReturnsResponse()
         {
             var expectedStatementId = "statement-123";

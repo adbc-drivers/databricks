@@ -62,7 +62,13 @@ const (
 	OptionSSLMode     = "databricks.ssl_mode"
 	OptionSSLRootCert = "databricks.ssl_root_cert"
 
-	// OAuth options (for future expansion)
+	// Authentication. When auth_type is not set, the method is inferred from the
+	// other options that are set.
+	OptionAuthType              = "databricks.auth_type"
+	OptionValueAuthTypePAT      = "pat"
+	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
+
+	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
@@ -82,24 +88,22 @@ type driverImpl struct {
 }
 
 // NewDriver creates a new Databricks driver using the given Arrow allocator.
-func NewDriver(alloc memory.Allocator) adbc.Driver {
+func NewDriver(alloc memory.Allocator) driverbase.DriverWithContext {
 	info := driverbase.DefaultDriverInfo("Databricks")
 
 	if err := info.RegisterInfoCode(adbc.InfoDriverName, "ADBC Driver Foundry Driver for Databricks"); err != nil {
 		panic(err)
 	}
 
+	base := driverbase.NewDriverImplBase(info, alloc)
+	base.ErrorHelper.ErrorInspector = DatabricksErrorInspector{}
 	return driverbase.NewDriver(&driverImpl{
-		DriverImplBase: driverbase.NewDriverImplBase(info, alloc),
+		DriverImplBase: base,
 	})
 }
 
-func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return d.NewDatabaseWithContext(context.Background(), opts)
-}
-
-func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
-	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
+func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
+	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase, driverbase.TracingOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +114,7 @@ func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string
 		sslMode:          DefaultSSLMode,
 	}
 
-	if err := db.SetOptions(opts); err != nil {
+	if err := db.SetOptions(ctx, opts); err != nil {
 		return nil, err
 	}
 

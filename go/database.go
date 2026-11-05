@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +61,7 @@ type databaseImpl struct {
 	serverHostname string
 	httpPath       string
 	accessToken    string
+	authType       string
 	port           int
 	catalog        string
 	schema         string
@@ -76,7 +78,7 @@ type databaseImpl struct {
 	sslCertPool *x509.CertPool
 	sslInsecure bool
 
-	// OAuth options (for future expansion)
+	// OAuth options
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
@@ -97,28 +99,16 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	// FIXME: Support other auth methods
-	if d.accessToken == "" && d.oauthClientID == "" && d.oauthClientSecret == "" {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] access token or OAuth config is required",
-		}
-	} else if d.accessToken != "" && (d.oauthClientID != "" || d.oauthClientSecret != "") {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] cannot specify both access token and OAuth config",
-		}
+	_, login, err := d.resolveLoginMethod()
+	if err != nil {
+		return nil, err
 	}
 
 	opts := []dbsql.ConnOption{
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
-	}
-
-	if d.accessToken != "" {
-		opts = append(opts, dbsql.WithAccessToken(d.accessToken))
-	} else {
-		opts = append(opts, dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret))
+		dbsql.WithArrowNativeDecimal(true),
+		login.build(d),
 	}
 
 	// Validate and set custom port
@@ -187,13 +177,36 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	return opts, nil
 }
 
+func (d *databaseImpl) resolveConnectionDSN() (string, error) {
+	dsn := d.uri
+	if !strings.HasPrefix(dsn, "https://") && !strings.HasPrefix(dsn, "http://") {
+		dsn = "https://" + dsn
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI"}
+	}
+	parameters, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI query parameters"}
+	}
+	if !parameters.Has("useArrowNativeDecimal") {
+		parameters.Set("useArrowNativeDecimal", "true")
+	}
+	parsed.RawQuery = parameters.Encode()
+	return parsed.String(), nil
+}
+
 func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, error) {
 	var db *sql.DB
 
 	// Use URI if provided
 	if d.uri != "" {
-		var err error
-		db, err = sql.Open("databricks", d.uri)
+		dsn, err := d.resolveConnectionDSN()
+		if err != nil {
+			return nil, err
+		}
+		db, err = sql.Open("databricks", dsn)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +236,7 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	// Re-initialize the connection pool and settings if anything
 	// has changed, or we have not initialized yet
 	if d.needsRefresh || d.db == nil {
@@ -266,15 +279,18 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		Connection(), nil
 }
 
-func (d *databaseImpl) Close() error {
+func (d *databaseImpl) Close(ctx context.Context) error {
 	defer func() {
 		d.needsRefresh = true
 		d.db = nil
 	}()
-	return d.db.Close()
+	if d.db != nil {
+		return d.db.Close()
+	}
+	return nil
 }
 
-func (d *databaseImpl) GetOption(key string) (string, error) {
+func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyURI:
 		return d.uri, nil
@@ -284,6 +300,8 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.httpPath, nil
 	case OptionAccessToken:
 		return d.accessToken, nil
+	case OptionAuthType:
+		return d.authType, nil
 	case OptionPort:
 		return strconv.Itoa(d.port), nil
 	case OptionCatalog:
@@ -321,11 +339,11 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
 	default:
-		return d.DatabaseImplBase.GetOption(key)
+		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
-func (d *databaseImpl) SetOptions(options map[string]string) error {
+func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -348,7 +366,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	}
 
 	for k, v := range options {
-		err := d.SetOption(k, v)
+		err := d.SetOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -356,7 +374,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	return nil
 }
 
-func (d *databaseImpl) SetOption(key, value string) error {
+func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
@@ -376,6 +394,14 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.httpPath = value
 	case OptionAccessToken:
 		d.accessToken = value
+	case OptionAuthType:
+		if _, ok := loginMethods[value]; !ok && value != "" {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] unknown auth type '%s'", value),
+			}
+		}
+		d.authType = value
 	case OptionPort:
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
@@ -487,7 +513,7 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
 	default:
-		return d.DatabaseImplBase.SetOption(key, value)
+		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
 }

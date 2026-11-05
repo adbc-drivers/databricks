@@ -69,6 +69,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         // Complex type configuration
         private readonly bool _enableComplexDatatypeSupport;
+        private readonly bool _enableGeospatialSupport;
 
         // Connection reference for metadata queries
         private readonly StatementExecutionConnection _connection;
@@ -79,6 +80,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         // in-hand and the statement is closed server-side, so Dispose must NOT re-close it.
         private bool _statementClosedByServer;
         private string? _sqlQuery;
+        internal bool IsNativeMetadataResult { get; private set; }
 
         // Marks a driver-internal statement (e.g. the USE CATALOG issued by EnsureCatalogScopedAsync).
         // Mirrors DatabricksStatement.IsInternalCall on Thrift: it prevents catalog-scoping recursion
@@ -194,12 +196,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _pollingIntervalMs = pollingIntervalMs;
             _properties = properties ?? throw new ArgumentNullException(nameof(properties));
             // Default matches the Thrift path (3h) so SEA queries aren't unbounded; 0 = no timeout.
-            _queryTimeoutSeconds = PropertyHelper.GetIntPropertyWithValidation(
+            _queryTimeoutSeconds = PropertyHelper.GetNonNegativeIntPropertyWithValidation(
                 properties, ApacheParameters.QueryTimeoutSeconds, DatabricksConstants.DefaultQueryTimeoutSeconds);
             _recyclableMemoryStreamManager = recyclableMemoryStreamManager ?? throw new ArgumentNullException(nameof(recyclableMemoryStreamManager));
             _lz4BufferPool = lz4BufferPool ?? throw new ArgumentNullException(nameof(lz4BufferPool));
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            _enableGeospatialSupport = connection.EnableGeospatialSupport;
 
             // Match Thrift: statement starts with connection's default catalog.
             // When enableMultipleCatalogSupport=true, this is the catalog from config (e.g. "main").
@@ -257,7 +260,10 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 case ApacheParameters.PollTimeMilliseconds:
                 case ApacheParameters.BatchSize:
                 case ApacheParameters.BatchSizeStopCondition:
+                    break;
+
                 case ApacheParameters.QueryTimeoutSeconds:
+                    PropertyHelper.ParseNonNegativeIntPropertyWithValidation(key, value);
                     break;
 
                 case DatabricksParameters.QueryTags:
@@ -302,10 +308,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <param name="isMetadataExecution">When true, adds the x-databricks-sea-can-run-fully-sync
         /// header for optimized metadata query execution on the server.</param>
-        public async Task<QueryResult> ExecuteQueryAsync(
+        public Task<QueryResult> ExecuteQueryAsync(
             CancellationToken cancellationToken = default,
             bool isMetadataExecution = false)
+            => ExecuteQueryAsync(cancellationToken, isMetadataExecution, null);
+
+        internal async Task<QueryResult> ExecuteQueryAsync(
+            CancellationToken cancellationToken, bool isMetadataExecution, MetadataOperation? metadataOperation)
         {
+            IsNativeMetadataResult = false;
             if (_isMetadataCommand)
             {
                 return await ExecuteMetadataCommandAsync(cancellationToken).ConfigureAwait(false);
@@ -321,7 +332,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             lock (_cancelLock) { _executeCts = cts; }
             try
             {
-                return await ExecuteQueryInternalAsync(cts.Token, isMetadataExecution).ConfigureAwait(false);
+                return await ExecuteQueryInternalAsync(cts.Token, isMetadataExecution, metadataOperation).ConfigureAwait(false);
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
@@ -383,7 +394,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             _connection.UpdateCurrentCatalog(catalog);
         }
 
-        private async Task<QueryResult> ExecuteQueryInternalAsync(CancellationToken cancellationToken, bool isMetadataExecution)
+        private async Task<QueryResult> ExecuteQueryInternalAsync(
+            CancellationToken cancellationToken, bool isMetadataExecution, MetadataOperation? metadataOperation = null)
         {
             // If the caller explicitly scoped this statement to a catalog, set the session's
             // current catalog first via USE CATALOG so a 2-level `schema`.`table` name
@@ -407,11 +419,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 WaitTimeout = _waitTimeout,
                 OnWaitTimeout = "CONTINUE",
                 IsMetadata = isMetadataExecution,
+                MetadataOperation = metadataOperation,
                 QueryTags = ParseQueryTags(_queryTags)
             };
 
             // Execute the statement
             var response = await _client.ExecuteStatementAsync(request, cancellationToken).ConfigureAwait(false);
+            bool? initialNativeMetadata = response.Manifest?.IsNativeMetadataResult;
             _currentStatementId = response.StatementId;
             // Reset per-execution: statements are reusable, so this must reflect the CURRENT
             // execution's state, not a prior CLOSED result. Otherwise a later SUCCEEDED (genuinely
@@ -459,6 +473,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 _statementClosedByServer = true;
             }
 
+            // The server may fall back to SHOW even with the require-native header.
+            // Only the response manifest selects the decoder.
+            IsNativeMetadataResult = response.Manifest?.IsNativeMetadataResult
+                ?? initialNativeMetadata
+                ?? false;
+
             // Check for truncated results warning
             if (response.Manifest?.Truncated == true)
             {
@@ -485,6 +505,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
             // SEA emits YearMonthIntervalType and DurationType; Thrift emits StringType for intervals.
             // Convert interval/duration columns to canonical UTF-8 strings to match Thrift behavior.
             reader = new IntervalSerializingStream(reader);
+
+            // Reyden returns GEOMETRY / GEOGRAPHY as struct<srid,wkb>. Convert it to
+            // GeoArrow WKB in native mode or render WKT / EWKT locally in string mode.
+            // This setting is deliberately not included in SEA session_confs.
+            reader = await GeospatialTransformingStream.CreateForStatementExecutionAsync(
+                reader,
+                _enableGeospatialSupport,
+                _enableComplexDatatypeSupport,
+                cancellationToken).ConfigureAwait(false);
 
             // When EnableComplexDatatypeSupport=false (default), serialize complex Arrow types to JSON strings
             // so that SEA behavior matches Thrift (which sets ComplexTypesAsArrow=false).
@@ -681,7 +710,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// (<c>Spark:DataType:SqlName</c>) in its metadata. For Thrift results the server
         /// embeds this key directly in the Arrow IPC field metadata; for SEA results it may
         /// be absent from the IPC. By computing it here from the manifest type name and
-        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/> and
+        /// embedding it on every field, we give <see cref="IntervalSerializingStream"/>,
+        /// <see cref="GeospatialTransformingStream"/>, and
         /// <see cref="ComplexTypeSerializingStream"/> a reliable detection signal regardless
         /// of result path. JDBC achieves the same effect by falling back to
         /// <c>ColumnInfo.typeText</c> (the raw manifest type string) when the IPC metadata
@@ -689,10 +719,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </para>
         ///
         /// <para>
-        /// INTERVAL, ARRAY, MAP, and STRUCT columns are mapped to <see cref="StringType"/>
-        /// because the stream wrappers convert the native Arrow arrays to strings. The
-        /// declared Arrow type and the actual array type in each batch must always agree;
-        /// this is the output contract.
+        /// INTERVAL and disabled ARRAY / MAP / STRUCT columns are mapped to
+        /// <see cref="StringType"/> because the stream wrappers convert their native Arrow
+        /// arrays to strings. GEOMETRY / GEOGRAPHY are mapped to internal tagged transport
+        /// structs; <see cref="GeospatialTransformingStream"/> then applies the client-side
+        /// representation and keeps each output batch consistent with its exposed schema.
         /// </para>
         /// </summary>
         private Schema? TryGetSchemaFromManifest(ResultManifest manifest)
@@ -706,7 +737,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
             foreach (var column in manifest.Schema.Columns)
             {
                 var typeText = column.TypeText ?? string.Empty;
-                var arrowType = ArrowTypeParser.MapToArrowType(typeText, _enableComplexDatatypeSupport);
+                var arrowType = ArrowTypeParser.MapToArrowType(
+                    typeText,
+                    _enableComplexDatatypeSupport);
                 var metadata = new Dictionary<string, string>
                 {
                     [ColumnMetadataHelper.ArrowMetadataKey] = typeText
@@ -1083,7 +1116,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// catalog for SHOW commands when not querying all catalogs).
         /// </summary>
         // TODO: Once the backend supports SHOW COLUMNS IN ALL CATALOGS, the
-        // ExecuteShowColumnsAsync iterate-all-catalogs fallback can be removed.
+        // ReadColumnsAsync catalog fanout can be removed.
         private string? EffectiveCatalog
         {
             get
@@ -1275,22 +1308,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // matching Thrift behavior (Thrift RPC has no catalog filter for GetCatalogs).
                 string sql = new ShowCatalogsCommand(null).Build();
                 activity?.SetTag("sql_query", sql);
-                var batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
+                var result = await _connection.ExecuteMetadataCommandAsync(
+                    sql, MetadataOperation.GetCatalogs, cancellationToken).ConfigureAwait(false);
+                IsNativeMetadataResult = result.IsNative;
+                if (result.IsNative)
+                    return NativeMetadataResultBuilder.Build(
+                        result, MetadataSchemaFactory.CreateCatalogsSchema(), MetadataOperation.GetCatalogs);
 
                 var tableCatBuilder = new StringArray.Builder();
                 int count = 0;
-                foreach (var batch in batches)
+                foreach (string catalog in MetadataRowReader.Catalogs(result))
                 {
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalog");
-                    if (catalogArray == null) continue;
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (!catalogArray.IsNull(i))
-                        {
-                            tableCatBuilder.Append(catalogArray.GetString(i));
-                            count++;
-                        }
-                    }
+                    tableCatBuilder.Append(catalog);
+                    count++;
                 }
 
                 activity?.SetTag("result_count", count);
@@ -1318,57 +1348,22 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataSchemaName)).Build();
                 activity?.SetTag("sql_query", sql);
 
-                // Object-not-found (missing catalog/schema/table, or the server rejecting
-                // an empty/invalid name) → return an EMPTY result, matching both the Thrift
-                // path and the JDBC reference driver (isObjectNotFoundException). Restores
-                // the #388 behavior; the "make SEA throw" premise was disproven — Thrift
-                // returns empty on object-not-found too.
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    activity?.AddEvent("statement.get_schemas.object_not_found", [
-                        new("error", ex.Message)
-                    ]);
-                    return MetadataSchemaFactory.CreateEmptySchemasResult();
-                }
-
-                // SHOW SCHEMAS IN ALL CATALOGS returns 2 columns: databaseName, catalog
-                // SHOW SCHEMAS IN `catalog` returns 1 column: databaseName
-                bool showAllCatalogs = catalog == null;
+                var result = await _connection.ReadMetadataAsync(
+                    sql, MetadataOperation.GetSchemas, cancellationToken, catalog,
+                    CatalogFilter.Exact(_escapePatternWildcards ? catalog : null)).ConfigureAwait(false);
+                IsNativeMetadataResult = result.IsNative;
+                if (result.IsNative)
+                    return NativeMetadataResultBuilder.Build(
+                        result, MetadataSchemaFactory.CreateSchemasSchema(), MetadataOperation.GetSchemas);
 
                 var tableSchemaBuilder = new StringArray.Builder();
                 var tableCatalogBuilder = new StringArray.Builder();
                 int count = 0;
-                foreach (var batch in batches)
+                foreach (var row in MetadataRowReader.Schemas(result))
                 {
-                    StringArray? catalogArray = null;
-                    StringArray? schemaArray = null;
-
-                    if (showAllCatalogs)
-                    {
-                        schemaArray = batch.Column(0) as StringArray;
-                        catalogArray = batch.Column(1) as StringArray;
-                    }
-                    else
-                    {
-                        schemaArray = batch.Column(0) as StringArray;
-                    }
-
-                    if (schemaArray == null) continue;
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (schemaArray.IsNull(i)) continue;
-                        tableSchemaBuilder.Append(schemaArray.GetString(i));
-                        string catalogValue = catalogArray != null && !catalogArray.IsNull(i)
-                            ? catalogArray.GetString(i)
-                            : catalog ?? "";
-                        tableCatalogBuilder.Append(catalogValue);
-                        count++;
-                    }
+                    tableSchemaBuilder.Append(row.Schema);
+                    tableCatalogBuilder.Append(row.Catalog);
+                    count++;
                 }
 
                 activity?.SetTag("result_count", count);
@@ -1407,29 +1402,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     EscapePatternWildcardsInName(_metadataTableName)).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    activity?.AddEvent("statement.get_tables.object_not_found", [
-                        new("error", ex.Message)
-                    ]);
-                    return MetadataSchemaFactory.CreateEmptyTablesResult();
-                }
+                var result = await _connection.ReadMetadataAsync(
+                    sql, MetadataOperation.GetTables, cancellationToken, catalog,
+                    _escapePatternWildcards ? CatalogFilter.Exact(catalog) : CatalogFilter.Pattern(catalog)).ConfigureAwait(false);
+                IsNativeMetadataResult = result.IsNative;
 
-                var tableCatBuilder = new StringArray.Builder();
-                var tableSchemaBuilder = new StringArray.Builder();
-                var tableNameBuilder = new StringArray.Builder();
-                var tableTypeBuilder = new StringArray.Builder();
-                var remarksBuilder = new StringArray.Builder();
-                var typeCatBuilder = new StringArray.Builder();
-                var typeSchemaBuilder = new StringArray.Builder();
-                var typeNameBuilder = new StringArray.Builder();
-                var selfRefColBuilder = new StringArray.Builder();
-                var refGenBuilder = new StringArray.Builder();
                 // Issue #526: match JDBC's MetadataResultSetBuilder and the Thrift path -
                 // the types filter is a case-SENSITIVE exact match against the server's
                 // uppercase type names (TABLE/VIEW/...). Use Ordinal, not OrdinalIgnoreCase.
@@ -1441,33 +1418,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         StringComparer.Ordinal)
                     : null;
 
-                int count = 0;
-                foreach (var batch in batches)
-                {
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var tableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    var tableTypeArray = TryGetColumn<StringArray>(batch, "tableType");
-                    var remarksArray = TryGetColumn<StringArray>(batch, "remarks");
-                    if (catalogArray == null || schemaArray == null || tableArray == null) continue;
+                if (result.IsNative)
+                    return NativeMetadataResultBuilder.Build(
+                        result, MetadataSchemaFactory.CreateTablesSchema(), MetadataOperation.GetTables,
+                        tableTypes: tableTypeFilter);
 
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i)) continue;
-                        string tableType = tableTypeArray != null && !tableTypeArray.IsNull(i) ? tableTypeArray.GetString(i) : "TABLE";
-                        if (tableTypeFilter != null && !tableTypeFilter.Contains(tableType)) continue;
-                        tableCatBuilder.Append(catalogArray.GetString(i));
-                        tableSchemaBuilder.Append(schemaArray.GetString(i));
-                        tableNameBuilder.Append(tableArray.GetString(i));
-                        tableTypeBuilder.Append(tableType);
-                        remarksBuilder.Append(remarksArray != null && !remarksArray.IsNull(i) ? remarksArray.GetString(i) : "");
-                        typeCatBuilder.AppendNull();
-                        typeSchemaBuilder.AppendNull();
-                        typeNameBuilder.AppendNull();
-                        selfRefColBuilder.AppendNull();
-                        refGenBuilder.AppendNull();
-                        count++;
-                    }
+                var tableCatBuilder = new StringArray.Builder();
+                var tableSchemaBuilder = new StringArray.Builder();
+                var tableNameBuilder = new StringArray.Builder();
+                var tableTypeBuilder = new StringArray.Builder();
+                var remarksBuilder = new StringArray.Builder();
+                var typeCatBuilder = new StringArray.Builder();
+                var typeSchemaBuilder = new StringArray.Builder();
+                var typeNameBuilder = new StringArray.Builder();
+                var selfRefColBuilder = new StringArray.Builder();
+                var refGenBuilder = new StringArray.Builder();
+                int count = 0;
+                foreach (var row in MetadataRowReader.Tables(
+                    result, tableTypeFilter, normalizeEmptyTableType: false))
+                {
+                    tableCatBuilder.Append(row.Catalog);
+                    tableSchemaBuilder.Append(row.Schema);
+                    tableNameBuilder.Append(row.Table);
+                    tableTypeBuilder.Append(row.TableType);
+                    remarksBuilder.Append(row.Remarks);
+                    typeCatBuilder.AppendNull();
+                    typeSchemaBuilder.AppendNull();
+                    typeNameBuilder.AppendNull();
+                    selfRefColBuilder.AppendNull();
+                    refGenBuilder.AppendNull();
+                    count++;
                 }
 
                 activity?.SetTag("result_count", count);
@@ -1501,67 +1481,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     return FlatColumnsResultBuilder.BuildFlatColumnsResult(
                         System.Array.Empty<(string, string, string, TableInfo)>());
 
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteShowColumnsAsync(
+                var columns = await StatementExecutionConnection.ReadMetadataOrEmptyAsync(
+                    MetadataOperation.GetColumns,
+                    () => _connection.ReadColumnsAsync(
                         catalog,
                         EscapePatternWildcardsInName(_metadataSchemaName),
                         EscapePatternWildcardsInName(_metadataTableName),
                         EscapePatternWildcardsInName(_metadataColumnName),
-                        cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    activity?.AddEvent("statement.get_columns.object_not_found", [
-                        new("error", ex.Message)
-                    ]);
-                    return FlatColumnsResultBuilder.BuildFlatColumnsResult(
-                        System.Array.Empty<(string, string, string, TableInfo)>());
-                }
+                        cancellationToken, CatalogFilter.Exact(_escapePatternWildcards ? catalog : null)),
+                    () => new ColumnMetadataResult(System.Array.Empty<MetadataBatches>())).ConfigureAwait(false);
 
-                var tableInfos = new Dictionary<string, (string catalog, string schema, string table, TableInfo info)>();
-
-                foreach (var batch in batches)
-                {
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var tableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var columnTypeArray = TryGetColumn<StringArray>(batch, "columnType");
-                    var isNullableArray = TryGetColumn<StringArray>(batch, "isNullable");
-
-                    if (catalogArray == null || schemaArray == null || tableArray == null ||
-                        colNameArray == null || columnTypeArray == null) continue;
-
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (catalogArray.IsNull(i) || schemaArray.IsNull(i) || tableArray.IsNull(i) ||
-                            colNameArray.IsNull(i) || columnTypeArray.IsNull(i)) continue;
-
-                        string cat = catalogArray.GetString(i);
-                        string sch = schemaArray.GetString(i);
-                        string tbl = tableArray.GetString(i);
-                        string key = $"{cat}.{sch}.{tbl}";
-
-                        if (!tableInfos.ContainsKey(key))
-                            tableInfos[key] = (cat, sch, tbl, new TableInfo("TABLE"));
-
-                        var entry = tableInfos[key];
-                        bool nullable = isNullableArray == null || isNullableArray.IsNull(i) ||
-                            !isNullableArray.GetString(i).Equals("false", StringComparison.OrdinalIgnoreCase);
-
-                        ColumnMetadataHelper.PopulateTableInfoFromTypeName(
-                            entry.info,
-                            colNameArray.GetString(i),
-                            columnTypeArray.GetString(i),
-                            entry.info.ColumnName.Count,
-                            nullable);
-                    }
-                }
-
-                activity?.SetTag("result_tables", tableInfos.Count);
-                return FlatColumnsResultBuilder.BuildFlatColumnsResult(tableInfos.Values);
+                IsNativeMetadataResult = columns.IsNative;
+                if (!columns.IsNative)
+                    activity?.SetTag("result_tables", columns.Rows
+                        .Where(column => column.Catalog != null && column.Schema != null && column.Table != null)
+                        .Select(column => $"{column.Catalog}.{column.Schema}.{column.Table}")
+                        .Distinct().Count());
+                return await FlatColumnsResultBuilder.BuildFlatColumnsResultAsync(
+                    columns, cancellationToken).ConfigureAwait(false);
             }, "GetColumns").ConfigureAwait(false);
         }
 
@@ -1798,49 +1735,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string sql = new ShowKeysCommand(catalog!, schema!, table!).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    activity?.AddEvent("statement.get_primary_keys.object_not_found", [
-                        new("error", ex.Message)
-                    ]);
-                    return MetadataSchemaFactory.CreateEmptyPrimaryKeysResult();
-                }
+                var result = await _connection.ReadMetadataAsync(
+                    sql, MetadataOperation.GetPrimaryKeys, cancellationToken).ConfigureAwait(false);
+                IsNativeMetadataResult = result.IsNative;
+                if (result.IsNative)
+                    return NativeMetadataResultBuilder.Build(
+                        result, MetadataSchemaFactory.CreatePrimaryKeysSchema(), MetadataOperation.GetPrimaryKeys);
 
-                var keys = new List<(string, string, string, string, int, string)>();
-                int seq = 0;
-                foreach (var batch in batches)
-                {
-                    var colNameArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var keyNameArray = TryGetColumn<StringArray>(batch, "constraintName");
-                    var keySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
-                    // Read the identifier columns back from the SHOW KEYS response so
-                    // TABLE_CAT/TABLE_SCHEM/TABLE_NAME reflect the server's stored (canonical)
-                    // casing rather than echoing the caller's input case. Mirrors the JDBC
-                    // reference driver (PRIMARY_KEYS_COLUMNS maps TABLE_CAT→catalogName,
-                    // TABLE_SCHEM→namespace, TABLE_NAME→tableName) and this driver's own
-                    // FetchCrossReferenceAsync. Fall back to the input args when the server
-                    // omits a value, so behavior is never worse than before.
-                    var catalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var schemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var tableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    if (colNameArray == null) continue;
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (colNameArray.IsNull(i)) continue;
-                        int keySeq = keySeqArray != null && !keySeqArray.IsNull(i) ? keySeqArray.GetValue(i)!.Value : ++seq;
-                        string pkName = keyNameArray != null && !keyNameArray.IsNull(i) ? keyNameArray.GetString(i) : "";
-                        string rowCatalog = catalogArray != null && !catalogArray.IsNull(i) ? catalogArray.GetString(i) : catalog!;
-                        string rowSchema = schemaArray != null && !schemaArray.IsNull(i) ? schemaArray.GetString(i) : schema!;
-                        string rowTable = tableArray != null && !tableArray.IsNull(i) ? tableArray.GetString(i) : table!;
-                        keys.Add((rowCatalog, rowSchema, rowTable,
-                            colNameArray.GetString(i), keySeq, pkName));
-                    }
-                }
+                var keys = MetadataRowReader.PrimaryKeys(result, catalog!, schema!, table!)
+                    .Select(row => (row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.Name)).ToList();
 
                 activity?.SetTag("result_count", keys.Count);
                 return MetadataSchemaFactory.BuildPrimaryKeysResult(keys);
@@ -1873,7 +1776,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             // Pass the parent catalog to the filter ONLY when the caller explicitly supplied it. When
             // unset, _metadataCatalogName holds the connection's seeded default catalog; using it as the
-            // parent-catalog filter (added in the ParentMatches step) wrongly drops every FK whose real
+            // parent-catalog filter wrongly drops every FK whose real
             // parent is in another catalog — e.g. getImportedKeys (no parent supplied) returns empty while
             // Thrift returns the row. Parent schema/table are not seeded, so they already no-op when unset
             // and are passed through as-is; only the catalog needs this guard.
@@ -1920,110 +1823,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 string sql = new ShowForeignKeysCommand(fkCatalog!, fkSchema!, fkTable!).Build();
                 activity?.SetTag("sql_query", sql);
 
-                List<RecordBatch> batches;
-                try
-                {
-                    batches = await _connection.ExecuteMetadataSqlAsync(sql, cancellationToken).ConfigureAwait(false);
-                }
-                catch (DatabricksException ex) when (ex.IsObjectNotFoundException())
-                {
-                    return MetadataSchemaFactory.CreateEmptyCrossReferenceResult();
-                }
+                var result = await _connection.ReadMetadataAsync(
+                    sql, MetadataOperation.GetCrossReference, cancellationToken).ConfigureAwait(false);
+                IsNativeMetadataResult = result.IsNative;
+                if (result.IsNative)
+                    return NativeMetadataResultBuilder.Build(
+                        result, MetadataSchemaFactory.CreateCrossReferenceSchema(), MetadataOperation.GetCrossReference,
+                        parentCatalog: pkCatalog, parentSchema: pkSchema, parentTable: pkTable);
 
-                var refs = new List<(string, string, string, string, string, string, string, string, int, int, int, string, string?, int)>();
-                int seq = 0;
-                foreach (var batch in batches)
-                {
-                    var pkCatalogArray = TryGetColumn<StringArray>(batch, "parentCatalogName");
-                    var pkSchemaArray = TryGetColumn<StringArray>(batch, "parentNamespace");
-                    var pkTableArray = TryGetColumn<StringArray>(batch, "parentTableName");
-                    var pkColArray = TryGetColumn<StringArray>(batch, "parentColName");
-                    var fkCatalogArray = TryGetColumn<StringArray>(batch, "catalogName");
-                    var fkSchemaArray = TryGetColumn<StringArray>(batch, "namespace");
-                    var fkTableArray = TryGetColumn<StringArray>(batch, "tableName");
-                    var fkColArray = TryGetColumn<StringArray>(batch, "col_name");
-                    var fkNameArray = TryGetColumn<StringArray>(batch, "constraintName");
-                    var fkKeySeqArray = TryGetColumn<Int32Array>(batch, "keySeq");
-                    var fkUpdateRuleArray = TryGetColumn<Int32Array>(batch, "updateRule");
-                    var fkDeleteRuleArray = TryGetColumn<Int32Array>(batch, "deleteRule");
-                    var fkDeferrabilityArray = TryGetColumn<Int32Array>(batch, "deferrability");
-
-                    if (fkColArray == null) continue;
-
-                    for (int i = 0; i < batch.Length; i++)
-                    {
-                        if (fkColArray.IsNull(i)) continue;
-
-                        // Raw server-provided parent identifiers, null when the column is
-                        // absent or NULL for this row. Filtering compares against these raw
-                        // values (not the value-population fallback below) so a requested
-                        // parent can never match a null server column against itself.
-                        string? srvPkCatalog = pkCatalogArray != null && !pkCatalogArray.IsNull(i) ? pkCatalogArray.GetString(i) : null;
-                        string? srvPkSchema = pkSchemaArray != null && !pkSchemaArray.IsNull(i) ? pkSchemaArray.GetString(i) : null;
-                        string? srvPkTable = pkTableArray != null && !pkTableArray.IsNull(i) ? pkTableArray.GetString(i) : null;
-
-                        // SHOW FOREIGN KEYS is scoped to the FOREIGN table only, so it returns
-                        // FKs to every parent. When the caller specified parent identifiers,
-                        // filter the rows down to that parent — mirroring the JDBC reference
-                        // driver (CrossReferenceKeysDatabricksResultSetAdapter.includeRow), which
-                        // keeps a row only when its parent catalog/schema/table equalsIgnoreCase
-                        // the requested one. A null parent arg means "no parent constraint" (the
-                        // GetColumnsExtended foreign-only reuse passes null on all three), so it
-                        // is NOT a filter; a specified parent that the server row doesn't match
-                        // (including a null/empty server value) filters the row out.
-                        if (!ParentMatches(pkCatalog, srvPkCatalog)
-                            || !ParentMatches(pkSchema, srvPkSchema)
-                            || !ParentMatches(pkTable, srvPkTable))
-                        {
-                            continue;
-                        }
-
-                        // Value population: fall back to the requested parent value when the
-                        // server column is null so the emitted row still carries an identifier.
-                        var rowPkCatalog = srvPkCatalog ?? pkCatalog ?? "";
-                        var rowPkSchema = srvPkSchema ?? pkSchema ?? "";
-                        var rowPkTable = srvPkTable ?? pkTable ?? "";
-
-                        refs.Add((
-                            rowPkCatalog,
-                            rowPkSchema,
-                            rowPkTable,
-                            pkColArray != null && !pkColArray.IsNull(i) ? pkColArray.GetString(i) : "",
-                            fkCatalogArray != null && !fkCatalogArray.IsNull(i) ? fkCatalogArray.GetString(i) : fkCatalog!,
-                            fkSchemaArray != null && !fkSchemaArray.IsNull(i) ? fkSchemaArray.GetString(i) : fkSchema!,
-                            fkTableArray != null && !fkTableArray.IsNull(i) ? fkTableArray.GetString(i) : fkTable!,
-                            fkColArray.GetString(i),
-                            fkKeySeqArray != null && !fkKeySeqArray.IsNull(i) ? fkKeySeqArray.GetValue(i)!.Value : ++seq,
-                            fkUpdateRuleArray != null && !fkUpdateRuleArray.IsNull(i) ? fkUpdateRuleArray.GetValue(i)!.Value : 0,
-                            fkDeleteRuleArray != null && !fkDeleteRuleArray.IsNull(i) ? fkDeleteRuleArray.GetValue(i)!.Value : 0,
-                            fkNameArray != null && !fkNameArray.IsNull(i) ? fkNameArray.GetString(i) : "",
-                            (string?)null,
-                            fkDeferrabilityArray != null && !fkDeferrabilityArray.IsNull(i) ? fkDeferrabilityArray.GetValue(i)!.Value : 5
-                        ));
-                    }
-                }
+                var refs = MetadataRowReader.ForeignKeys(result, pkCatalog, pkSchema, pkTable,
+                    fkCatalog!, fkSchema!, fkTable!)
+                    .Select(row => (row.ParentCatalog, row.ParentSchema, row.ParentTable, row.ParentColumn,
+                        row.Catalog, row.Schema, row.Table, row.Column, row.Sequence, row.UpdateRule,
+                        row.DeleteRule, row.Name, row.ParentName, row.Deferrability)).ToList();
 
                 activity?.SetTag("result_count", refs.Count);
                 return MetadataSchemaFactory.BuildCrossReferenceResult(refs);
             }, "GetCrossReference").ConfigureAwait(false);
         }
-
-        private static T? TryGetColumn<T>(RecordBatch batch, string name) where T : class, IArrowArray
-        {
-            try { return batch.Column(name) as T; }
-            catch (ArgumentOutOfRangeException) { return null; }
-        }
-
-        /// <summary>
-        /// Cross-reference parent-identifier filter. A null <paramref name="requested"/> means
-        /// "no parent constraint" (matches any row); a specified value matches case-insensitively,
-        /// mirroring the JDBC reference driver's CrossReferenceKeysDatabricksResultSetAdapter.
-        /// An empty-string requested value therefore matches only an empty-string row value —
-        /// which no real FK has — so it correctly filters everything out. A null row value
-        /// (server column absent/NULL) never matches a specified parent.
-        /// </summary>
-        private static bool ParentMatches(string? requested, string? rowValue)
-            => requested == null || (rowValue != null && string.Equals(requested, rowValue, StringComparison.OrdinalIgnoreCase));
 
         // TracingStatement implementation
         public override string AssemblyVersion => GetType().Assembly.GetName().Version?.ToString() ?? "1.0.0";

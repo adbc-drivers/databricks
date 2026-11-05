@@ -59,7 +59,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
 
             Assert.Equal("team:peco,env:test", result.QueryTags);
             Assert.Equal("all-apis", result.AuthScope);
@@ -87,15 +87,37 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
             Assert.False(disabled.EnableComplexDatatypeSupport);
 
             var enabled = ConnectionTelemetry.BuildDriverConnectionParams(
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: true,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
             Assert.True(enabled.EnableComplexDatatypeSupport);
+        }
+
+        [Fact]
+        public void EnableGeospatialSupport_UsesConfiguredRepresentation()
+        {
+            var props = new Dictionary<string, string>();
+
+            var disabled = ConnectionTelemetry.BuildDriverConnectionParams(
+                props, Host, DriverModeType.Thrift,
+                enableDirectResults: true,
+                enableComplexDatatypeSupport: false,
+                connectTimeoutMilliseconds: TimeoutMs,
+                enableGeospatialSupport: false);
+            Assert.False(disabled.EnableGeospatialSupport);
+
+            var enabled = ConnectionTelemetry.BuildDriverConnectionParams(
+                props, Host, DriverModeType.Thrift,
+                enableDirectResults: true,
+                enableComplexDatatypeSupport: false,
+                connectTimeoutMilliseconds: TimeoutMs,
+                enableGeospatialSupport: true);
+            Assert.True(enabled.EnableGeospatialSupport);
         }
 
         [Fact]
@@ -110,7 +132,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Telemetry
                 props, Host, DriverModeType.Thrift,
                 enableDirectResults: true,
                 enableComplexDatatypeSupport: false,
-                connectTimeoutMilliseconds: TimeoutMs);
+                connectTimeoutMilliseconds: TimeoutMs, enableGeospatialSupport: false);
 
             // Absent properties leave the proto fields unset (null/empty), matching JDBC.
             Assert.False(result.HasQueryTags);

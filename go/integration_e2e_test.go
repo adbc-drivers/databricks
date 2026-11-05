@@ -26,11 +26,14 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/adbc-drivers/databricks/go"
-	"github.com/adbc-drivers/driverbase-go/validation"
+	"github.com/adbc-drivers/driverbase-go/testutil"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	_ "github.com/databricks/databricks-sql-go"
 	"github.com/stretchr/testify/require"
@@ -49,7 +52,7 @@ func TestE2E(t *testing.T) {
 
 func (suite *E2ETests) TestSimpleQuery() {
 	ctx := context.Background()
-	suite.Require().NoError(suite.stmt.SetSqlQuery("SELECT 1 as test_column"))
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT 1 as test_column"))
 	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
 	suite.Require().NoError(err)
 	defer reader.Release()
@@ -63,6 +66,104 @@ func (suite *E2ETests) TestSimpleQuery() {
 	suite.Require().Equal(int64(1), record.NumRows(), "Expected 1 row")
 
 	suite.T().Logf("✅ Query result: %d columns, %d rows", record.NumCols(), record.NumRows())
+}
+
+func (suite *E2ETests) TestNamedParameters() {
+	ctx := context.Background()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "number", Type: arrow.PrimitiveTypes.Int64},
+		{Name: "text", Type: arrow.BinaryTypes.String},
+	}, nil)
+	builder := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	builder.Field(0).(*array.Int64Builder).AppendValues([]int64{10, 20}, nil)
+	builder.Field(1).(*array.StringBuilder).AppendValues([]string{"first", "second"}, nil)
+	record := builder.NewRecordBatch()
+	builder.Release()
+	defer record.Release()
+
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT :number AS number, :text AS text"))
+	suite.Require().NoError(suite.stmt.Bind(ctx, record))
+	reader, rowsAffected, err := suite.stmt.ExecuteQuery(ctx)
+	suite.Require().NoError(err)
+	defer reader.Release()
+	suite.EqualValues(-1, rowsAffected)
+
+	var numbers []int64
+	var texts []string
+	for reader.Next() {
+		batch := reader.RecordBatch()
+		numberColumn := batch.Column(0).(*array.Int64)
+		textColumn := batch.Column(1).(*array.String)
+		for row := range int(batch.NumRows()) {
+			numbers = append(numbers, numberColumn.Value(row))
+			texts = append(texts, textColumn.Value(row))
+		}
+	}
+	suite.Require().NoError(reader.Err())
+	suite.Equal([]int64{10, 20}, numbers)
+	suite.Equal([]string{"first", "second"}, texts)
+}
+
+func (suite *E2ETests) TestNullableParameters() {
+	ctx := context.Background()
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "number", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "text", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	record, _, err := array.RecordFromJSON(suite.Quirks.Alloc(), schema, strings.NewReader(`[
+		{"number": null, "text": null},
+		{"number": 42, "text": ""},
+		{"number": -42, "text": "bar"}
+	]`))
+	suite.Require().NoError(err)
+	defer record.Release()
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT ?, ?"))
+	suite.Require().NoError(suite.stmt.Prepare(ctx))
+	suite.Require().NoError(suite.stmt.Bind(ctx, record))
+	reader, _, err := suite.stmt.ExecuteQuery(ctx)
+	suite.Require().NoError(err)
+	defer reader.Release()
+
+	row := 0
+	for reader.Next() {
+		batch := reader.RecordBatch()
+		suite.True(batch.Schema().Equal(reader.Schema()))
+		for i := range int(batch.NumRows()) {
+			for col := range int(batch.NumCols()) {
+				suite.Equal(record.Column(col).GetOneForMarshal(row), batch.Column(col).GetOneForMarshal(i))
+			}
+			row++
+		}
+	}
+	suite.Require().NoError(reader.Err())
+	suite.EqualValues(record.NumRows(), row)
+}
+
+func (suite *E2ETests) TestParameterizedExpressions() {
+	ctx := context.Background()
+	schema := arrow.NewSchema([]arrow.Field{{Name: "value", Type: arrow.PrimitiveTypes.Int64}}, nil)
+	record, _, err := array.RecordFromJSON(suite.Quirks.Alloc(), schema, strings.NewReader(`[
+		{"value": 1}, {"value": 2}, {"value": 3}, {"value": 4}
+	]`))
+	suite.Require().NoError(err)
+	defer record.Release()
+	suite.Require().NoError(suite.stmt.SetSqlQuery(context.Background(), "SELECT 1 + :value"))
+	suite.Require().NoError(suite.stmt.Bind(ctx, record))
+	reader, _, err := suite.stmt.ExecuteQuery(ctx)
+	suite.Require().NoError(err)
+	defer reader.Release()
+
+	var values []int64
+	for reader.Next() {
+		batch := reader.RecordBatch()
+		suite.True(batch.Schema().Equal(reader.Schema()))
+		column := batch.Column(0).(*array.Int64)
+		for row := range int(batch.NumRows()) {
+			values = append(values, column.Value(row))
+		}
+	}
+	suite.Require().NoError(reader.Err())
+	suite.Equal([]int64{2, 3, 4, 5}, values)
 }
 
 // TestE2E_MetadataOperations tests metadata retrieval operations
@@ -89,11 +190,11 @@ func (suite *E2ETests) TestMetadataOperations() {
 	// Test basic metadata queries
 	suite.T().Run("ShowCatalogs", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
-		err = stmt.SetSqlQuery("SHOW CATALOGS")
+		err = stmt.SetSqlQuery(context.Background(), "SHOW CATALOGS")
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -112,12 +213,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowSchemas", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
 		query := fmt.Sprintf("SHOW SCHEMAS IN %s", catalog)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(context.Background(), query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -136,12 +237,12 @@ func (suite *E2ETests) TestMetadataOperations() {
 
 	suite.T().Run("ShowTables", func(t *testing.T) {
 		ctx := context.Background()
-		stmt, err := suite.cnxn.NewStatement()
+		stmt, err := suite.cnxn.NewStatement(context.Background())
 		require.NoError(t, err)
-		defer validation.CheckedClose(suite.T(), stmt)
+		defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
 		query := fmt.Sprintf("SHOW TABLES IN %s.%s", catalog, schema)
-		err = stmt.SetSqlQuery(query)
+		err = stmt.SetSqlQuery(context.Background(), query)
 		require.NoError(t, err)
 
 		reader, _, err := stmt.ExecuteQuery(ctx)
@@ -186,23 +287,23 @@ func (suite *E2ETests) TestConnectionOptions() {
 			maps.Copy(opts, suite.Quirks.DatabaseOptions())
 			maps.Copy(opts, tt.options)
 
-			db, err := driver.NewDatabase(opts)
+			db, err := driver.NewDatabaseWithContext(context.Background(), opts)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), db)
+			defer testutil.CheckedCloseWithContext(suite.T(), db, context.Background())
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 
 			conn, err := db.Open(ctx)
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), conn)
+			defer testutil.CheckedCloseWithContext(suite.T(), conn, context.Background())
 
 			// Execute a simple query to verify the connection works
-			stmt, err := conn.NewStatement()
+			stmt, err := conn.NewStatement(context.Background())
 			require.NoError(t, err)
-			defer validation.CheckedClose(suite.T(), stmt)
+			defer testutil.CheckedCloseWithContext(suite.T(), stmt, context.Background())
 
-			err = stmt.SetSqlQuery("SELECT 1")
+			err = stmt.SetSqlQuery(context.Background(), "SELECT 1")
 			require.NoError(t, err)
 
 			reader, _, err := stmt.ExecuteQuery(ctx)

@@ -43,7 +43,7 @@ type statementImpl struct {
 	bulkIngestOptions driverbase.BulkIngestOptions
 }
 
-func (s *statementImpl) Close() error {
+func (s *statementImpl) Close(ctx context.Context) error {
 	if s.conn == nil {
 		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "statement already closed")
 	}
@@ -61,7 +61,7 @@ func (s *statementImpl) Close() error {
 	return nil
 }
 
-func (s *statementImpl) SetOption(key, val string) error {
+func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {
@@ -71,7 +71,7 @@ func (s *statementImpl) SetOption(key, val string) error {
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "unsupported statement option: %s=%s", key, val)
 }
 
-func (s *statementImpl) SetSqlQuery(query string) error {
+func (s *statementImpl) SetSqlQuery(ctx context.Context, query string) error {
 	s.query = query
 	// Reset prepared statement if query changes
 	if s.prepared != nil {
@@ -90,7 +90,7 @@ func (s *statementImpl) Prepare(ctx context.Context) error {
 
 	stmt, err := s.conn.conn.PrepareContext(ctx, s.query)
 	if err != nil {
-		return s.ErrorHelper.Errorf(adbc.StatusInvalidState, "failed to prepare statement: %v", err)
+		return s.ErrorHelper.WrapInvalidState(err, "failed to prepare statement")
 	}
 
 	s.prepared = stmt
@@ -98,29 +98,59 @@ func (s *statementImpl) Prepare(ctx context.Context) error {
 }
 
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
-	if s.boundStream != nil {
-		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "parameterized queries not yet implemented")
-	}
-
 	if s.query == "" {
 		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
 	}
+	if s.boundStream != nil {
+		stream := s.boundStream
+		s.boundStream = nil
+		conn := s.conn.conn
+		query := s.query
+		errorHelper := s.ErrorHelper
+		iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(query))
+		if err != nil {
+			return nil, -1, err
+		}
+		query, err = iterator.bindQuery(query)
+		if err != nil {
+			iterator.Release()
+			return nil, -1, err
+		}
+		reader, err := newParameterizedQueryReader(iterator, func(args []driver.NamedValue) (array.RecordReader, error) {
+			return executeQuery(ctx, conn, query, args, errorHelper)
+		})
+		if err != nil {
+			return nil, -1, err
+		}
+		return reader, -1, nil
+	}
 
+	reader, err := s.executeQuery(ctx, nil)
+	return reader, -1, err
+}
+
+func (s *statementImpl) executeQuery(ctx context.Context, args []driver.NamedValue) (array.RecordReader, error) {
+	return executeQuery(ctx, s.conn.conn, s.query, args, s.ErrorHelper)
+}
+
+func executeQuery(ctx context.Context, conn *sql.Conn, query string, args []driver.NamedValue, errorHelper driverbase.ErrorHelper) (array.RecordReader, error) {
 	// Execute query using raw driver interface to get Arrow batches
 	// This works for both prepared and unprepared statements since
 	// databricks-sql-go doesn't do server-side preparation
 	var driverRows driver.Rows
 	var err error
-	err = s.conn.conn.Raw(func(driverConn interface{}) error {
+	err = conn.Raw(func(driverConn interface{}) error {
 		// Use raw driver interface for direct Arrow access
-		queryerCtx := driverConn.(driver.QueryerContext)
-		var driverArgs []driver.NamedValue
-		driverRows, err = queryerCtx.QueryContext(ctx, s.query, driverArgs)
+		queryerCtx, ok := driverConn.(driver.QueryerContext)
+		if !ok {
+			return errors.New("driver does not support context-aware queries")
+		}
+		driverRows, err = queryerCtx.QueryContext(ctx, query, args)
 		return err
 	})
 
 	if err != nil {
-		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute query: %v", err)
+		return nil, errorHelper.WrapInternal(err, "failed to execute query")
 	}
 
 	defer func() {
@@ -135,13 +165,11 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 	// Use the IPC stream interface (zero-copy)
 	reader, err := newIPCReaderAdapter(ctx, driverRows)
 	if err != nil {
-		return nil, -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
+		return nil, errorHelper.Errorf(adbc.StatusInternal, "failed to create IPC reader adapter: %v", err)
 	}
 	driverRows = nil // Prevent double close in defer
 
-	// Return -1 for rowsAffected (unknown) since we can't count without consuming
-	// The ADBC spec allows -1 to indicate "unknown number of rows affected"
-	return reader, -1, nil
+	return reader, nil
 }
 
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
@@ -149,61 +177,117 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		return s.executeIngest(ctx)
 	}
 
-	if s.boundStream != nil {
-		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "bound data provided but no ingest target set")
+	if s.query == "" {
+		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
+	}
+	if s.boundStream == nil {
+		return s.executeUpdate(ctx, s.query, nil)
+	}
+
+	stream := s.boundStream
+	s.boundStream = nil
+	iterator, err := newParameterRowIterator(stream, parameterBindingModeForQuery(s.query))
+	if err != nil {
+		return -1, err
+	}
+	defer iterator.Release()
+	query, err := iterator.bindQuery(s.query)
+	if err != nil {
+		return -1, err
+	}
+
+	var totalRows int64
+	executed := false
+	unknown := false
+	for {
+		args, ok, err := iterator.Next()
+		if err != nil {
+			return -1, err
+		}
+		if !ok {
+			break
+		}
+		executed = true
+		rows, err := s.executeUpdate(ctx, query, args)
+		if err != nil {
+			return -1, err
+		}
+		if rows < 0 {
+			unknown = true
+		} else if !unknown {
+			totalRows += rows
+		}
+	}
+	if !executed {
+		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidArgument, "parameter stream contains no rows")
+	}
+	if unknown {
+		return -1, nil
+	}
+	return totalRows, nil
+}
+
+func (s *statementImpl) executeUpdate(ctx context.Context, query string, args []driver.NamedValue) (int64, error) {
+	values := make([]any, len(args))
+	for i := range args {
+		values[i] = args[i].Value
 	}
 
 	var result sql.Result
 	var err error
-
-	if s.prepared != nil {
-		result, err = s.prepared.ExecContext(ctx)
-	} else if s.query != "" {
-		result, err = s.conn.conn.ExecContext(ctx, s.query)
+	if s.prepared != nil && query == s.query {
+		result, err = s.prepared.ExecContext(ctx, values...)
 	} else {
-		return -1, s.ErrorHelper.Errorf(adbc.StatusInvalidState, "no query set")
+		result, err = s.conn.conn.ExecContext(ctx, query, values...)
 	}
-
 	if err != nil {
-		return -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to execute update: %v", err)
+		return -1, s.ErrorHelper.WrapInternal(err, "failed to execute update")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
 		return -1, s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to get rows affected: %v", err)
 	}
-
 	return rowsAffected, nil
 }
 
 func (s *statementImpl) Bind(ctx context.Context, values arrow.RecordBatch) error {
-	if s.boundStream != nil {
-		s.boundStream.Release()
+	if values == nil {
+		if s.boundStream != nil {
+			s.boundStream.Release()
+			s.boundStream = nil
+		}
+		return nil
 	}
 	stream, err := array.NewRecordReader(values.Schema(), []arrow.RecordBatch{values})
 	if err != nil {
 		return s.ErrorHelper.Errorf(adbc.StatusInternal, "failed to create record reader")
+	}
+	if s.boundStream != nil {
+		s.boundStream.Release()
 	}
 	s.boundStream = stream
 	return nil
 }
 
 func (s *statementImpl) BindStream(ctx context.Context, stream array.RecordReader) error {
+	if stream != nil {
+		stream.Retain()
+	}
 	if s.boundStream != nil {
 		s.boundStream.Release()
 	}
-	stream.Retain()
 	s.boundStream = stream
 	return nil
 }
 
-func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
+func (s *statementImpl) GetParameterSchema(ctx context.Context) (*arrow.Schema, error) {
 	// This would require parsing the SQL query to determine parameter types
 	// For now, return nil to indicate unknown schema
 	return nil, s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "parameter schema detection not implemented")
 }
 
-func (s *statementImpl) SetSubstraitPlan(plan []byte) error {
+func (s *statementImpl) SetSubstraitPlan(ctx context.Context, plan []byte) error {
 	// Databricks SQL doesn't support Substrait plans
 	return s.ErrorHelper.Errorf(adbc.StatusNotImplemented, "Substrait plans not supported")
 }

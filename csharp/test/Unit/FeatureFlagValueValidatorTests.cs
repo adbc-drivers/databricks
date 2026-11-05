@@ -47,6 +47,18 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         [Theory]
+        [InlineData("true", true)]
+        [InlineData("false", true)]
+        [InlineData("null", false)]
+        [InlineData("", false)]
+        public void SeaResponseCompressionEnabled_IsValidatedAsBoolean(string value, bool expected)
+        {
+            // Read with the throwing boolean getter on the SEA connect path, so a malformed
+            // server-pushed value must be dropped rather than break connection setup.
+            Assert.Equal(expected, FeatureFlagValueValidator.IsAcceptable(DatabricksParameters.SeaResponseCompressionEnabled, value));
+        }
+
+        [Theory]
         [InlineData("3")]
         [InlineData("1")]
         public void PositiveInt_Valid_IsAcceptable(string value)
@@ -77,12 +89,14 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [Fact]
         public void BaseClassApacheParameters_AreRegistered()
         {
-            // PollTimeMilliseconds is a positive-int; QueryTimeoutSeconds is a plain int.
+            // PollTimeMilliseconds is a positive-int; QueryTimeoutSeconds is a non-negative int.
             Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "1000"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "null"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.PollTimeMilliseconds, "0"));
 
-            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "-5"));
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "0"));
+            Assert.True(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "5"));
+            Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "-5"));
             Assert.False(FeatureFlagValueValidator.IsAcceptable(ApacheParameters.QueryTimeoutSeconds, "null"));
         }
 

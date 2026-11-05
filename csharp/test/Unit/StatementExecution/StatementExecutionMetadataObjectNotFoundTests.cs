@@ -15,6 +15,7 @@
 */
 
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -28,6 +29,7 @@ using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using AdbcDrivers.Databricks.StatementExecution;
 using AdbcDrivers.HiveServer2;
+using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Microsoft.IO;
 using Moq;
@@ -734,26 +736,22 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 () => stmt.ExecuteQueryAsync(CancellationToken.None));
         }
 
-        // ─── GetCrossReference parent-identifier filter ──────────────────────────────
-        // SHOW FOREIGN KEYS is scoped to the FOREIGN table only, so it returns FKs to
-        // every parent. GetCrossReferenceAsyncNoThrow filters the returned rows by any
-        // SPECIFIED (non-null) parent identifier — mirroring the JDBC reference driver
-        // (CrossReferenceKeysDatabricksResultSetAdapter.includeRow). ParentMatches is the
-        // per-field predicate; these pin the three behaviors the filter relies on:
-        //   • null requested  → no constraint (matches any row) — the GetColumnsExtended
-        //     foreign-only reuse passes null parents and must stay UNFILTERED;
-        //   • specified value → case-insensitive equality;
-        //   • empty string    → matches only an empty row value (no real FK has one), so
-        //     an empty-string parent (the diff[6] case) filters every row out → empty.
-        // Reflection is used because the predicate is a private static helper (same
-        // approach as DatabricksStatementTests.GetConfOverlay).
-        private static bool InvokeParentMatches(string? requested, string? rowValue)
+        [Theory]
+        [InlineData((int)MetadataOperation.GetSchemas, "get_schemas")]
+        [InlineData((int)MetadataOperation.GetPrimaryKeys, "get_primary_keys")]
+        [InlineData((int)MetadataOperation.GetCrossReference, "get_cross_reference")]
+        public async Task MetadataRead_ObjectNotFound_ReturnsEmptyAndTraces(int operation, string name)
         {
-            var method = typeof(StatementExecutionStatement).GetMethod(
-                "ParentMatches",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            Assert.NotNull(method);
-            return (bool)method!.Invoke(null, new object?[] { requested, rowValue })!;
+            using var activity = new Activity("metadata-test").Start();
+            var exception = new DatabricksException("TABLE_OR_VIEW_NOT_FOUND");
+
+            int result = await StatementExecutionConnection.ReadMetadataOrEmptyAsync(
+                (MetadataOperation)operation, () => Task.FromException<int>(exception), () => 0);
+
+            Assert.Equal(0, result);
+            var traceEvent = Assert.Single(activity.Events);
+            Assert.Equal($"statement.{name}.object_not_found", traceEvent.Name);
+            Assert.Equal(exception.Message, Assert.Single(traceEvent.Tags).Value);
         }
 
         [Theory]
@@ -761,27 +759,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         [InlineData(null, "")]                   // null requested → matches even empty row value
         [InlineData("comparator_tests", "comparator_tests")]   // exact match
         [InlineData("COMPARATOR_TESTS", "comparator_tests")]   // case-insensitive match
-        public void ParentMatches_NullOrEqual_ReturnsTrue(string? requested, string rowValue)
+        public void ExactCatalogFilter_NullOrEqual_ReturnsTrue(string? requested, string rowValue)
         {
-            Assert.True(InvokeParentMatches(requested, rowValue));
+            Assert.True(MetadataRowReader.MatchesCatalog(CatalogFilter.Exact(requested), rowValue));
         }
 
         [Theory]
         [InlineData("", "comparator_tests")]     // empty-string requested (diff[6]) → filters out
         [InlineData("other_catalog", "comparator_tests")]   // specified, non-matching → filters out
         [InlineData("comparator_tests", null)]   // specified vs NULL server column → filters out
-        public void ParentMatches_SpecifiedNonMatching_ReturnsFalse(string requested, string? rowValue)
+        public void ExactCatalogFilter_SpecifiedNonMatching_ReturnsFalse(string requested, string? rowValue)
         {
-            Assert.False(InvokeParentMatches(requested, rowValue));
+            Assert.False(MetadataRowReader.MatchesCatalog(CatalogFilter.Exact(requested), rowValue));
         }
 
-        // ─── GetCrossReference parent-filter WIRING (end-to-end at the Http seam) ─────
-        // The tests above pin the ParentMatches predicate in isolation. These exercise the
-        // full SEA row-filtering loop in GetCrossReferenceAsyncNoThrow: a mocked SHOW FOREIGN
-        // KEYS result carrying FKs to TWO different parents flows through server-value
-        // extraction → ParentMatches × 3 → continue → value population. A regression that
-        // filtered on the wrong variable, or that let the empty-parent case (diff[6]) leak
-        // rows instead of collapsing to zero, would pass the predicate suite but fail here.
+        // Exercise parent filtering through the HTTP metadata path, not just the predicate.
 
         // A SHOW FOREIGN KEYS result with two rows: orders(customer_id) → main.sales.customers
         // and orders(manager_id) → main.hr.employees. Both share the same FOREIGN table

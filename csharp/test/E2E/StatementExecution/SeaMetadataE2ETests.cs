@@ -19,9 +19,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using AdbcDrivers.Databricks.StatementExecution;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
+using Apache.Arrow.Adbc.Tests.Metadata;
 using AdbcDrivers.HiveServer2;
 using Xunit;
 using Xunit.Abstractions;
@@ -63,6 +65,25 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             Skip.IfNot(Utils.CanExecuteTestConfig(TestConfigVariable), "Test configuration not available");
         }
 
+        private async Task<MetadataRecordingConnection> CreateMetadataRecordingConnection()
+        {
+            var parameters = GetDriverParameters(TestConfiguration);
+            parameters[DatabricksParameters.Protocol] = "rest";
+            parameters[DatabricksParameters.EnableMultipleCatalogSupport] = "true";
+            var connection = new MetadataRecordingConnection(parameters);
+            try
+            {
+                await connection.OpenAsync();
+                connection.Statements.Clear();
+                return connection;
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+        }
+
         // Connection on whatever protocol the test suite was configured with (driver
         // parameters / config file). Tests never pick the protocol themselves — the run
         // argument decides it, so the SEA/Reyden nightly runs them over REST and the
@@ -84,7 +105,8 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
         private async Task<List<Dictionary<string, string>>> ReadMetadata(AdbcConnection connection, string command,
             string? catalog = null, string? schema = null, string? table = null, string? column = null,
-            string? tableTypes = null, bool escapeWildcards = false)
+            string? tableTypes = null, bool escapeWildcards = false, bool requireNative = false,
+            string? foreignTable = null)
         {
             var results = new List<Dictionary<string, string>>();
             using var stmt = connection.CreateStatement();
@@ -95,10 +117,21 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             if (table != null) stmt.SetOption(ApacheParameters.TableName, table);
             if (column != null) stmt.SetOption(ApacheParameters.ColumnName, column);
             if (tableTypes != null) stmt.SetOption(ApacheParameters.TableTypes, tableTypes);
+            if (foreignTable != null)
+            {
+                stmt.SetOption(ApacheParameters.ForeignCatalogName, catalog!);
+                stmt.SetOption(ApacheParameters.ForeignSchemaName, schema!);
+                stmt.SetOption(ApacheParameters.ForeignTableName, foreignTable);
+            }
 
             stmt.SqlQuery = command;
             var result = stmt.ExecuteQuery();
             using var reader = result.Stream;
+            if (requireNative)
+            {
+                Assert.True(Assert.IsType<StatementExecutionStatement>(stmt).IsNativeMetadataResult,
+                    $"{command} fell back to SHOW; this warehouse must return is_native_metadata_result: true.");
+            }
 
             while (true)
             {
@@ -199,6 +232,58 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
         // rather than relying on the run's configured protocol.
         private static readonly Dictionary<string, string> RestProtocol =
             new() { { DatabricksParameters.Protocol, "rest" } };
+
+        [SkippableTheory]
+        [InlineData("GetCatalogs", "all_column_types", null, "TABLE_CAT", "main")]
+        [InlineData("GetSchemas", "all_column_types", null, "TABLE_SCHEM", TestSchema)]
+        [InlineData("GetTables", "all_column_types", null, "TABLE_NAME", "all_column_types")]
+        [InlineData("GetColumns", "all_column_types", null, "COLUMN_NAME", "c_int")]
+        [InlineData("GetPrimaryKeys", "cross_ref_customers", null, "TABLE_NAME", "cross_ref_customers")]
+        [InlineData("GetCrossReference", "cross_ref_customers", "cross_ref_orders", "PKTABLE_NAME", "cross_ref_customers")]
+        public async Task NativeMetadata_UsesNativeResponse(
+            string command, string table, string? foreignTable, string expectedColumn, string expectedValue)
+        {
+            SkipIfNotConfigured();
+
+            using var conn = CreateConnection(new Dictionary<string, string>(RestProtocol)
+            {
+                [DatabricksParameters.EnableMultipleCatalogSupport] = "true",
+                [DatabricksParameters.EnablePKFK] = "true",
+            });
+            var rows = await ReadMetadata(conn, command, TestCatalog, TestSchema, table,
+                requireNative: true, foreignTable: foreignTable);
+
+            Assert.Contains(rows, row => row[expectedColumn] == expectedValue);
+        }
+
+        [SkippableFact]
+        public async Task NativeMetadata_GetObjects_UsesNativeResponse()
+        {
+            SkipIfNotConfigured();
+            using var connection = await CreateMetadataRecordingConnection();
+            using var stream = connection.GetObjects(
+                AdbcConnection.GetObjectsDepth.All, TestCatalog, TestSchema, TestTable, null, null);
+            using var batch = await stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+
+            var catalog = Assert.Single(GetObjectsParser.ParseCatalog(batch, null),
+                catalog => catalog.Name == TestCatalog);
+            var schema = Assert.Single(catalog.DbSchemas!, schema => schema.Name == TestSchema);
+            var table = Assert.Single(schema.Tables!, table => table.Name == TestTable);
+            Assert.Contains(table.Columns!, column => column.Name == "c_int");
+            connection.AssertNativeResponses("SHOW CATALOGS", "SHOW SCHEMAS", "SHOW TABLES", "SHOW COLUMNS");
+        }
+
+        [SkippableFact]
+        public async Task NativeMetadata_GetTableSchema_UsesNativeResponse()
+        {
+            SkipIfNotConfigured();
+            using var connection = await CreateMetadataRecordingConnection();
+            var schema = connection.GetTableSchema(TestCatalog, TestSchema, "cross_ref_customers");
+
+            Assert.Equal("customer_id", schema.FieldsList[0].Name);
+            connection.AssertNativeResponses("SHOW COLUMNS");
+        }
 
         [SkippableFact]
         public async Task GetColumns_CatalogMatchAll_WithEscaping_ReturnsEmpty()

@@ -20,6 +20,51 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`, including
+  nested values; WKT/EWKT strings remain the default for backward compatibility.
+
+## [1.1.11] - 2026-10-06
+
+### Fixed
+
+- Validate SEA query timeout values (#689)
+
+### Changed
+
+- Revert the AOT/trim-safe `net10.0` change from 1.1.9 (#509) (#672)
+- Bump hiveserver2 submodule for the NU1902 SourceLink fix (#675)
+
+### Performance
+
+- Pipeline SEA `GetResultChunk` link fetches to keep CloudFetch downloads fed (#681)
+- Read SEA result responses as UTF-8 bytes instead of a string (#693)
+- Skip gzip on the SEA inline response body (#678)
+
+## [1.1.10] - 2026-09-09
+
+### Added
+
+- Transparently fall back to the Statement Execution API (SEA) when a Reyden/Lakehouse-RT warehouse rejects a Thrift `OpenSession` with SQLSTATE `KP001` (#670)
+
+## [1.1.9] - 2026-09-04
+
+### Added
+
+- Make the driver AOT/trim-safe under `net10.0` (#509)
+- Apply server feature flags synchronously on connect (#656)
+
+### Fixed
+
+- Don't filter `GetCrossReference` by the seeded default catalog (#660)
+- Align `GetCrossReference` Thrift and SEA paths on parent identifiers (#645)
+- Default empty/null `TABLE_TYPE` to `TABLE` in `GetTables` (#654)
+
+### Changed
+
+- Update hiveserver2 submodule to downgrade ApacheThrift (#649)
+
 ## [1.1.8] - 2026-08-11
 
 ### Added

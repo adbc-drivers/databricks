@@ -18,8 +18,9 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Databricks"]
 license = "Apache-2.0"
-description = "Databricks ADBC Driver for Rust"
+description = "Experimental Databricks ADBC driver for Rust; not ready for production use"
 repository = "https://github.com/adbc-drivers/databricks"
+publish = false
 keywords = ["databricks", "adbc", "arrow", "database", "sql"]
 categories = ["database"]
 

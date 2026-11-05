@@ -19,6 +19,10 @@
 This repository contains [ADBC drivers](https://arrow.apache.org/adbc/) for
 Databricks, implemented in different languages.
 
+> [!WARNING]
+> The Rust driver in [`rust/`](rust/) is under development and is not ready for
+> production use. Do not depend on it for production workloads.
+
 ## For Power BI
 
 If you use [Power BI](https://www.microsoft.com/power-platform/products/power-bi),
