@@ -347,13 +347,9 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oauthClientSecret, nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionQueryTags:
+		return d.getQueryTags()
 	default:
-		if name, ok := queryTagName(key); ok {
-			if v, ok := d.queryTags[name]; ok {
-				return v, nil
-			}
-			return "", queryTagNotSet(&d.ErrorHelper, name)
-		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
@@ -527,10 +523,9 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthClientSecret = value
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionQueryTags:
+		return d.setQueryTags(value)
 	default:
-		if name, ok := queryTagName(key); ok {
-			return d.setQueryTag(name, value)
-		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil

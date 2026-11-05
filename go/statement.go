@@ -65,8 +65,8 @@ func (s *statementImpl) Close(ctx context.Context) error {
 }
 
 func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
-	if name, ok := queryTagName(key); ok {
-		return s.setQueryTag(name, val)
+	if key == OptionQueryTags {
+		return s.setQueryTags(val)
 	}
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
@@ -78,11 +78,8 @@ func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 }
 
 func (s *statementImpl) GetOption(ctx context.Context, key string) (string, error) {
-	if name, ok := queryTagName(key); ok {
-		if v, ok := s.getQueryTag(name); ok {
-			return v, nil
-		}
-		return "", queryTagNotSet(&s.ErrorHelper, name)
+	if key == OptionQueryTags {
+		return s.getQueryTags()
 	}
 	return s.StatementImplBase.GetOption(ctx, key)
 }
