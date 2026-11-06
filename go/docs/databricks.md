@@ -125,7 +125,7 @@ Examples:
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
+  - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`) and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
   - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
 
   The methods backed by the Databricks SDK (`env-oidc`, `file-oidc`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
