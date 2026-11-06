@@ -97,8 +97,9 @@ func TestQueryTagValidation(t *testing.T) {
 	})
 }
 
-// An empty value is a key-only tag, which Databricks accepts; the limits count
-// characters, not bytes, and escaping does not count towards them.
+// The limits count characters, not bytes, and the driver counts the value as
+// given: the Databricks docs do not say whether escaping counts towards 128.
+// An empty value is sent as a key-only tag, which the docs show.
 func TestQueryTagLimitsCountCharacters(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}

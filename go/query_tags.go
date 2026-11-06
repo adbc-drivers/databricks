@@ -44,7 +44,7 @@ func queryTagName(key string) (name string, isQueryTag bool) {
 // validateQueryTag checks one tag before it is stored, so that an invalid tag
 // leaves the tags that are already set untouched. total is the number of tags
 // that would be sent if the tag were accepted. An empty value is allowed:
-// Databricks accepts a tag with a key only.
+// The docs show key-only tags, so an empty value is sent as one.
 func validateQueryTag(eh *driverbase.ErrorHelper, name, value string, total int) error {
 	if strings.TrimSpace(name) == "" {
 		return eh.Errorf(adbc.StatusInvalidArgument, "query tag name is required, e.g. '%steam'", OptionQueryTagPrefix)
