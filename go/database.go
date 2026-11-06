@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"strconv"
@@ -82,6 +83,9 @@ type databaseImpl struct {
 	oauthClientID     string
 	oauthClientSecret string
 	oauthRefreshToken string
+
+	// Default query tags, keyed by tag name
+	queryTags map[string]string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -172,6 +176,13 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 			MaxConnsPerHost:       100,
 		}
 		opts = append(opts, dbsql.WithTransport(transport))
+	}
+
+	// The defaults are also merged into each statement's tags (see
+	// effectiveQueryTags). Setting them on the session as well tags queries that
+	// do not run through a statement, such as metadata calls.
+	if len(d.queryTags) > 0 {
+		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
 	}
 
 	return opts, nil
@@ -267,6 +278,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		catalog:            d.catalog,
 		dbSchema:           d.schema,
+		queryTags:          maps.Clone(d.queryTags),
 		conn:               c,
 	}
 
@@ -339,6 +351,12 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
 	default:
+		if name, ok := queryTagName(key); ok {
+			if v, ok := d.queryTags[name]; ok {
+				return v, nil
+			}
+			return "", queryTagNotSet(&d.ErrorHelper, name)
+		}
 		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
@@ -513,6 +531,9 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
 	default:
+		if name, ok := queryTagName(key); ok {
+			return d.setQueryTag(name, value)
+		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil

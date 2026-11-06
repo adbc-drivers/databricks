@@ -128,6 +128,15 @@ Examples:
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
+### Query Options
+
+`databricks.query.query_tag.<name>`
+: **Values:** a string, which may be empty. **Default:** (not set)
+
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. Databricks records query tags in `system.query.history`. Set on the database, a tag is a default for every statement; set on a statement, it overrides the default of the same name for that statement only, and the other defaults still apply. Reading a tag that is not set returns `NOT_FOUND`.
+
+  Names and values may be at most 128 characters, names must not be empty or contain `,` `:` `-` `/` `=` or `.`, and at most 20 tags are sent with a statement. Databricks drops tags that break these limits and marks the statement with a `tag_invalid` or `tag_truncated` tag, so the driver rejects them with `INVALID_ARGUMENT` instead and leaves the tags already set unchanged.
+
 ## Feature & Type Support
 
 {{ features|safe }}
