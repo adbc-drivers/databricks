@@ -21,6 +21,14 @@ import (
 	dbsqlerr "github.com/databricks/databricks-sql-go/errors"
 )
 
+// sqlStateStatuses maps the SQLSTATEs that identify a missing or existing object to ADBC statuses.
+var sqlStateStatuses = map[string]adbc.Status{
+	"42P01": adbc.StatusNotFound,      // TABLE_OR_VIEW_NOT_FOUND
+	"42704": adbc.StatusNotFound,      // SCHEMA_NOT_FOUND, NO_SUCH_CATALOG_EXCEPTION
+	"42883": adbc.StatusNotFound,      // UNRESOLVED_ROUTINE
+	"42P07": adbc.StatusAlreadyExists, // TABLE_OR_VIEW_ALREADY_EXISTS
+}
+
 type DatabricksErrorInspector struct {
 	ingest bool
 }
@@ -32,10 +40,10 @@ func (d DatabricksErrorInspector) InspectError(err error, defaultStatus adbc.Sta
 	for errors.As(err, &executionErr) {
 		if sqlState := executionErr.SqlState(); sqlState != "" {
 			copy(adbcErr.SqlState[:], sqlState)
-			switch sqlState {
-			case "42P07": // TABLE_OR_VIEW_ALREADY_EXISTS
-				adbcErr.Code = adbc.StatusAlreadyExists
-			case "42703": // UNRESOLVED_COLUMN
+			if status, ok := sqlStateStatuses[sqlState]; ok {
+				adbcErr.Code = status
+			}
+			if sqlState == "42703" { // UNRESOLVED_COLUMN
 				adbcErr.Code = adbc.StatusInvalidArgument
 				if d.ingest {
 					// A missing destination column means the existing table's
