@@ -182,6 +182,9 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
 
+	// The defaults are also merged into each statement's tags (see
+	// effectiveQueryTags). Setting them on the session as well tags queries that
+	// do not run through a statement, such as metadata calls.
 	if len(d.queryTags) > 0 {
 		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
 	}

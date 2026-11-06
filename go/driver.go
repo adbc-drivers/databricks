@@ -75,9 +75,9 @@ const (
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 
-	// Query tags attached to executed statements, e.g. "databricks.query_tag.team".
+	// Query tags attached to executed statements, e.g. "databricks.query.query_tag.team".
 	// Settable on the database (defaults) and on a statement (overrides the default per tag).
-	OptionQueryTagPrefix = "databricks.query_tag."
+	OptionQueryTagPrefix = "databricks.query.query_tag."
 
 	// OIDC token federation options (auth types env-oidc and file-oidc)
 	OptionOIDCClientID      = "databricks.oidc.client_id"

@@ -43,6 +43,28 @@ namespace AdbcDrivers.Databricks.Tests
             return new DatabricksConnection(properties);
         }
 
+        [Fact]
+        public void GeospatialSupport_DefaultsToStringMode()
+        {
+            using DatabricksConnection connection = CreateMinimalConnection();
+
+            Assert.False(connection.EnableGeospatialSupport);
+        }
+
+        [Fact]
+        public void GeospatialSupport_CanOptInToNativeMode()
+        {
+            var properties = new Dictionary<string, string>
+            {
+                [SparkParameters.HostName] = "test.databricks.com",
+                [SparkParameters.Token] = "test-token",
+                [DatabricksParameters.EnableGeospatialSupport] = "true",
+            };
+            using var connection = new DatabricksConnection(properties);
+
+            Assert.True(connection.EnableGeospatialSupport);
+        }
+
         /// <summary>
         /// Tests that valid property names with standard Spark patterns are accepted.
         /// </summary>

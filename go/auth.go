@@ -73,8 +73,8 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret)
 		},
 	},
-	// OIDC token federation, spelled as in dbt-databricks. The SDK exchanges
-	// the ID token for a Databricks token.
+	// OIDC token federation, with the auth type names of the Databricks SDK.
+	// The SDK exchanges the ID token for a Databricks token.
 	OptionValueAuthTypeEnvOIDC: {
 		required: []authField{oidcClientIDField},
 		sdk: &sdkLogin{

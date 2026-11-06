@@ -26,46 +26,40 @@ import (
 )
 
 const (
-	// The limits dbt-databricks enforces in QueryTagsUtils (MAX_TAGS and the
-	// 128-character check on escaped values in dbt/adapters/databricks/utils.py).
+	// The limits Databricks documents for query tags: at most 20 tags per
+	// statement, and keys and values of at most 128 characters. Databricks drops
+	// a tag that breaks them and marks the statement with a tag_invalid or
+	// tag_truncated tag, so the driver rejects them up front instead.
 	maxQueryTags           = 20
-	maxQueryTagValueLength = 128
+	maxQueryTagLength      = 128
+	invalidQueryTagKeyChar = ",:-/=."
 )
 
-// queryTagName returns the tag name when key is a "databricks.query_tag.<name>"
+// queryTagName returns the tag name when key is a "databricks.query.query_tag.<name>"
 // option, and whether key has that prefix at all.
 func queryTagName(key string) (name string, isQueryTag bool) {
 	return strings.CutPrefix(key, OptionQueryTagPrefix)
 }
 
-// escapedQueryTagValueLength is the length in characters of a tag value on the
-// wire, where backslash, comma and colon are each escaped with a backslash.
-func escapedQueryTagValueLength(value string) int {
-	return utf8.RuneCountInString(value) + strings.Count(value, `\`) + strings.Count(value, ",") + strings.Count(value, ":")
-}
-
 // validateQueryTag checks one tag before it is stored, so that an invalid tag
 // leaves the tags that are already set untouched. total is the number of tags
-// that would be sent if the tag were accepted.
-//
-// The wire format is comma-separated "key:value" pairs. databricks-sql-go
-// escapes backslash, colon and comma in values but only backslash in names, so a
-// name containing a comma or colon cannot be represented and is rejected.
-// Empty values are rejected too: databricks-sql-go would send them as a bare
-// key, which this driver does not support.
+// that would be sent if the tag were accepted. An empty value is allowed:
+// The docs show key-only tags, so an empty value is sent as one.
 func validateQueryTag(eh *driverbase.ErrorHelper, name, value string, total int) error {
 	if strings.TrimSpace(name) == "" {
 		return eh.Errorf(adbc.StatusInvalidArgument, "query tag name is required, e.g. '%steam'", OptionQueryTagPrefix)
 	}
-	if strings.ContainsAny(name, ",:") {
-		return eh.Errorf(adbc.StatusInvalidArgument, "query tag name %q must not contain ',' or ':'", name)
-	}
-	if value == "" {
-		return eh.Errorf(adbc.StatusInvalidArgument, "query tag %q must have a non-empty value", name)
-	}
-	if n := escapedQueryTagValueLength(value); n > maxQueryTagValueLength {
+	if i := strings.IndexAny(name, invalidQueryTagKeyChar); i >= 0 {
 		return eh.Errorf(adbc.StatusInvalidArgument,
-			"query tag %q value is %d characters after escaping, the maximum is %d", name, n, maxQueryTagValueLength)
+			"query tag name %q must not contain any of %q", name, invalidQueryTagKeyChar)
+	}
+	if n := utf8.RuneCountInString(name); n > maxQueryTagLength {
+		return eh.Errorf(adbc.StatusInvalidArgument,
+			"query tag name %q is %d characters, the maximum is %d", name, n, maxQueryTagLength)
+	}
+	if n := utf8.RuneCountInString(value); n > maxQueryTagLength {
+		return eh.Errorf(adbc.StatusInvalidArgument,
+			"query tag %q value is %d characters, the maximum is %d", name, n, maxQueryTagLength)
 	}
 	if total > maxQueryTags {
 		return eh.Errorf(adbc.StatusInvalidArgument,

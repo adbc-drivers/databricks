@@ -62,13 +62,16 @@ func TestDatabaseQueryTagOptions(t *testing.T) {
 func TestQueryTagValidation(t *testing.T) {
 	ctx := context.Background()
 	invalid := map[string]struct{ name, value string }{
-		"empty name":      {"", "v"},
-		"blank name":      {" ", "v"},
-		"comma in name":   {"a,b", "v"},
-		"colon in name":   {"a:b", "v"},
-		"empty value":     {"team", ""},
-		"value too long":  {"team", strings.Repeat("x", maxQueryTagValueLength+1)},
-		"escaping counts": {"team", strings.Repeat(",", 65)}, // 65 commas are 130 characters on the wire
+		"empty name":     {"", "v"},
+		"blank name":     {" ", "v"},
+		"comma in name":  {"a,b", "v"},
+		"colon in name":  {"a:b", "v"},
+		"dash in name":   {"a-b", "v"},
+		"slash in name":  {"a/b", "v"},
+		"equals in name": {"a=b", "v"},
+		"dot in name":    {"a.b", "v"},
+		"name too long":  {strings.Repeat("x", maxQueryTagLength+1), "v"},
+		"value too long": {"team", strings.Repeat("x", maxQueryTagLength+1)},
 	}
 
 	t.Run("database", func(t *testing.T) {
@@ -94,12 +97,16 @@ func TestQueryTagValidation(t *testing.T) {
 	})
 }
 
-// The 128 limit counts characters, not bytes.
-func TestQueryTagValueLengthCountsCharacters(t *testing.T) {
+// The limits count characters, not bytes, and the driver counts the value as
+// given: the Databricks docs do not say whether escaping counts towards 128.
+// An empty value is sent as a key-only tag, which the docs show.
+func TestQueryTagLimitsCountCharacters(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagValueLength)))
-	requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagValueLength+1)), adbc.StatusInvalidArgument)
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagLength)))
+	requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagLength+1)), adbc.StatusInvalidArgument)
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat(",", maxQueryTagLength)))
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"flag", ""))
 }
 
 func TestDatabaseQueryTagLimit(t *testing.T) {
