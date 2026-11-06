@@ -130,14 +130,12 @@ Examples:
 
 ### Query Options
 
-`databricks.query_tags`
-: **Values:** comma-separated `key:value` pairs, for example `team:analytics,app:myapp`. **Default:** (not set)
+`databricks.query.query_tag.<name>`
+: **Values:** a string, which may be empty. **Default:** (not set)
 
-  Sets the query tags Databricks records in `system.query.history`. A key is separated from its value by the first colon. Use a backslash to put a comma, colon or backslash in a value (`note:a\,b`). A pair without a colon is a key with an empty value.
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. Databricks records query tags in `system.query.history`. Set on the database, a tag is a default for every statement; set on a statement, it overrides the default of the same name for that statement only, and the other defaults still apply. Reading a tag that is not set returns `NOT_FOUND`.
 
-  Set on the database, the tags are defaults for every statement. Set on a statement, they are merged with the defaults by key: a statement tag replaces the default of the same key and the other defaults still apply. Setting the option again at the same level replaces the tags set there before. Reading it returns the tags that apply, sorted by key, or `NOT_FOUND` when there are none.
-
-  Keys and values may be at most 128 characters, keys must not contain `,` `:` `-` `/` `=` or `.`, and at most 20 tags are sent with a statement. Databricks drops tags that break these limits and marks the statement with a `tag_invalid` or `tag_truncated` tag, so the driver rejects them with `INVALID_ARGUMENT` instead and leaves the tags already set unchanged.
+  Names and values may be at most 128 characters, names must not be empty or contain `,` `:` `-` `/` `=` or `.`, and at most 20 tags are sent with a statement. Databricks drops tags that break these limits and marks the statement with a `tag_invalid` or `tag_truncated` tag, so the driver rejects them with `INVALID_ARGUMENT` instead and leaves the tags already set unchanged.
 
 ## Feature & Type Support
 
