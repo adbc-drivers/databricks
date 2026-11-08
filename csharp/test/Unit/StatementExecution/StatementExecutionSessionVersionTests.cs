@@ -177,7 +177,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             await CreateSessionAsync();
             var execute = ExecuteAsync();
             var poll = _client.GetStatementAsync("statement-1", CancellationToken.None);
-            await Task.WhenAll(executeStarted.Task, pollStarted.Task).WaitAsync(TimeSpan.FromSeconds(10));
+            var started = Task.WhenAll(executeStarted.Task, pollStarted.Task);
+            Assert.Same(started, await Task.WhenAny(started, Task.Delay(TimeSpan.FromSeconds(10))));
+            await started;
 
             var high = Response("""{"status":{"state":"SUCCEEDED","session_version":{"version_id":12}}}""");
             var low = Response("""{"status":{"state":"SUCCEEDED","session_version":{"version_id":9}}}""");
