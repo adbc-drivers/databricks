@@ -143,12 +143,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(HttpMethod.Post, capturedRequest.Method);
-            Assert.Equal("https://test.databricks.com/api/2.0/sql/sessions",
+            Assert.Equal("https://test.databricks.com/api/2.0/sql/warehouses/warehouse-123/sessions",
                 capturedRequest.RequestUri?.ToString());
 
             Assert.NotNull(capturedContent);
             Assert.Contains("\"execution_mode\":\"FAST\"", capturedContent);
-            Assert.Contains("\"warehouse_id\":\"warehouse-123\"", capturedContent);
+            Assert.DoesNotContain("\"warehouse_id\"", capturedContent);
             Assert.Contains("\"catalog\":\"main\"", capturedContent);
             Assert.Contains("\"schema\":\"default\"", capturedContent);
             Assert.Contains("spark.sql.ansi.enabled", capturedContent);

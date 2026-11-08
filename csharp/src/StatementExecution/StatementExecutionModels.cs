@@ -44,7 +44,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <summary>
         /// The warehouse ID to use for this session.
         /// </summary>
-        [JsonPropertyName("warehouse_id")]
+        [JsonIgnore]
         public string WarehouseId { get; set; } = string.Empty;
 
         /// <summary>
@@ -235,6 +235,14 @@ namespace AdbcDrivers.Databricks.StatementExecution
         {
             var request = (ExecuteStatementRequest)MemberwiseClone();
             request.SessionVersion = sessionVersion;
+            return request;
+        }
+
+        internal ExecuteStatementRequest WithoutRoutingIds()
+        {
+            var request = (ExecuteStatementRequest)MemberwiseClone();
+            request.WarehouseId = null;
+            request.SessionId = null;
             return request;
         }
     }

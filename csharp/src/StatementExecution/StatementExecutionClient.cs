@@ -16,6 +16,7 @@
 */
 
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -99,9 +100,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _baseUrl;
         private readonly object _sessionVersionLock = new object();
         private long? _sessionVersionId;
+        private string? _warehouseSessionUrl;
 
         private const string SessionsEndpoint = "/api/2.0/sql/sessions";
         private const string StatementsEndpoint = "/api/2.0/sql/statements";
+        private const string RealtimeSessionHeader = "x-databricks-rt-session";
+
+        private string StatementCollectionUrl => _warehouseSessionUrl == null
+            ? $"{_baseUrl}{StatementsEndpoint}"
+            : $"{_warehouseSessionUrl}/statements";
 
         // JSON serialization options - ignore null values when writing
         private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
@@ -148,7 +155,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(request));
             }
 
-            var url = $"{_baseUrl}{SessionsEndpoint}";
+            if (string.IsNullOrWhiteSpace(request.WarehouseId))
+            {
+                throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(request));
+            }
+
+            var url = $"{_baseUrl}/api/2.0/sql/warehouses/{Uri.EscapeDataString(request.WarehouseId)}/sessions";
             var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
@@ -164,12 +176,17 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var sessionResponse = JsonSerializer.Deserialize<CreateSessionResponse>(responseContent, s_jsonOptions);
 
-            if (sessionResponse == null)
+            if (sessionResponse == null || string.IsNullOrWhiteSpace(sessionResponse.SessionId))
             {
-                throw new DatabricksException("Failed to deserialize CreateSessionResponse");
+                throw new DatabricksException("CreateSessionResponse did not contain a session ID");
             }
 
             UpdateSessionVersion(sessionResponse.SessionVersion);
+            bool realtimeSession = response.Headers.TryGetValues(RealtimeSessionHeader, out var values)
+                && string.Equals(values.FirstOrDefault()?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+            _warehouseSessionUrl = realtimeSession
+                ? $"{url}/{Uri.EscapeDataString(sessionResponse.SessionId)}"
+                : null;
 
             return sessionResponse;
         }
@@ -193,8 +210,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(warehouseId));
             }
 
-            // Databricks requires warehouse_id as query parameter even for DELETE
-            var url = $"{_baseUrl}{SessionsEndpoint}/{sessionId}?warehouse_id={Uri.EscapeDataString(warehouseId)}";
+            var url = _warehouseSessionUrl
+                ?? $"{_baseUrl}{SessionsEndpoint}/{Uri.EscapeDataString(sessionId)}?warehouse_id={Uri.EscapeDataString(warehouseId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -217,8 +234,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(request));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}";
+            var url = StatementCollectionUrl;
             var body = request.WithSessionVersion(GetSessionVersion());
+            if (_warehouseSessionUrl != null)
+            {
+                body = body.WithoutRoutingIds();
+            }
             var jsonContent = JsonSerializer.Serialize(body, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
@@ -315,7 +336,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -384,7 +405,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Chunk index must be non-negative.", nameof(chunkIndex));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/result/chunks/{chunkIndex}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}/result/chunks/{chunkIndex}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -415,7 +436,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/cancel";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}/cancel";
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -438,7 +459,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Databricks uses DELETE on /statements/{statement_id}, not POST to /close
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
