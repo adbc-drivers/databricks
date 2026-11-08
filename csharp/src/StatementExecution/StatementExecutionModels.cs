@@ -38,6 +38,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// </summary>
     public class CreateSessionRequest
     {
+        [JsonPropertyName("execution_mode")]
+        public string ExecutionMode { get; set; } = "FAST";
+
         /// <summary>
         /// The warehouse ID to use for this session.
         /// </summary>
@@ -73,6 +76,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("session_id")]
         public string SessionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
+    }
+
+    public class SessionVersion
+    {
+        [JsonPropertyName("version_id")]
+        public long? VersionId { get; set; }
     }
 
     // ============================================================================
@@ -131,6 +143,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("session_id")]
         public string? SessionId { get; set; }
+
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
 
         /// <summary>
         /// The SQL statement to execute.
@@ -215,6 +230,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("query_tags")]
         public List<QueryTag>? QueryTags { get; set; }
+
+        internal ExecuteStatementRequest WithSessionVersion(SessionVersion? sessionVersion)
+        {
+            var request = (ExecuteStatementRequest)MemberwiseClone();
+            request.SessionVersion = sessionVersion;
+            return request;
+        }
     }
 
     /// <summary>
@@ -286,6 +308,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// </summary>
     public class StatementStatus
     {
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
+
         /// <summary>
         /// The execution state: "PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "CLOSED".
         /// </summary>
