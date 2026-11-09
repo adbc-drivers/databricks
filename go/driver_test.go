@@ -696,6 +696,27 @@ func TestDriverCreation(t *testing.T) {
 	assert.NotNil(t, drv)
 }
 
+func TestInvalidURIDoesNotExposeSecrets(t *testing.T) {
+	const password = "uri-password-sentinel"
+	const token = "uri-token-sentinel"
+	uri := "invalid://user:" + password + "@localhost/warehouse?token=" + token
+	drv := databricks.NewDriver(memory.DefaultAllocator)
+	db, err := drv.NewDatabaseWithContext(context.Background(), map[string]string{
+		adbc.OptionKeyURI: uri,
+	})
+	if db != nil {
+		defer testutil.CheckedCloseWithContext(t, db, context.Background())
+	}
+	require.Error(t, err)
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	assert.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	assert.Contains(t, err.Error(), "invalid URI scheme: expected 'databricks://'")
+	assert.NotContains(t, err.Error(), password)
+	assert.NotContains(t, err.Error(), token)
+	assert.NotContains(t, err.Error(), uri)
+}
+
 func TestDatabaseCreation(t *testing.T) {
 	drv := databricks.NewDriver(memory.DefaultAllocator)
 

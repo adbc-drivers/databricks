@@ -385,7 +385,7 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		} else {
 			return adbc.Error{
 				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
+				Msg:  "invalid URI scheme: expected 'databricks://'",
 			}
 		}
 	case OptionServerHostname:
