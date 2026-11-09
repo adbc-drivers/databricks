@@ -184,7 +184,7 @@ func (d *databaseImpl) resolveConnectionDSN() (string, error) {
 	}
 	parsed, err := driverbase.SafeParseURL(dsn)
 	if err != nil {
-		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("[databricks] invalid connection URI: %v", err)}
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("[db] invalid connection URI: %v", err)}
 	}
 	parameters, err := url.ParseQuery(parsed.RawQuery)
 	if err != nil {
