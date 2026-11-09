@@ -193,9 +193,9 @@ func (d *databaseImpl) resolveConnectionDSN() (string, error) {
 	if !strings.HasPrefix(dsn, "https://") && !strings.HasPrefix(dsn, "http://") {
 		dsn = "https://" + dsn
 	}
-	parsed, err := url.Parse(dsn)
+	parsed, err := driverbase.SafeParseURL(dsn)
 	if err != nil {
-		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI"}
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("[db] invalid connection URI: %v", err)}
 	}
 	parameters, err := url.ParseQuery(parsed.RawQuery)
 	if err != nil {
@@ -403,7 +403,7 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		} else {
 			return adbc.Error{
 				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
+				Msg:  "invalid URI scheme: expected 'databricks://'",
 			}
 		}
 	case OptionServerHostname:

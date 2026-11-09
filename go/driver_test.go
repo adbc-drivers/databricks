@@ -696,6 +696,41 @@ func TestDriverCreation(t *testing.T) {
 	assert.NotNil(t, drv)
 }
 
+func TestInvalidURIDoesNotExposeSecrets(t *testing.T) {
+	const password = "uri-password-sentinel"
+	const token = "uri-token-sentinel"
+	for _, tc := range []struct{ name, uri, diagnostic string }{
+		{"scheme", "invalid://user:" + password + "@localhost/warehouse?token=" + token, "invalid URI scheme: expected 'databricks://'"},
+		{"escape", "databricks://user:" + password + "@localhost/db%zz?token=" + token, "invalid URL escape"},
+		{"port", "databricks://user:" + password + "@localhost:invalid/db?token=" + token, "invalid port"},
+		{"missing userinfo separator and host", "databricks://user:" + password + "/db?token=" + token, "invalid port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			drv := databricks.NewDriver(memory.DefaultAllocator)
+			db, err := drv.NewDatabaseWithContext(ctx, map[string]string{adbc.OptionKeyURI: tc.uri})
+			if db != nil {
+				defer testutil.CheckedCloseWithContext(t, db, ctx)
+			}
+			if err == nil {
+				var conn adbc.ConnectionWithContext
+				conn, err = db.Open(ctx)
+				if conn != nil {
+					defer testutil.CheckedCloseWithContext(t, conn, ctx)
+				}
+			}
+			require.Error(t, err)
+			var adbcErr adbc.Error
+			require.ErrorAs(t, err, &adbcErr)
+			assert.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+			assert.Contains(t, err.Error(), tc.diagnostic)
+			assert.NotContains(t, err.Error(), password)
+			assert.NotContains(t, err.Error(), token)
+			assert.NotContains(t, err.Error(), tc.uri)
+		})
+	}
+}
+
 func TestDatabaseCreation(t *testing.T) {
 	drv := databricks.NewDriver(memory.DefaultAllocator)
 
