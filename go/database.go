@@ -182,9 +182,9 @@ func (d *databaseImpl) resolveConnectionDSN() (string, error) {
 	if !strings.HasPrefix(dsn, "https://") && !strings.HasPrefix(dsn, "http://") {
 		dsn = "https://" + dsn
 	}
-	parsed, err := url.Parse(dsn)
+	parsed, err := driverbase.SafeParseURL(dsn)
 	if err != nil {
-		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI"}
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("[databricks] invalid connection URI: %w", err)}
 	}
 	parameters, err := url.ParseQuery(parsed.RawQuery)
 	if err != nil {
