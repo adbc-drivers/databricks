@@ -699,28 +699,8 @@ func TestDriverCreation(t *testing.T) {
 func TestInvalidURIDoesNotExposeSecrets(t *testing.T) {
 	const password = "uri-password-sentinel"
 	const token = "uri-token-sentinel"
-	uri := "invalid://user:" + password + "@localhost/warehouse?token=" + token
-	drv := databricks.NewDriver(memory.DefaultAllocator)
-	db, err := drv.NewDatabaseWithContext(context.Background(), map[string]string{
-		adbc.OptionKeyURI: uri,
-	})
-	if db != nil {
-		defer testutil.CheckedCloseWithContext(t, db, context.Background())
-	}
-	require.Error(t, err)
-	var adbcErr adbc.Error
-	require.ErrorAs(t, err, &adbcErr)
-	assert.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
-	assert.Contains(t, err.Error(), "invalid URI scheme: expected 'databricks://'")
-	assert.NotContains(t, err.Error(), password)
-	assert.NotContains(t, err.Error(), token)
-	assert.NotContains(t, err.Error(), uri)
-}
-
-func TestMalformedURIDoesNotExposeSecrets(t *testing.T) {
-	const password = "uri-password-sentinel"
-	const token = "uri-token-sentinel"
 	for _, tc := range []struct{ name, uri, diagnostic string }{
+		{"scheme", "invalid://user:" + password + "@localhost/warehouse?token=" + token, "invalid URI scheme: expected 'databricks://'"},
 		{"escape", "databricks://user:" + password + "@localhost/db%zz?token=" + token, "invalid URL escape"},
 		{"port", "databricks://user:" + password + "@localhost:invalid/db?token=" + token, "invalid port"},
 		{"missing userinfo separator and host", "databricks://user:" + password + "/db?token=" + token, "invalid port"},
@@ -729,11 +709,15 @@ func TestMalformedURIDoesNotExposeSecrets(t *testing.T) {
 			ctx := context.Background()
 			drv := databricks.NewDriver(memory.DefaultAllocator)
 			db, err := drv.NewDatabaseWithContext(ctx, map[string]string{adbc.OptionKeyURI: tc.uri})
-			require.NoError(t, err)
-			defer testutil.CheckedCloseWithContext(t, db, ctx)
-			conn, err := db.Open(ctx)
-			if conn != nil {
-				defer testutil.CheckedCloseWithContext(t, conn, ctx)
+			if db != nil {
+				defer testutil.CheckedCloseWithContext(t, db, ctx)
+			}
+			if err == nil {
+				var conn adbc.ConnectionWithContext
+				conn, err = db.Open(ctx)
+				if conn != nil {
+					defer testutil.CheckedCloseWithContext(t, conn, ctx)
+				}
 			}
 			require.Error(t, err)
 			var adbcErr adbc.Error
