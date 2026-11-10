@@ -267,11 +267,11 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*).
+On the SEA path, set `adbc.databricks.cloudfetch.enabled=false` on the connection to fetch complete results without cloud-storage downloads. Per-statement overrides of this option are unsupported on SEA. The remaining `adbc.databricks.cloudfetch.*` keys apply to Thrift only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*).
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
-| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | `true` (connection setting only) |
 | `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | `true` (also drives SEA result compression: `LZ4_FRAME` when enabled, else `NONE`) |
 | `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | Not Supported |
 | `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | Not Supported |

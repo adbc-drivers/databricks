@@ -67,6 +67,21 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             return (new HttpClient(mockHandler.Object), mockHandler, capturedBodies);
         }
 
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task DisabledCloudFetchRequestsInlineResultsWithEitherSspMode(bool applyWithQueries)
+        {
+            var (httpClient, _, bodies) = CreateCapturingHttpClient();
+            var properties = BaseProperties();
+            properties[DatabricksParameters.UseCloudFetch] = "false";
+            properties[DatabricksParameters.ApplySSPWithQueries] = applyWithQueries.ToString();
+            using var conn = new StatementExecutionConnection(properties, httpClient);
+            await conn.OpenAsync(CancellationToken.None);
+            using var body = JsonDocument.Parse(bodies[0]);
+            Assert.Equal("false", body.RootElement.GetProperty("session_confs").GetProperty("can_cloud_download").GetString());
+        }
+
         [Fact]
         public async Task OpenAsync_WithSspProperties_IncludesSessionConfs()
         {

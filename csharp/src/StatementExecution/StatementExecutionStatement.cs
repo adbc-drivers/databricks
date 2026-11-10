@@ -643,6 +643,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // Inline results - may be split across multiple chunks.
                 // Pass the manifest schema so the reader reports it instead of the IPC-embedded schema,
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
+                if (response.Result.NextChunkIndex.HasValue)
+                {
+                    return new PagedInlineArrowStreamReader(_client, _currentStatementId!, response.Result,
+                        isLz4Compressed, _recyclableMemoryStreamManager, _lz4BufferPool, cancellationToken,
+                        GetSchemaFromManifest(response.Manifest));
+                }
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
                     isLz4Compressed, totalChunks, _recyclableMemoryStreamManager, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
@@ -972,6 +978,83 @@ namespace AdbcDrivers.Databricks.StatementExecution
             public void Dispose()
             {
                 // Nothing to dispose
+            }
+        }
+
+        private sealed class PagedInlineArrowStreamReader : IArrowArrayStream
+        {
+            private readonly IStatementExecutionClient _client;
+            private readonly string _statementId;
+            private readonly bool _isLz4Compressed;
+            private readonly Microsoft.IO.RecyclableMemoryStreamManager _memoryStreamManager;
+            private readonly System.Buffers.ArrayPool<byte> _bufferPool;
+            private readonly Schema _schema;
+            private InlineArrowStreamReader _current;
+            private long? _nextChunkIndex;
+            private long _nextRowOffset;
+            private bool _disposed;
+
+            public PagedInlineArrowStreamReader(
+                IStatementExecutionClient client, string statementId, ResultData firstPage,
+                bool isLz4Compressed, Microsoft.IO.RecyclableMemoryStreamManager memoryStreamManager,
+                System.Buffers.ArrayPool<byte> bufferPool, CancellationToken cancellationToken, Schema schema)
+            {
+                _client = client;
+                _statementId = statementId;
+                _isLz4Compressed = isLz4Compressed;
+                _memoryStreamManager = memoryStreamManager;
+                _bufferPool = bufferPool;
+                _schema = schema;
+                UpdateContinuation(firstPage, 0);
+                _current = CreatePageReader(firstPage, cancellationToken);
+            }
+
+            public Schema Schema => _schema;
+
+            public async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
+            {
+                if (_disposed) throw new ObjectDisposedException(nameof(PagedInlineArrowStreamReader));
+                while (true)
+                {
+                    var batch = await _current.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
+                    if (batch != null || !_nextChunkIndex.HasValue) return batch;
+                    long chunkIndex = _nextChunkIndex.Value;
+                    long rowOffset = _nextRowOffset;
+                    var page = await _client.GetResultChunkAsync(
+                        _statementId, chunkIndex, rowOffset, cancellationToken).ConfigureAwait(false);
+                    UpdateContinuation(page, rowOffset);
+                    if (_nextChunkIndex == chunkIndex && _nextRowOffset <= rowOffset)
+                        throw new AdbcException("Inline result continuation did not advance.");
+                    var nextReader = CreatePageReader(page, cancellationToken);
+                    _current.Dispose();
+                    _current = nextReader;
+                }
+            }
+
+            private void UpdateContinuation(ResultData page, long rowOffset)
+            {
+                _nextChunkIndex = page.NextChunkIndex;
+                if (_nextChunkIndex.HasValue)
+                {
+                    if (!page.RowCount.HasValue || page.RowCount.Value < 0)
+                        throw new AdbcException("Inline result continuation is missing a valid row count.");
+                    _nextRowOffset = checked((page.RowOffset ?? rowOffset) + page.RowCount.Value);
+                }
+            }
+
+            private InlineArrowStreamReader CreatePageReader(ResultData page, CancellationToken cancellationToken)
+            {
+                if (page.ExternalLinks != null && page.ExternalLinks.Count > 0)
+                    throw new AdbcException("Expected inline results, but the server returned cloud-storage result links.");
+                return new InlineArrowStreamReader(_client, _statementId, page.Attachment!, _isLz4Compressed,
+                    1, _memoryStreamManager, _bufferPool, cancellationToken, _schema);
+            }
+
+            public void Dispose()
+            {
+                if (_disposed) return;
+                _disposed = true;
+                _current.Dispose();
             }
         }
 

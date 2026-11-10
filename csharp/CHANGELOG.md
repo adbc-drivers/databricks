@@ -20,6 +20,10 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+### Fixed
+
+- Honor the connection CloudFetch disable option on SEA and read large inline results across continuation pages.
+
 ### Added
 
 - Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`, including

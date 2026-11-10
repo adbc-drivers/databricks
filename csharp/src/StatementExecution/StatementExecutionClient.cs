@@ -72,6 +72,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>The result chunk data.</returns>
         Task<ResultData> GetResultChunkAsync(string statementId, long chunkIndex, CancellationToken cancellationToken);
+        Task<ResultData> GetResultChunkAsync(string statementId, long chunkIndex, long rowOffset, CancellationToken cancellationToken);
 
         /// <summary>
         /// Cancels a running SQL statement.
@@ -338,6 +339,19 @@ namespace AdbcDrivers.Databricks.StatementExecution
             long chunkIndex,
             CancellationToken cancellationToken)
         {
+            return await GetResultChunkCoreAsync(statementId, chunkIndex, null, cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<ResultData> GetResultChunkAsync(
+            string statementId, long chunkIndex, long rowOffset, CancellationToken cancellationToken)
+        {
+            if (rowOffset < 0) throw new ArgumentOutOfRangeException(nameof(rowOffset));
+            return GetResultChunkCoreAsync(statementId, chunkIndex, rowOffset, cancellationToken);
+        }
+
+        private async Task<ResultData> GetResultChunkCoreAsync(
+            string statementId, long chunkIndex, long? rowOffset, CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(statementId))
             {
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
@@ -349,6 +363,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/result/chunks/{chunkIndex}";
+            if (rowOffset.HasValue)
+                url += $"?row_offset={rowOffset.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);

@@ -513,6 +513,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
                         var sessionConfigs = _applySSPWithQueries
                             ? new Dictionary<string, string>()
                             : ExtractServerSideProperties(_properties);
+                        if (!PropertyHelper.GetBooleanPropertyWithValidation(_properties, DatabricksParameters.UseCloudFetch, true))
+                        {
+                            foreach (string key in sessionConfigs.Keys.Where(k => string.Equals(k, "can_cloud_download", StringComparison.OrdinalIgnoreCase)).ToList())
+                                sessionConfigs.Remove(key);
+                            sessionConfigs["can_cloud_download"] = "false";
+                        }
                         var request = new CreateSessionRequest
                         {
                             WarehouseId = _warehouseId,
