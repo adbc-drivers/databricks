@@ -20,10 +20,18 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.12] - 2026-11-10
+
 ### Added
 
 - Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`, including
-  nested values; WKT/EWKT strings remain the default for backward compatibility.
+  nested values; WKT/EWKT strings remain the default for backward compatibility
+  (#699, #700, #701)
+- Support native SEA metadata results (#692)
+
+### Fixed
+
+- Adopt the upstream Thrift cancellation fix from hiveserver2 (#706)
 
 ## [1.1.11] - 2026-10-06
 
