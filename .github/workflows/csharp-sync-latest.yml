@@ -15,7 +15,8 @@
 name: Sync C# release branches
 
 # Runs whenever a commit lands on main that bumps the C# version.
-# Keeps the release branch, version tag, and release/csharp/latest all in sync.
+# Keeps the release branch, version tag, and release/csharp/latest all in sync,
+# and creates the GitHub Release for the version tag (mirroring the Go line).
 on:
   push:
     branches:
@@ -87,6 +88,44 @@ jobs:
             git push origin "$TAG"
             echo "Created tag: $TAG"
           fi
+
+      - name: Create GitHub Release
+        # Mirrors the Go line's tag-triggered Release: a non-draft, non-prerelease
+        # Release named after the version, with no attached package assets.
+        # Gated on the Release (not the tag) so it is idempotent and can recover
+        # if a previous run created the tag but failed to create the Release.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          TAG="${{ steps.ver.outputs.tag }}"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName > /dev/null 2>&1; then
+            echo "Release $TAG already exists — skipping"
+            exit 0
+          fi
+
+          DATE=$(grep -F "## [$VERSION]" csharp/CHANGELOG.md | head -n1 | sed -n -E 's/^## \[[^]]+\] - ([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/p')
+          if [ -z "$DATE" ]; then
+            # Sections historically sometimes say "Unreleased"; fall back to the
+            # release date, like the Go release tool does.
+            DATE=$(date -u +%F)
+          fi
+
+          BODY=$(awk -v ver="$VERSION" '
+            index($0, "## [" ver "]") == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' csharp/CHANGELOG.md | sed -e '/./,$!d')
+
+          if [ -z "$BODY" ]; then
+            echo "ERROR: csharp/CHANGELOG.md section for $VERSION is empty"
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            --title "ADBC Driver Foundry Driver for Databricks $VERSION ($DATE)" \
+            --notes "$BODY"
 
       - name: Update release/csharp/latest
         run: |
