@@ -638,7 +638,7 @@ internal class StatementExecutionClient
 
     // Session Management
     Task<CreateSessionResponse> CreateSessionAsync(CreateSessionRequest request, ...);
-    Task DeleteSessionAsync(string sessionId, ...);
+    Task DeleteSessionAsync(CancellationToken cancellationToken);
 
     // Statement Execution
     Task<ExecuteStatementResponse> ExecuteStatementAsync(ExecuteStatementRequest request, ...);
@@ -984,7 +984,7 @@ internal class StatementExecutionConnection : AdbcConnection
         {
             try
             {
-                _client.DeleteSessionAsync(_sessionId, CancellationToken.None)
+                _client.DeleteSessionAsync(CancellationToken.None)
                     .GetAwaiter().GetResult();
             }
             catch (Exception ex)

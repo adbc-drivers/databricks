@@ -41,13 +41,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         Task<CreateSessionResponse> CreateSessionAsync(CreateSessionRequest request, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Deletes an existing SQL session.
+        /// Deletes the SQL session created by this client.
         /// </summary>
-        /// <param name="sessionId">The session ID to delete.</param>
-        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken);
+        Task DeleteSessionAsync(CancellationToken cancellationToken);
 
         /// <summary>
         /// Executes a SQL statement.
@@ -100,15 +98,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         private readonly string _baseUrl;
         private readonly object _sessionVersionLock = new object();
         private long? _sessionVersionId;
-        private string? _warehouseSessionUrl;
+        private string? _sessionUrl;
+        private bool _isRealtimeSession;
 
         private const string SessionsEndpoint = "/api/2.0/sql/sessions";
         private const string StatementsEndpoint = "/api/2.0/sql/statements";
         private const string RealtimeSessionHeader = "x-databricks-rt-session";
 
-        private string StatementCollectionUrl => _warehouseSessionUrl == null
-            ? $"{_baseUrl}{StatementsEndpoint}"
-            : $"{_warehouseSessionUrl}/statements";
+        private string StatementCollectionUrl => _isRealtimeSession
+            ? $"{_sessionUrl}/statements"
+            : $"{_baseUrl}{StatementsEndpoint}";
 
         // JSON serialization options - ignore null values when writing
         private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
@@ -160,7 +159,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(request));
             }
 
-            var url = $"{_baseUrl}/api/2.0/sql/warehouses/{Uri.EscapeDataString(request.WarehouseId)}/sessions";
+            var warehouseId = Uri.EscapeDataString(request.WarehouseId);
+            var url = $"{_baseUrl}/api/2.0/sql/warehouses/{warehouseId}/sessions";
             var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
@@ -184,34 +184,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             UpdateSessionVersion(sessionResponse.SessionVersion);
             bool realtimeSession = response.Headers.TryGetValues(RealtimeSessionHeader, out var values)
                 && string.Equals(values.FirstOrDefault()?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
-            _warehouseSessionUrl = realtimeSession
-                ? $"{url}/{Uri.EscapeDataString(sessionResponse.SessionId)}"
-                : null;
+            var sessionId = Uri.EscapeDataString(sessionResponse.SessionId);
+            _sessionUrl = realtimeSession
+                ? $"{url}/{sessionId}"
+                : $"{_baseUrl}{SessionsEndpoint}/{sessionId}?warehouse_id={warehouseId}";
+            _isRealtimeSession = realtimeSession;
 
             return sessionResponse;
         }
 
         /// <summary>
-        /// Deletes an existing SQL session.
+        /// Deletes the SQL session created by this client.
         /// </summary>
-        /// <param name="sessionId">The session ID to delete.</param>
-        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        public async Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken)
+        public async Task DeleteSessionAsync(CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(sessionId))
-            {
-                throw new ArgumentException("Session ID cannot be null or whitespace.", nameof(sessionId));
-            }
-
-            if (string.IsNullOrWhiteSpace(warehouseId))
-            {
-                throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(warehouseId));
-            }
-
-            var url = _warehouseSessionUrl
-                ?? $"{_baseUrl}{SessionsEndpoint}/{Uri.EscapeDataString(sessionId)}?warehouse_id={Uri.EscapeDataString(warehouseId)}";
+            var url = _sessionUrl
+                ?? throw new InvalidOperationException("A session must be created before it can be deleted.");
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -236,7 +226,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
             var url = StatementCollectionUrl;
             var body = request.WithSessionVersion(GetSessionVersion());
-            if (_warehouseSessionUrl != null)
+            if (_isRealtimeSession)
             {
                 body = body.WithoutRoutingIds();
             }

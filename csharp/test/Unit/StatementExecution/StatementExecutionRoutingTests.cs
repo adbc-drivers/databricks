@@ -100,7 +100,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             await client.GetResultChunkAsync(statementId, 1, CancellationToken.None);
             await client.CancelStatementAsync(statementId, CancellationToken.None);
             await client.CloseStatementAsync(statementId, CancellationToken.None);
-            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
+            await client.DeleteSessionAsync(CancellationToken.None);
 
             string warehouseSessionUrl = $"{host}/api/2.0/sql/warehouses/{warehouseId}/sessions/{sessionId}";
             string statementsUrl = useWarehouseUrls
@@ -168,6 +168,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var client = new StatementExecutionClient(httpClient, "test.databricks.com");
             await Assert.ThrowsAsync<DatabricksException>(() => client.CreateSessionAsync(
                 new CreateSessionRequest { WarehouseId = "warehouse-123" }, CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.DeleteSessionAsync(CancellationToken.None));
         }
 
         private static void AssertRequest(HttpRequestMessage request, HttpMethod method, string url)

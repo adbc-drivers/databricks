@@ -42,7 +42,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
         public string ExecutionMode { get; set; } = "FAST";
 
         /// <summary>
-        /// The warehouse ID to use for this session.
+        /// The warehouse ID included in the session creation URL.
         /// </summary>
         [JsonIgnore]
         public string WarehouseId { get; set; } = string.Empty;
