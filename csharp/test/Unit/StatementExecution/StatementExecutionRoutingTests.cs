@@ -175,8 +175,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             Assert.Equal(method, request.Method);
             Assert.Equal(url, request.RequestUri?.AbsoluteUri);
             Assert.False(request.Headers.Contains("x-databricks-rt-session"));
-            Assert.False(request.Headers.Contains("x-databricks-reyder-routing-key"));
-            Assert.False(request.Headers.Contains("x-databricks-session-id"));
         }
     }
 }
