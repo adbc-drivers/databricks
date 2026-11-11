@@ -12,72 +12,135 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Preserve existing workflow behavior while migrating Go workflow generation.
-# Rust workflows retain their existing build tooling and are not regenerated.
-# Exceptions apply only to the listed rules and files; all other checks remain
-# enabled. Remove each exception when its underlying finding is fixed.
+# Temporarily ignore existing findings at their reported locations.
 rules:
   adhoc-packages:
     ignore:
-      - engineer-bot-followup.yml
-      - engineer-bot-learning.yaml
-      - engineer-bot.yaml
-      - reviewer-bot-followup.yml
-      - reviewer-bot.yml
+      - engineer-bot-followup.yml:219
+      - engineer-bot-learning.yaml:108
+      - engineer-bot.yaml:152
+      - reviewer-bot-followup.yml:194
+      - reviewer-bot.yml:115
   artipacked:
     ignore:
-      - benchmarks.yml
-      - csharp-sync-latest.yml
-      - e2e-tests.yml
-      - reyden-rest-nightly.yml
-      - trigger-integration-tests.yml
+      - benchmarks.yml:60
+      - benchmarks.yml:133
+      - benchmarks.yml:236
+      - benchmarks.yml:321
+      - benchmarks.yml:577
+      - csharp-sync-latest.yml:43
+      - e2e-tests.yml:58
+      - reyden-rest-nightly.yml:43
+      - trigger-integration-tests.yml:305
+      - trigger-integration-tests.yml:403
   cache-poisoning:
     ignore:
-      - rust_release.yaml
+      - rust_release.yaml:71
+      - rust_release.yaml:170
+      - rust_release.yaml:226
+      - rust_release.yaml:281
   dangerous-triggers:
     ignore:
-      # Existing "take" handler assigns an issue without checking out PR code.
-      - dev_issues.yaml
-      - pr-validation.yml
-      - rust_coverage_report.yaml
-      - skip-checks-reporter.yml
+      - pr-validation.yml:17
+      - pr-validation.yml:18
+      - rust_coverage_report.yaml:23
+      - rust_coverage_report.yaml:24
+      - skip-checks-reporter.yml:20
+      - skip-checks-reporter.yml:21
   dependabot-cooldown:
     ignore:
-      - dependabot.yaml
+      - dependabot.yaml:17
+      - dependabot.yaml:29
+      - dependabot.yaml:51
   excessive-permissions:
     ignore:
-      - benchmarks.yml
-      - e2e-tests.yml
-      - pr-validation.yml
-      - reyden-rest-nightly.yml
-      - rust-e2e.yml
-      - rust_release.yaml
-      - rust_test.yaml
-      - skip-checks-reporter.yml
-      - trigger-integration-tests.yml
+      - benchmarks.yml:48
+      - benchmarks.yml:49
+      - e2e-tests.yml:45
+      - pr-validation.yml:29
+      - reyden-rest-nightly.yml:28
+      - rust-e2e.yml:15
+      - rust-e2e.yml:40
+      - rust-e2e.yml:104
+      - rust_release.yaml:25
+      - rust_release.yaml:266
+      - rust_test.yaml:25
+      - rust_test.yaml:325
+      - skip-checks-reporter.yml:26
+      - trigger-integration-tests.yml:14
+      - trigger-integration-tests.yml:301
+      - trigger-integration-tests.yml:399
+      - trigger-integration-tests.yml:499
   github-app:
     ignore:
-      - csharp-sync-latest.yml
-      - engineer-bot-followup.yml
-      - engineer-bot-learning.yaml
-      - engineer-bot.yaml
-      - reviewer-bot-followup.yml
-      - reviewer-bot.yml
-      - skip-checks-reporter.yml
-      - trigger-integration-tests.yml
+      - csharp-sync-latest.yml:38
+      - engineer-bot-followup.yml:134
+      - engineer-bot-learning.yaml:70
+      - engineer-bot.yaml:65
+      - reviewer-bot-followup.yml:71
+      - reviewer-bot.yml:67
+      - skip-checks-reporter.yml:33
+      - trigger-integration-tests.yml:184
+      - trigger-integration-tests.yml:193
+      - trigger-integration-tests.yml:327
+      - trigger-integration-tests.yml:362
+      - trigger-integration-tests.yml:420
+      - trigger-integration-tests.yml:455
+      - trigger-integration-tests.yml:524
   template-injection:
     ignore:
-      - benchmarks.yml
-      - csharp-sync-latest.yml
-      - e2e-tests.yml
-      - engineer-bot-followup.yml
-      - reviewer-bot-followup.yml
-      - reyden-rest-nightly.yml
-      - rust_release.yaml
-      - rust_test.yaml
-      - rust_test_pr.yaml
-      - trigger-integration-tests.yml
+      - benchmarks.yml:66
+      - benchmarks.yml:67
+      - benchmarks.yml:157
+      - benchmarks.yml:160
+      - benchmarks.yml:161
+      - benchmarks.yml:260
+      - benchmarks.yml:263
+      - benchmarks.yml:264
+      - csharp-sync-latest.yml:72
+      - csharp-sync-latest.yml:82
+      - e2e-tests.yml:68
+      - e2e-tests.yml:75
+      - e2e-tests.yml:95
+      - e2e-tests.yml:98
+      - e2e-tests.yml:99
+      - e2e-tests.yml:121
+      - e2e-tests.yml:125
+      - e2e-tests.yml:142
+      - e2e-tests.yml:219
+      - e2e-tests.yml:222
+      - e2e-tests.yml:223
+      - e2e-tests.yml:225
+      - e2e-tests.yml:227
+      - e2e-tests.yml:270
+      - engineer-bot-followup.yml:128
+      - reviewer-bot-followup.yml:146
+      - reyden-rest-nightly.yml:57
+      - reyden-rest-nightly.yml:60
+      - reyden-rest-nightly.yml:61
+      - reyden-rest-nightly.yml:79
+      - reyden-rest-nightly.yml:95
+      - reyden-rest-nightly.yml:159
+      - reyden-rest-nightly.yml:162
+      - reyden-rest-nightly.yml:163
+      - reyden-rest-nightly.yml:165
+      - reyden-rest-nightly.yml:227
+      - rust_release.yaml:187
+      - rust_release.yaml:361
+      - rust_test.yaml:235
+      - rust_test_pr.yaml:59
+      - rust_test_pr.yaml:63
+      - rust_test_pr.yaml:64
+      - rust_test_pr.yaml:107
+      - rust_test_pr.yaml:110
+      - trigger-integration-tests.yml:313
+      - trigger-integration-tests.yml:342
+      - trigger-integration-tests.yml:351
+      - trigger-integration-tests.yml:394
+      - trigger-integration-tests.yml:411
+      - trigger-integration-tests.yml:435
+      - trigger-integration-tests.yml:444
+      - trigger-integration-tests.yml:487
   unpinned-uses:
     ignore:
-      # Preserve the existing reusable Rust workflow reference to main.
-      - rust_test_pr.yaml
+      - rust_test_pr.yaml:67
