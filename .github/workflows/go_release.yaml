@@ -322,7 +322,6 @@ jobs:
           - { platform: windows, arch: amd64, runner: windows-latest }
           - { platform: linux, arch: arm64, runner: ubuntu-24.04-arm }
           - { platform: windows, arch: arm64, runner: windows-11-vs2026-arm }
-    environment: azure-prod
     permissions:
       contents: read
       packages: read
@@ -508,7 +507,6 @@ jobs:
           - { platform: macos, arch: arm64, runner: macos-latest }
           - { platform: windows, arch: amd64, runner: windows-latest }
           - { platform: windows, arch: arm64, runner: windows-11-vs2026-arm }
-    environment: azure-prod
     steps:
       # for now, install dbc from main
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
