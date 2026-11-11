@@ -146,39 +146,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
 	}
 
-	// TLS/SSL handling
-	// Configure a custom transport with proper timeout settings when custom
-	// TLS config is needed. These settings match the defaults from
-	// databricks-sql-go's PooledTransport to ensure reliable connections
-	// for large result set downloads.
-	if d.sslCertPool != nil || d.sslInsecure {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-
-		if d.sslCertPool != nil {
-			tlsConfig.RootCAs = d.sslCertPool
-		}
-
-		if d.sslInsecure {
-			tlsConfig.InsecureSkipVerify = true
-		}
-
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSClientConfig:       tlsConfig,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       180 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			MaxIdleConnsPerHost:   10,
-			MaxConnsPerHost:       100,
-		}
+	if transport := d.customTransport(); transport != nil {
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
 
@@ -190,6 +158,44 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 
 	return opts, nil
+}
+
+// customTransport returns the HTTP transport for the TLS settings (a custom
+// root certificate or skipping verification), or nil when there are none. It
+// has timeout settings that match the defaults from databricks-sql-go's
+// PooledTransport to ensure reliable connections for large result set
+// downloads. The SQL client and the SDK's OIDC login both use it.
+func (d *databaseImpl) customTransport() *http.Transport {
+	if d.sslCertPool == nil && !d.sslInsecure {
+		return nil
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if d.sslCertPool != nil {
+		tlsConfig.RootCAs = d.sslCertPool
+	}
+
+	if d.sslInsecure {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSClientConfig:       tlsConfig,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       180 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		MaxConnsPerHost:       100,
+	}
 }
 
 func (d *databaseImpl) resolveConnectionDSN() (string, error) {

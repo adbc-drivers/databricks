@@ -16,6 +16,8 @@ package databricks
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -105,6 +107,19 @@ func splitHost(host string) (scheme, name string) {
 	return "https", host
 }
 
+// hostWithPort adds port to host unless it is 0 or host already has a port.
+// The SQL client takes the port separately, so the SDK has to be given it too:
+// without it, the SDK talks to the default port 443.
+func hostWithPort(host string, port int) string {
+	if port == 0 {
+		return host
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
+}
+
 // sdkConfig returns the SDK config of login method name, to be used as the SQL
 // client's authenticator. The config resolves itself on the first request, so
 // a bad value surfaces when the connection is opened. Only environment
@@ -114,11 +129,16 @@ func splitHost(host string) (scheme, name string) {
 func (d *databaseImpl) sdkConfig(name string, login *sdkLogin) *sdkconfig.Config {
 	scheme, host := splitHost(d.serverHostname)
 	cfg := &sdkconfig.Config{
-		Host:        scheme + "://" + host,
+		Host:        scheme + "://" + hostWithPort(host, d.port),
 		Loaders:     []sdkconfig.Loader{sdkconfig.ConfigAttributes},
 		AuthType:    name,
 		Cloud:       login.cloud,
 		Credentials: login.credentials,
+	}
+	// The login talks to the workspace itself, so it needs the same TLS settings
+	// as the SQL client.
+	if transport := d.customTransport(); transport != nil {
+		cfg.HTTPTransport = transport
 	}
 	if login.apply != nil {
 		login.apply(d, cfg)

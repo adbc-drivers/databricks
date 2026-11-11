@@ -16,11 +16,14 @@ package databricks
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -111,6 +114,18 @@ type fakeWorkspace struct {
 
 func newFakeWorkspace(t *testing.T) *fakeWorkspace {
 	t.Helper()
+	return startFakeWorkspace(t, false)
+}
+
+// newFakeTLSWorkspace is a workspace served over HTTPS with a self-signed
+// certificate, which ws.Certificate() returns.
+func newFakeTLSWorkspace(t *testing.T) *fakeWorkspace {
+	t.Helper()
+	return startFakeWorkspace(t, true)
+}
+
+func startFakeWorkspace(t *testing.T, useTLS bool) *fakeWorkspace {
+	t.Helper()
 	w := &fakeWorkspace{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/oidc/.well-known/oauth-authorization-server", func(rw http.ResponseWriter, r *http.Request) {
@@ -134,7 +149,11 @@ func newFakeWorkspace(t *testing.T) *fakeWorkspace {
 		rw.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(rw).Encode(map[string]any{"access_token": "exchanged-token", "token_type": "Bearer", "expires_in": 3600})
 	})
-	w.Server = httptest.NewServer(mux)
+	if useTLS {
+		w.Server = httptest.NewTLSServer(mux)
+	} else {
+		w.Server = httptest.NewServer(mux)
+	}
 	t.Cleanup(w.Close)
 	return w
 }
@@ -267,4 +286,58 @@ func TestSplitHost(t *testing.T) {
 		scheme, name := splitHost(host)
 		require.Equal(t, want, [2]string{scheme, name}, host)
 	}
+}
+
+func TestOIDCLoginUsesThePortAndTLSSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("DATABRICKS_OIDC_TOKEN_FILEPATH", "")
+	t.Setenv("DATABRICKS_OIDC_TOKEN", "id-token")
+	env := loginMethods[OptionValueAuthTypeEnvOIDC].sdk
+	token := func(db *databaseImpl) string {
+		return authorizationHeader(t, db.sdkConfig(OptionValueAuthTypeEnvOIDC, env))
+	}
+
+	t.Run("the port option reaches the SDK", func(t *testing.T) {
+		ws := newFakeWorkspace(t)
+		u, err := url.Parse(ws.URL)
+		require.NoError(t, err)
+		port, err := strconv.Atoi(u.Port())
+		require.NoError(t, err)
+		db := &databaseImpl{serverHostname: "http://" + u.Hostname(), port: port, oidcClientID: "sp-client"}
+
+		require.Equal(t, "Bearer exchanged-token", token(db))
+		require.Len(t, ws.exchanges(), 1)
+	})
+
+	t.Run("a port in the host name is kept", func(t *testing.T) {
+		require.Equal(t, "dbc.example.com:8443", hostWithPort("dbc.example.com:8443", 9000))
+		require.Equal(t, "dbc.example.com:8443", hostWithPort("dbc.example.com", 8443))
+		require.Equal(t, "dbc.example.com", hostWithPort("dbc.example.com", 0))
+		require.Equal(t, "[::1]:8443", hostWithPort("[::1]", 8443))
+	})
+
+	t.Run("a custom root certificate reaches the SDK", func(t *testing.T) {
+		ws := newFakeTLSWorkspace(t)
+		pool := x509.NewCertPool()
+		pool.AddCert(ws.Certificate())
+		db := &databaseImpl{serverHostname: ws.URL, oidcClientID: "sp-client", sslCertPool: pool}
+
+		require.Equal(t, "Bearer exchanged-token", token(db))
+	})
+
+	t.Run("skipping TLS verification reaches the SDK", func(t *testing.T) {
+		ws := newFakeTLSWorkspace(t)
+		db := &databaseImpl{serverHostname: ws.URL, oidcClientID: "sp-client", sslInsecure: true}
+
+		require.Equal(t, "Bearer exchanged-token", token(db))
+	})
+
+	t.Run("without TLS settings the login rejects the certificate", func(t *testing.T) {
+		ws := newFakeTLSWorkspace(t)
+		db := &databaseImpl{serverHostname: ws.URL, oidcClientID: "sp-client"}
+
+		req, err := http.NewRequest(http.MethodGet, "http://example.invalid/", nil)
+		require.NoError(t, err)
+		require.Error(t, db.sdkConfig(OptionValueAuthTypeEnvOIDC, env).Authenticate(req))
+	})
 }
