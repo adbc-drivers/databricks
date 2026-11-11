@@ -133,9 +133,14 @@ Examples:
 `databricks.query.query_tag.<name>`
 : **Values:** a string, which may be empty. **Default:** (not set)
 
-  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. Databricks records query tags in `system.query.history`. Set on the database, a tag is a default for every statement; set on a statement, it overrides the default of the same name for that statement only, and the other defaults still apply. Reading a tag that is not set returns `NOT_FOUND`.
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. May be set at the database, connection or statement level, and a tag set at a more specific level overrides one of the same name set at a less specific level. Reading a tag that is not set returns `NOT_FOUND`.
 
-  Names and values may be at most 128 characters, names must not be empty or contain `,` `:` `-` `/` `=` or `.`, and at most 20 tags are sent with a statement. Databricks drops tags that break these limits and marks the statement with a `tag_invalid` or `tag_truncated` tag, so the driver rejects them with `INVALID_ARGUMENT` instead and leaves the tags already set unchanged.
+  Names and values may be at most 128 characters, counted in UTF-16 code units so an emoji counts as 2. Names must not be empty or contain `,` `:` `-` `/` `=` or `.`. At most 20 tags are allowed. A tag that breaks these limits is rejected with `INVALID_ARGUMENT`. Names starting with `@@` are reserved by Databricks and passed through unchanged.
+
+`databricks.query.unset_query_tag`
+: **Values:** a tag name, for example `team`. **Default:** (not set)
+
+  Removes the query tag named by the value. On the database it removes the default; on a connection it removes the tag, including one inherited from the database; on a statement it removes the statement's own override. A tag set by the connection or database cannot be removed for a single statement, so the driver rejects this with `INVALID_ARGUMENT`. Removing a tag that is not set does nothing.
 
 ## Feature & Type Support
 

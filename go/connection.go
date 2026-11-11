@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -43,11 +44,29 @@ type connectionImpl struct {
 	catalog  string
 	dbSchema string
 
-	// Default query tags inherited from the database
-	queryTags map[string]string
+	// Query tags: the database's defaults, plus any set on the connection
+	queryTags   map[string]string
+	queryTagsMu sync.RWMutex
 
 	// Database connection
 	conn *sql.Conn
+}
+
+func (c *connectionImpl) SetOption(ctx context.Context, key, val string) error {
+	if name, ok := queryTagName(key); ok {
+		return c.setQueryTag(name, val)
+	}
+	if key == OptionUnsetQueryTag {
+		return c.unsetQueryTag(ctx, val)
+	}
+	return c.ConnectionImplBase.SetOption(ctx, key, val)
+}
+
+func (c *connectionImpl) GetOption(ctx context.Context, key string) (string, error) {
+	if name, ok := queryTagName(key); ok {
+		return c.getQueryTag(name)
+	}
+	return c.ConnectionImplBase.GetOption(ctx, key)
 }
 
 func (c *connectionImpl) Close(ctx context.Context) error {

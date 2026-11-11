@@ -531,6 +531,9 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)
 		}
+		if key == OptionUnsetQueryTag {
+			return d.unsetQueryTag(value)
+		}
 		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil

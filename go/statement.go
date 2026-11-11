@@ -68,6 +68,9 @@ func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
 	if name, ok := queryTagName(key); ok {
 		return s.setQueryTag(name, val)
 	}
+	if key == OptionUnsetQueryTag {
+		return s.unsetQueryTag(val)
+	}
 	if handled, err := s.bulkIngestOptions.SetOption(&s.ErrorHelper, key, val); err != nil {
 		return err
 	} else if handled {

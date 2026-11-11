@@ -97,16 +97,38 @@ func TestQueryTagValidation(t *testing.T) {
 	})
 }
 
-// The limits count characters, not bytes, and the driver counts the value as
-// given: the Databricks docs do not say whether escaping counts towards 128.
-// An empty value is sent as a key-only tag, which the docs show.
-func TestQueryTagLimitsCountCharacters(t *testing.T) {
+// The limit counts UTF-16 code units, so an emoji counts as 2. Escaping does not count.
+func TestQueryTagLimitsCountUTF16Units(t *testing.T) {
 	ctx := context.Background()
 	db := &databaseImpl{}
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagLength)))
-	requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat("é", maxQueryTagLength+1)), adbc.StatusInvalidArgument)
-	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", strings.Repeat(",", maxQueryTagLength)))
+	set := func(value string) error {
+		return db.SetOption(ctx, OptionQueryTagPrefix+"team", value)
+	}
+	require.NoError(t, set(strings.Repeat("é", maxQueryTagLength)))
+	requireAdbcStatus(t, set(strings.Repeat("é", maxQueryTagLength+1)), adbc.StatusInvalidArgument)
+	// 3 bytes each, 1 unit each
+	require.NoError(t, set(strings.Repeat("数", maxQueryTagLength)))
+	// 4 bytes each, 2 units each
+	require.NoError(t, set(strings.Repeat("🚀", maxQueryTagLength/2)))
+	requireAdbcStatus(t, set(strings.Repeat("🚀", maxQueryTagLength/2+1)), adbc.StatusInvalidArgument)
+	requireAdbcStatus(t, set(strings.Repeat("a", maxQueryTagLength-1)+"🚀"), adbc.StatusInvalidArgument)
+	require.NoError(t, set(strings.Repeat("a", maxQueryTagLength-2)+"🚀"))
+	// the name is counted the same way
+	requireAdbcStatus(t, db.SetOption(ctx, OptionQueryTagPrefix+strings.Repeat("🚀", maxQueryTagLength/2+1), "v"), adbc.StatusInvalidArgument)
+	// characters that are escaped on the wire still count once
+	for _, c := range []string{",", ":", `\`} {
+		require.NoError(t, set(strings.Repeat(c, maxQueryTagLength)))
+	}
 	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"flag", ""))
+}
+
+// Databricks reserves names starting with "@@", but accepted them in a test
+// and recorded them as given, so the driver passes them through.
+func TestQueryTagReservedPrefixIsPassedThrough(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"@@team", "data-platform"))
+	assert.Equal(t, map[string]string{"@@team": "data-platform"}, db.queryTags)
 }
 
 func TestDatabaseQueryTagLimit(t *testing.T) {
@@ -330,4 +352,89 @@ func TestQueryTagsReachTheDriverContext(t *testing.T) {
 			assert.Equal(t, expected, call.tags, call.query)
 		}
 	})
+}
+
+func TestUnsetQueryTagOnDatabase(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"team", "data-platform"))
+	require.NoError(t, db.SetOption(ctx, OptionQueryTagPrefix+"env", "prod"))
+
+	require.NoError(t, db.SetOption(ctx, OptionUnsetQueryTag, "team"))
+	assert.Equal(t, map[string]string{"env": "prod"}, db.queryTags)
+	_, err := db.GetOption(ctx, OptionQueryTagPrefix+"team")
+	requireAdbcStatus(t, err, adbc.StatusNotFound)
+
+	// Removing a tag that is not set is not an error
+	require.NoError(t, db.SetOption(ctx, OptionUnsetQueryTag, "team"))
+	requireAdbcStatus(t, db.SetOption(ctx, OptionUnsetQueryTag, ""), adbc.StatusInvalidArgument)
+}
+
+func TestUnsetQueryTagOnStatement(t *testing.T) {
+	ctx := context.Background()
+	stmt, _ := newTagCaptureStatement(t, map[string]string{"team": "data-platform"})
+	require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"run_id", "42"))
+	require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"team", "adhoc"))
+
+	// Removing an override falls back to the default
+	require.NoError(t, stmt.SetOption(ctx, OptionUnsetQueryTag, "team"))
+	v, err := stmt.GetOption(ctx, OptionQueryTagPrefix+"team")
+	require.NoError(t, err)
+	assert.Equal(t, "data-platform", v)
+
+	require.NoError(t, stmt.SetOption(ctx, OptionUnsetQueryTag, "run_id"))
+	assert.Equal(t, map[string]string{"team": "data-platform"}, stmt.effectiveQueryTags())
+
+	// A default cannot be removed for one statement, and a tag that is not set is a no-op
+	requireAdbcStatus(t, stmt.SetOption(ctx, OptionUnsetQueryTag, "team"), adbc.StatusInvalidArgument)
+	require.NoError(t, stmt.SetOption(ctx, OptionUnsetQueryTag, "missing"))
+	assert.Equal(t, map[string]string{"team": "data-platform"}, stmt.effectiveQueryTags())
+}
+
+func TestConnectionQueryTags(t *testing.T) {
+	ctx := context.Background()
+	stmt, _ := newTagCaptureStatement(t, map[string]string{"team": "data-platform"})
+	conn := stmt.conn
+
+	require.NoError(t, conn.SetOption(ctx, OptionQueryTagPrefix+"env", "prod"))
+	require.NoError(t, conn.SetOption(ctx, OptionQueryTagPrefix+"team", "analytics"))
+	v, err := conn.GetOption(ctx, OptionQueryTagPrefix+"env")
+	require.NoError(t, err)
+	assert.Equal(t, "prod", v)
+	_, err = conn.GetOption(ctx, OptionQueryTagPrefix+"missing")
+	requireAdbcStatus(t, err, adbc.StatusNotFound)
+
+	// A statement sees the connection's tags, and overrides them
+	require.NoError(t, stmt.SetOption(ctx, OptionQueryTagPrefix+"env", "dev"))
+	assert.Equal(t, map[string]string{"team": "analytics", "env": "dev"}, stmt.effectiveQueryTags())
+
+	// The rules are the same as at the other levels
+	requireAdbcStatus(t, conn.SetOption(ctx, OptionQueryTagPrefix+"a:b", "v"), adbc.StatusInvalidArgument)
+	assert.Equal(t, map[string]string{"team": "analytics", "env": "prod"}, conn.tags())
+	for i := 0; len(conn.tags()) < maxQueryTags; i++ {
+		require.NoError(t, conn.SetOption(ctx, fmt.Sprintf("%sk%d", OptionQueryTagPrefix, i), "v"))
+	}
+	requireAdbcStatus(t, conn.SetOption(ctx, OptionQueryTagPrefix+"one_too_many", "v"), adbc.StatusInvalidArgument)
+	require.NoError(t, conn.SetOption(ctx, OptionQueryTagPrefix+"team", "replaced"))
+}
+
+// Databricks merges the session's tags into every statement, so removing a
+// connection tag has to remove it from the session as well.
+func TestUnsetQueryTagOnConnectionUnsetsTheSessionTag(t *testing.T) {
+	ctx := context.Background()
+	stmt, capture := newTagCaptureStatement(t, map[string]string{"team": "data-platform", "it's": "v"})
+	conn := stmt.conn
+
+	require.NoError(t, conn.SetOption(ctx, OptionUnsetQueryTag, "team"))
+	require.NoError(t, conn.SetOption(ctx, OptionUnsetQueryTag, `it's`))
+	assert.Empty(t, conn.tags())
+	require.Equal(t, []tagCall{
+		{"exec", "SET QUERY_TAGS['team'] = UNSET", nil},
+		{"exec", `SET QUERY_TAGS['it\'s'] = UNSET`, nil},
+	}, capture.calls)
+
+	// Nothing is sent for a tag that is not set
+	require.NoError(t, conn.SetOption(ctx, OptionUnsetQueryTag, "team"))
+	assert.Len(t, capture.calls, 2)
+	requireAdbcStatus(t, conn.SetOption(ctx, OptionUnsetQueryTag, " "), adbc.StatusInvalidArgument)
 }
