@@ -41,8 +41,11 @@ rules:
       - rust_release.yaml:281
   dangerous-triggers:
     ignore:
+      - pr-validation.yml:17
       - pr-validation.yml:18
+      - rust_coverage_report.yaml:23
       - rust_coverage_report.yaml:24
+      - skip-checks-reporter.yml:20
       - skip-checks-reporter.yml:21
   dependabot-cooldown:
     ignore:
