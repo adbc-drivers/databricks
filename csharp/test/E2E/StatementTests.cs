@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -1130,7 +1131,20 @@ namespace AdbcDrivers.Databricks.Tests
             await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
             await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
             await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
-            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+            // With multi-catalog on, SPARK GetColumns is metastore-wide (all catalogs, all tables in "default")
+            // and grows with the workspace. Scope it to the configured per-run table so the call stays small.
+            // The schema comparison below still uses the column schema, which is unaffected by the filter.
+            string? scopedSchema = null;
+            string? scopedTable = null;
+            if (shouldAllowMultipleCatalogs &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Catalog) &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Schema) &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Table))
+            {
+                scopedSchema = TestConfiguration.Metadata.Schema;
+                scopedTable = TestConfiguration.Metadata.Table;
+            }
+            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas, scopedSchema, scopedTable);
 
             // Then run with non-SPARK catalog and compare schemas
             await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "main", sparkSchemas);
@@ -1139,7 +1153,37 @@ namespace AdbcDrivers.Databricks.Tests
             await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "main", sparkSchemas);
         }
 
-        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas)
+        // Upper bound for a single metadata RPC or batch read in these tests. A hung server call
+        // should fail one test within minutes rather than consuming the whole OAuth token lifetime.
+        private static readonly TimeSpan MetadataCallTimeout = TimeSpan.FromMinutes(5);
+
+        private static async Task<T> WithMetadataTimeout<T>(ValueTask<T> operation, string description)
+        {
+            // The underlying metadata APIs (ExecuteQueryAsync on this Thrift path) do not accept a
+            // CancellationToken, so a hung server call cannot be torn down from here. We still cancel
+            // the delay timer on the success path (otherwise one live 5-minute timer would linger per
+            // RPC/batch read) and observe the abandoned task's fault on timeout so it cannot surface
+            // later as an unobserved task exception.
+            Task<T> task = operation.AsTask();
+            using var delayCts = new CancellationTokenSource();
+            Task completed = await Task.WhenAny(task, Task.Delay(MetadataCallTimeout, delayCts.Token));
+            if (completed != task)
+            {
+                _ = task.ContinueWith(
+                    t => { _ = t.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                throw new TimeoutException(
+                    $"{description} did not complete within {MetadataCallTimeout.TotalMinutes} minutes; the metadata call appears hung.");
+            }
+            delayCts.Cancel();
+            return await task;
+        }
+
+        // scopedSchemaName / scopedTableName narrow a metastore-wide SPARK GetColumns call (see the
+        // EnableMultipleCatalogSupportAffectsMetadataQueries test). Both are null for every other call.
+        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas, string? scopedSchemaName = null, string? scopedTableName = null)
         {
             OutputHelper?.WriteLine($"Testing {queryType} with EnableMultipleCatalogSupport={shouldAllowMultipleCatalogs}, CatalogName={catalogName}");
 
@@ -1147,10 +1191,14 @@ namespace AdbcDrivers.Databricks.Tests
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
             statement.SetOption(ApacheParameters.CatalogName, catalogName);
             // Use default as schema name, it is the default schema name
-            statement.SetOption(ApacheParameters.SchemaName, "default");
+            statement.SetOption(ApacheParameters.SchemaName, scopedSchemaName ?? "default");
+            if (scopedTableName != null)
+            {
+                statement.SetOption(ApacheParameters.TableName, scopedTableName);
+            }
             statement.SqlQuery = queryType;
 
-            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            QueryResult queryResult = await WithMetadataTimeout(statement.ExecuteQueryAsync(), $"{queryType} (CatalogName={catalogName})");
             Assert.NotNull(queryResult.Stream);
 
             // Store SPARK catalog schema for comparison
@@ -1195,7 +1243,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             while (queryResult.Stream != null)
             {
-                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                RecordBatch? batch = await WithMetadataTimeout(queryResult.Stream.ReadNextRecordBatchAsync(), $"Reading {queryType} batch (CatalogName={catalogName})");
                 if (batch == null) break;
 
                 rowCount += batch.Length;
@@ -1266,10 +1314,26 @@ namespace AdbcDrivers.Databricks.Tests
                 // When EnableMultipleCatalogSupport is true
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When catalog is SPARK, we may have results from multiple catalogs
-                    Assert.True(foundCatalogs.Count > 1,
-                        $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
-                    OutputHelper?.WriteLine($"Found results from multiple catalogs: {string.Join(", ", foundCatalogs)}");
+                    if (scopedTableName != null)
+                    {
+                        // Scoped GetColumns: SPARK means all catalogs on the server, and that scan grows with the
+                        // workspace (it is server-side, not driver behavior). With a table filter the result
+                        // is small, so assert the configured catalog is present rather than >1 catalog.
+                        Assert.True(rowCount >= 1,
+                            $"{queryType} should return columns for {scopedSchemaName}.{scopedTableName} when EnableMultipleCatalogSupport is true and catalog is SPARK");
+                        // foundCatalogs holds the server's catalog casing, which may differ from the
+                        // configured value, so match case-insensitively rather than with the default
+                        // ordinal comparer. The scoping guard above guarantees Catalog is non-empty here.
+                        Assert.Contains(foundCatalogs,
+                            c => c.Equals(TestConfiguration.Metadata.Catalog, StringComparison.OrdinalIgnoreCase));
+                    }
+                    else
+                    {
+                        // When catalog is SPARK, we may have results from multiple catalogs
+                        Assert.True(foundCatalogs.Count > 1,
+                            $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
+                    }
+                    OutputHelper?.WriteLine($"Found results from catalogs: {string.Join(", ", foundCatalogs)}");
                 }
                 else
                 {
