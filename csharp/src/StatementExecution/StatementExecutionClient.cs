@@ -97,6 +97,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
     {
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
+        private readonly object _sessionVersionLock = new object();
+        private long? _sessionVersionId;
 
         private const string SessionsEndpoint = "/api/2.0/sql/sessions";
         private const string StatementsEndpoint = "/api/2.0/sql/statements";
@@ -167,6 +169,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new DatabricksException("Failed to deserialize CreateSessionResponse");
             }
 
+            UpdateSessionVersion(sessionResponse.SessionVersion);
+
             return sessionResponse;
         }
 
@@ -214,7 +218,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             var url = $"{_baseUrl}{StatementsEndpoint}";
-            var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
+            var body = request.WithSessionVersion(GetSessionVersion());
+            var jsonContent = JsonSerializer.Serialize(body, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -253,6 +258,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
             {
                 throw new DatabricksException("Failed to deserialize ExecuteStatementResponse");
             }
+
+            UpdateSessionVersion(executeResponse.Status?.SessionVersion);
 
             // Check for FAILED state and throw exception (like JDBC driver does).
             // SEA throws its own DatabricksException — the natural type for the REST/SEA
@@ -323,7 +330,36 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new DatabricksException("Failed to deserialize GetStatementResponse");
             }
 
+            UpdateSessionVersion(getResponse.Status?.SessionVersion);
+
             return getResponse;
+        }
+
+        private SessionVersion? GetSessionVersion()
+        {
+            lock (_sessionVersionLock)
+            {
+                return _sessionVersionId.HasValue
+                    ? new SessionVersion { VersionId = _sessionVersionId.Value }
+                    : null;
+            }
+        }
+
+        private void UpdateSessionVersion(SessionVersion? version)
+        {
+            var versionId = version?.VersionId;
+            if (!versionId.HasValue)
+            {
+                return;
+            }
+
+            lock (_sessionVersionLock)
+            {
+                if (!_sessionVersionId.HasValue || versionId.Value > _sessionVersionId.Value)
+                {
+                    _sessionVersionId = versionId.Value;
+                }
+            }
         }
 
         /// <summary>
