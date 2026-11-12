@@ -179,8 +179,17 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <inheritdoc />
         public void SetCompleted(Stream dataStream, long size)
         {
-            ThrowIfDisposed();
-            _dataStream = dataStream ?? throw new ArgumentNullException(nameof(dataStream));
+            if (dataStream is null) throw new ArgumentNullException(nameof(dataStream));
+
+            // Tolerate a late call after Dispose (see SetFailed). The result was already torn down and
+            // its data is no longer needed, so dispose the stream to avoid leaking it and no-op.
+            if (_isDisposed)
+            {
+                dataStream.Dispose();
+                return;
+            }
+
+            _dataStream = dataStream;
             _downloadCompletionSource.TrySetResult(true);
             _size = size;
         }
@@ -188,8 +197,16 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <inheritdoc />
         public void SetFailed(Exception exception)
         {
-            ThrowIfDisposed();
-            _downloadCompletionSource.TrySetException(exception ?? throw new ArgumentNullException(nameof(exception)));
+            if (exception is null) throw new ArgumentNullException(nameof(exception));
+
+            // Tolerate a late call after Dispose: when a result set is abandoned mid-stream, a
+            // download's fire-and-forget continuation may report a failure for a DownloadResult that
+            // has already been disposed (its completion source is Canceled and nobody is awaiting it).
+            // Throwing ObjectDisposedException here would fault that continuation as an unobserved
+            // task exception, so no-op instead.
+            if (_isDisposed) return;
+
+            _downloadCompletionSource.TrySetException(exception);
         }
 
         /// <inheritdoc />
