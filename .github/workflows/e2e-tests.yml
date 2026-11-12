@@ -265,26 +265,6 @@ jobs:
           PER_RUN_SCHEMA: ${{ steps.schema.outputs.PER_RUN_SCHEMA }}
           WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
         run: |
-          # The job-level token lives about 1h. A long run would make this DROP fail with 403 and leak the
-          # schema, so mint a fresh token here (client credentials, same as the job-level mint). Fall back
-          # to the job token only if minting fails.
-          # Only the HTTP status is logged; the response body contains the token and is never printed.
-          MINT_RESPONSE=$(curl -s -w '\n%{http_code}' -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/oidc/v1/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=client_credentials" \
-            -d "client_id=${{ env.DATABRICKS_TEST_CLIENT_ID }}" \
-            -d "client_secret=${{ env.DATABRICKS_TEST_CLIENT_SECRET }}" \
-            -d "scope=sql" || true)
-          MINT_STATUS=$(echo "$MINT_RESPONSE" | tail -n1)
-          FRESH_TOKEN=$(echo "$MINT_RESPONSE" | sed '$d' | python3 -c "import sys, json; print(json.load(sys.stdin).get('access_token', ''))" 2>/dev/null || true)
-          if [ -n "$FRESH_TOKEN" ]; then
-            echo "::add-mask::$FRESH_TOKEN"
-            OAUTH_TOKEN="$FRESH_TOKEN"
-            echo "Minted a fresh token for cleanup (HTTP $MINT_STATUS)"
-          else
-            echo "WARNING: could not mint a fresh token for cleanup (HTTP $MINT_STATUS); using the job token"
-          fi
-
           STATEMENT="DROP SCHEMA IF EXISTS main.${PER_RUN_SCHEMA} CASCADE"
           PAYLOAD=$(jq -n --arg w "$WAREHOUSE_ID" --arg s "$STATEMENT" '{warehouse_id: $w, statement: $s, wait_timeout: "30s"}')
           RESPONSE=$(curl -sS -X POST "https://${{ env.DATABRICKS_SERVER_HOSTNAME }}/api/2.0/sql/statements" \
