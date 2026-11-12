@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -1277,13 +1278,25 @@ namespace AdbcDrivers.Databricks.Tests
 
         private static async Task<T> WithMetadataTimeout<T>(ValueTask<T> operation, string description)
         {
+            // The underlying metadata APIs (ExecuteQueryAsync on this Thrift path) do not accept a
+            // CancellationToken, so a hung server call cannot be torn down from here. We still cancel
+            // the delay timer on the success path (otherwise one live 5-minute timer would linger per
+            // RPC/batch read) and observe the abandoned task's fault on timeout so it cannot surface
+            // later as an unobserved task exception.
             Task<T> task = operation.AsTask();
-            Task completed = await Task.WhenAny(task, Task.Delay(MetadataCallTimeout));
+            using var delayCts = new CancellationTokenSource();
+            Task completed = await Task.WhenAny(task, Task.Delay(MetadataCallTimeout, delayCts.Token));
             if (completed != task)
             {
+                _ = task.ContinueWith(
+                    t => { _ = t.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
                 throw new TimeoutException(
                     $"{description} did not complete within {MetadataCallTimeout.TotalMinutes} minutes; the metadata call appears hung.");
             }
+            delayCts.Cancel();
             return await task;
         }
 
