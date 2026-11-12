@@ -147,6 +147,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 capturedRequest.RequestUri?.ToString());
 
             Assert.NotNull(capturedContent);
+            Assert.Contains("\"execution_mode\":\"FAST\"", capturedContent);
             Assert.Contains("\"warehouse_id\":\"warehouse-123\"", capturedContent);
             Assert.Contains("\"catalog\":\"main\"", capturedContent);
             Assert.Contains("\"schema\":\"default\"", capturedContent);
