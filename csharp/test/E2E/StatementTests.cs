@@ -1255,6 +1255,7 @@ namespace AdbcDrivers.Databricks.Tests
             string? scopedSchema = null;
             string? scopedTable = null;
             if (shouldAllowMultipleCatalogs &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Catalog) &&
                 !string.IsNullOrEmpty(TestConfiguration.Metadata?.Schema) &&
                 !string.IsNullOrEmpty(TestConfiguration.Metadata?.Table))
             {
@@ -1426,7 +1427,11 @@ namespace AdbcDrivers.Databricks.Tests
                         // is small, so assert the configured catalog is present rather than >1 catalog.
                         Assert.True(rowCount >= 1,
                             $"{queryType} should return columns for {scopedSchemaName}.{scopedTableName} when EnableMultipleCatalogSupport is true and catalog is SPARK");
-                        Assert.Contains(TestConfiguration.Metadata.Catalog, foundCatalogs);
+                        // foundCatalogs holds the server's catalog casing, which may differ from the
+                        // configured value, so match case-insensitively rather than with the default
+                        // ordinal comparer. The scoping guard above guarantees Catalog is non-empty here.
+                        Assert.Contains(foundCatalogs,
+                            c => c.Equals(TestConfiguration.Metadata.Catalog, StringComparison.OrdinalIgnoreCase));
                     }
                     else
                     {
