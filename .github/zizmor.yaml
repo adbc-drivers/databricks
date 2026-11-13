@@ -14,13 +14,6 @@
 
 # Temporarily ignore existing findings at their reported locations.
 rules:
-  adhoc-packages:
-    ignore:
-      - engineer-bot-followup.yml:219
-      - engineer-bot-learning.yaml:108
-      - engineer-bot.yaml:152
-      - reviewer-bot-followup.yml:194
-      - reviewer-bot.yml:115
   artipacked:
     ignore:
       - benchmarks.yml:60
