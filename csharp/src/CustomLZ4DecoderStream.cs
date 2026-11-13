@@ -116,6 +116,13 @@ namespace AdbcDrivers.Databricks
         // read filled the buffer exactly as the frame ended, or the frame is empty) returns 0 even though
         // more frames follow, and CopyTo treats 0 as end-of-stream. Only the end of the compressed input
         // is end-of-stream, so keep reading while input remains.
+        //
+        // This relies on K4os (1.3.8, Directory.Packages.props) not reading ahead: StreamLZ4FrameReader
+        // requests exactly the header/block/checksum bytes it needs from _inner, so _inner.Position is
+        // the number of compressed bytes consumed. If a K4os upgrade buffered input past the current
+        // frame, Position could reach Length while frames remain and the truncation would return. The
+        // frame-boundary tests in Lz4UtilitiesTests (~100 KB inputs) fail if the remaining input gets
+        // buffered, but a K4os upgrade should be treated as needing a re-check of this assumption.
         private bool MoreFramesFollow(bool gotData, long positionBefore)
         {
             if (gotData || _inner.Position >= _inner.Length) return false;
