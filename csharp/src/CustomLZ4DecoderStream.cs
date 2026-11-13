@@ -48,7 +48,6 @@ namespace AdbcDrivers.Databricks
     {
         private readonly CustomLZ4FrameReader _reader;
         private readonly Stream _inner;
-        private readonly EofTrackingStream _source;
         private readonly bool _leaveOpen;
         private readonly bool _interactive;
         private bool _disposed;
@@ -56,7 +55,8 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Creates a new CustomLZ4DecoderStream instance.
         /// </summary>
-        /// <param name="inner">The inner stream containing compressed LZ4 data.</param>
+        /// <param name="inner">The inner stream containing compressed LZ4 data. Must be seekable so the
+        /// stream can tell a frame boundary from the end of the input (all callers pass a MemoryStream).</param>
         /// <param name="decoderFactory">Factory function to create the LZ4 decoder.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <param name="leaveOpen">Whether to leave the inner stream open when disposing.</param>
@@ -69,8 +69,9 @@ namespace AdbcDrivers.Databricks
             bool interactive = false)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            _source = new EofTrackingStream(inner);
-            _reader = new CustomLZ4FrameReader(_source, true, decoderFactory, bufferPool);
+            if (!inner.CanSeek)
+                throw new ArgumentException("Inner stream must be seekable.", nameof(inner));
+            _reader = new CustomLZ4FrameReader(inner, true, decoderFactory, bufferPool);
             _leaveOpen = leaveOpen;
             _interactive = interactive;
         }
@@ -111,16 +112,18 @@ namespace AdbcDrivers.Databricks
             throw new NotSupportedException("LZ4 decoder stream does not support writing");
 
         // A Databricks result file may contain several concatenated LZ4 frames, some of them empty.
-        // The K4os frame reader returns 0 from a read that starts at a frame's end mark, even when
-        // more frames follow. Stream consumers (CopyTo, Arrow readers) treat 0 as end-of-stream, so
-        // without this loop every frame after an empty one was silently dropped (ES-2356918).
-        // Keep reading until we get data or the compressed input is exhausted. Each retry consumes
-        // at least one frame header/end mark, so the loop always makes progress.
+        // The K4os frame reader returns 0 from a read that hits an empty frame, even when more frames
+        // follow. Stream consumers (CopyTo, Arrow readers) treat 0 as end-of-stream, so without this
+        // loop every frame after an empty one was silently dropped (ES-2356918).
+        // Only the end of the compressed input means end-of-stream: keep reading while input bytes
+        // remain. Each retry consumes at least one frame header/end mark, so the loop always makes
+        // progress. (Same rule as the Rust kernel's MultiFrameLz4Reader and Python's _decompress_data.)
+        private bool HasMoreInput => _inner.Position < _inner.Length;
 
         public override int ReadByte()
         {
             int value;
-            while ((value = _reader.ReadOneByte()) < 0 && !_source.ReachedEnd) { }
+            while ((value = _reader.ReadOneByte()) < 0 && HasMoreInput) { }
             return value;
         }
 
@@ -138,7 +141,7 @@ namespace AdbcDrivers.Databricks
         {
             if (buffer.IsEmpty) return 0;
             int read;
-            while ((read = _reader.ReadManyBytes(buffer, _interactive)) == 0 && !_source.ReachedEnd) { }
+            while ((read = _reader.ReadManyBytes(buffer, _interactive)) == 0 && HasMoreInput) { }
             return read;
         }
 
@@ -152,7 +155,7 @@ namespace AdbcDrivers.Databricks
             if (buffer.IsEmpty) return 0;
             int read;
             while ((read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false)) == 0
-                && !_source.ReachedEnd)
+                && HasMoreInput)
             {
                 cancellationToken.ThrowIfCancellationRequested();
             }
@@ -189,60 +192,5 @@ namespace AdbcDrivers.Databricks
             }
             base.Dispose(disposing);
         }
-    }
-
-    /// <summary>
-    /// Read-only pass-through stream that records when the underlying stream reports end-of-stream,
-    /// so <see cref="CustomLZ4DecoderStream"/> can tell a frame boundary apart from the true end of input.
-    /// </summary>
-    internal sealed class EofTrackingStream : Stream
-    {
-        private readonly Stream _inner;
-
-        public EofTrackingStream(Stream inner) => _inner = inner;
-
-        /// <summary>True once a non-empty read of the underlying stream returned 0 bytes.</summary>
-        public bool ReachedEnd { get; private set; }
-
-        private int Track(int read, int requested)
-        {
-            if (read == 0 && requested > 0) ReachedEnd = true;
-            return read;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count) =>
-            Track(_inner.Read(buffer, offset, count), count);
-
-        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            Track(await _inner.ReadAsync(buffer, offset, count, cancellationToken).ConfigureAwait(false), count);
-
-#if NETSTANDARD2_1_OR_GREATER || NET5_0_OR_GREATER
-        public override int Read(Span<byte> buffer) =>
-            Track(_inner.Read(buffer), buffer.Length);
-
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            Track(await _inner.ReadAsync(buffer, cancellationToken).ConfigureAwait(false), buffer.Length);
-#endif
-
-        public override int ReadByte()
-        {
-            int value = _inner.ReadByte();
-            if (value < 0) ReachedEnd = true;
-            return value;
-        }
-
-        public override bool CanRead => _inner.CanRead;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-        public override void Flush() { }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

@@ -162,6 +162,52 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Throws<AdbcException>(() => Lz4Utilities.DecompressLz4(truncated, _memoryManager, _bufferPool));
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(3)]
+        [InlineData(9)]
+        public async Task DecompressLz4_TrailingJunkBytes_TerminatesWithoutHanging(int junkLength)
+        {
+            // The read loop continues while compressed input remains; leftover bytes that are not a
+            // complete frame must end in an error (or end-of-stream), never an infinite loop.
+            var (compressed, _) = MultiFrame(50_000);
+            var input = new byte[compressed.Length + junkLength];
+            compressed.CopyTo(input, 0);
+            for (int i = compressed.Length; i < input.Length; i++) input[i] = 0x5A;
+
+            var decode = Task.Run(() =>
+            {
+                try { Lz4Utilities.DecompressLz4(input, _memoryManager, _bufferPool); }
+                catch (AdbcException) { }
+            });
+            var finished = await Task.WhenAny(decode, Task.Delay(TimeSpan.FromSeconds(10)));
+            Assert.Same(decode, finished);
+        }
+
+        [Fact]
+        public void CustomLZ4DecoderStream_NonSeekableInput_Throws()
+        {
+            var nonSeekable = new NonSeekableStream(new MemoryStream(Compress("x")));
+            Assert.Throws<ArgumentException>(() =>
+                new CustomLZ4DecoderStream(nonSeekable, d => d.CreateDecoder(), _bufferPool));
+        }
+
+        private sealed class NonSeekableStream : Stream
+        {
+            private readonly Stream _inner;
+            public NonSeekableStream(Stream inner) => _inner = inner;
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
+
         [Fact]
         public async Task DecompressLz4Async_ArrowStreamSplitByEmptyFrame_ReturnsAllRows()
         {
