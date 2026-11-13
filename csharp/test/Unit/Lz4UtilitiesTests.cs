@@ -23,6 +23,7 @@ using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using K4os.Compression.LZ4.Streams;
 using Microsoft.IO;
+using Moq;
 using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit
@@ -112,6 +113,26 @@ namespace AdbcDrivers.Databricks.Tests.Unit
                     output.Write(buffer, 0, read);
                 Assert.Equal(expected, output.ToArray());
             }
+        }
+
+        [Fact]
+        public void DecoderStream_ReadByte_ReadsAllFrames()
+        {
+            var (compressed, expected) = MultiFrame(3, 0, 2);
+            using var decoder = new CustomLZ4DecoderStream(new MemoryStream(compressed), d => d.CreateDecoder(), _bufferPool);
+            var output = new MemoryStream();
+            int value;
+            while ((value = decoder.ReadByte()) >= 0) output.WriteByte((byte)value);
+            Assert.Equal(expected, output.ToArray());
+        }
+
+        [Fact]
+        public void DecoderStream_NonSeekableInput_Throws()
+        {
+            var nonSeekable = new Mock<Stream>();
+            nonSeekable.Setup(s => s.CanSeek).Returns(false);
+            Assert.Throws<ArgumentException>(() =>
+                new CustomLZ4DecoderStream(nonSeekable.Object, d => d.CreateDecoder(), _bufferPool));
         }
 
         [Fact]

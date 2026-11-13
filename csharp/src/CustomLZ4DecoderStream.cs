@@ -55,7 +55,8 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Creates a new CustomLZ4DecoderStream instance.
         /// </summary>
-        /// <param name="inner">The inner stream containing compressed LZ4 data.</param>
+        /// <param name="inner">The inner stream containing compressed LZ4 data. Must be seekable: the stream
+        /// uses <c>Position &lt; Length</c> to tell a frame boundary from the end of the input (ES-2356918).</param>
         /// <param name="decoderFactory">Factory function to create the LZ4 decoder.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <param name="leaveOpen">Whether to leave the inner stream open when disposing.</param>
@@ -68,6 +69,8 @@ namespace AdbcDrivers.Databricks
             bool interactive = false)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            if (!inner.CanSeek)
+                throw new ArgumentException("Inner stream must be seekable.", nameof(inner));
             _reader = new CustomLZ4FrameReader(inner, true, decoderFactory, bufferPool);
             _leaveOpen = leaveOpen;
             _interactive = interactive;
@@ -113,11 +116,9 @@ namespace AdbcDrivers.Databricks
         // read filled the buffer exactly as the frame ended, or the frame is empty) returns 0 even though
         // more frames follow, and CopyTo treats 0 as end-of-stream. Only the end of the compressed input
         // is end-of-stream, so keep reading while input remains.
-        private long InputPosition => _inner.CanSeek ? _inner.Position : -1;
-
         private bool MoreFramesFollow(bool gotData, long positionBefore)
         {
-            if (gotData || !_inner.CanSeek || _inner.Position >= _inner.Length) return false;
+            if (gotData || _inner.Position >= _inner.Length) return false;
             if (_inner.Position == positionBefore)
                 throw new InvalidDataException("LZ4 decoder made no progress before the end of the input");
             return true;
@@ -127,7 +128,7 @@ namespace AdbcDrivers.Databricks
         {
             int value;
             long before;
-            do { before = InputPosition; value = _reader.ReadOneByte(); }
+            do { before = _inner.Position; value = _reader.ReadOneByte(); }
             while (MoreFramesFollow(value >= 0, before));
             return value;
         }
@@ -149,7 +150,7 @@ namespace AdbcDrivers.Databricks
         {
             int read;
             long before;
-            do { before = InputPosition; read = _reader.ReadManyBytes(buffer, _interactive); }
+            do { before = _inner.Position; read = _reader.ReadManyBytes(buffer, _interactive); }
             while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
             return read;
         }
@@ -160,7 +161,7 @@ namespace AdbcDrivers.Databricks
             long before;
             do
             {
-                before = InputPosition;
+                before = _inner.Position;
                 read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false);
             }
             while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
