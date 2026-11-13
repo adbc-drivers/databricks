@@ -20,6 +20,18 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.1.12] - 2026-11-13
+
+### Fixed
+
+- Fix CloudFetch results with LZ4 being silently truncated when an LZ4 frame
+  ended exactly at the read buffer boundary (#764).
+
+### Changed
+
+- Report CloudFetch row-count shortfalls (rows the server declared but the
+  driver didn't decode) in telemetry and traces (#764).
+
 ## [1.1.11] - 2026-10-06
 
 ### Fixed
