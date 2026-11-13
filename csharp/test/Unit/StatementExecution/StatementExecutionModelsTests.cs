@@ -50,7 +50,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var deserialized = JsonSerializer.Deserialize<CreateSessionRequest>(json, _jsonOptions);
 
             Assert.NotNull(deserialized);
-            Assert.Equal("test-warehouse-id", deserialized.WarehouseId);
+            Assert.DoesNotContain("\"warehouse_id\"", json);
+            Assert.Equal("test-warehouse-id", request.WarehouseId);
             Assert.Equal("main", deserialized.Catalog);
             Assert.Equal("default", deserialized.Schema);
             Assert.NotNull(deserialized.SessionConfigs);
