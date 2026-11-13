@@ -119,14 +119,42 @@ Examples:
 ### Authentication Options
 
 `databricks.auth_type`
-: **Values:** `pat`, `oauth-m2m`. **Default:** (empty, inferred from the options that are set)
+: **Values:** `pat`, `oauth-m2m`, `env-oidc`, `file-oidc`. **Default:** (empty, inferred from the options that are set)
 
   How to authenticate.
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
+  - `env-oidc`: OIDC token federation. The ID token is read from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`) and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
+  - `file-oidc`: OIDC token federation. The ID token is read from a file and exchanged for a Databricks token. Requires `databricks.oidc.client_id`.
+
+  The methods backed by the Databricks SDK (`env-oidc`, `file-oidc`) also read `DATABRICKS_*` environment variables that belong to their own method (for example `DATABRICKS_OIDC_TOKEN`), but never `~/.databrickscfg`. Credentials of other methods in the environment, such as `DATABRICKS_TOKEN`, are ignored.
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
+
+`databricks.oidc.client_id`
+: **Default:** (empty)
+
+  The client ID of the Databricks service principal to log in as. Required for `env-oidc` and `file-oidc`.
+
+`databricks.oidc.token_filepath`
+: **Default:** (empty, the `DATABRICKS_OIDC_TOKEN_FILEPATH` environment variable is used)
+
+  Path of the file holding the ID token. Used by `file-oidc` only.
+
+### Query Options
+
+`databricks.query.query_tag.<name>`
+: **Values:** a string, which may be empty. **Default:** (not set)
+
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. May be set at the database, connection or statement level, and a tag set at a more specific level overrides one of the same name set at a less specific level. Reading a tag that is not set returns `NOT_FOUND`.
+
+  Names and values may be at most 128 characters, counted in UTF-16 code units so an emoji counts as 2. Names must not be empty or contain `,` `:` `-` `/` `=` or `.`. At most 20 tags are allowed. A tag that breaks these limits is rejected with `INVALID_ARGUMENT`. Names starting with `@@` are reserved by Databricks and passed through unchanged.
+
+`databricks.query.unset_query_tag`
+: **Values:** a tag name, for example `team`. **Default:** (not set)
+
+  Removes the query tag named by the value. On the database it removes the default; on a connection it removes the tag, including one inherited from the database; on a statement it removes the statement's own override. A tag set by the connection or database cannot be removed for a single statement, so the driver rejects this with `INVALID_ARGUMENT`. Removing a tag that is not set does nothing.
 
 ## Feature & Type Support
 

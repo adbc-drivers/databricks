@@ -16,8 +16,13 @@ package databricks
 
 import (
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/databricks/databricks-sdk-go/common/environment"
+	sdkconfig "github.com/databricks/databricks-sdk-go/config"
 	dbsql "github.com/databricks/databricks-sql-go"
 )
 
@@ -28,13 +33,29 @@ type authField struct {
 	value  func(d *databaseImpl) string
 }
 
-// loginMethod is one way to authenticate: the options it requires and how it
-// configures the SQL driver. Adding a method means adding one entry to
-// loginMethods, keyed by its auth_type value.
+// loginMethod is one way to authenticate: the options it requires and may
+// take, and how it configures the SQL driver. Adding a method means adding one
+// entry to loginMethods, keyed by its auth_type value. A method either builds
+// its own connection option (build) or is a credential of the Databricks SDK
+// (sdk).
 type loginMethod struct {
 	required []authField
+	optional []string
 	build    func(d *databaseImpl) dbsql.ConnOption
+	sdk      *sdkLogin
 }
+
+// sdkLogin describes a login done by the Databricks SDK.
+type sdkLogin struct {
+	// cloud is set when the auth type implies one; otherwise the SDK guesses
+	// it from the host name.
+	cloud       environment.Cloud
+	credentials sdkconfig.CredentialsStrategy
+	// apply copies the method's options into the SDK config.
+	apply func(d *databaseImpl, cfg *sdkconfig.Config)
+}
+
+var oidcClientIDField = authField{OptionOIDCClientID, "client ID", func(d *databaseImpl) string { return d.oidcClientID }}
 
 var loginMethods = map[string]loginMethod{
 	OptionValueAuthTypePAT: {
@@ -54,6 +75,83 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret)
 		},
 	},
+	// OIDC token federation, with the auth type names of the Databricks SDK.
+	// The SDK exchanges the ID token for a Databricks token.
+	OptionValueAuthTypeEnvOIDC: {
+		required: []authField{oidcClientIDField},
+		sdk: &sdkLogin{
+			credentials: sdkconfig.EnvOIDCCredentials{},
+			apply:       func(d *databaseImpl, cfg *sdkconfig.Config) { cfg.ClientID = d.oidcClientID },
+		},
+	},
+	OptionValueAuthTypeFileOIDC: {
+		required: []authField{oidcClientIDField},
+		optional: []string{OptionOIDCTokenFilepath},
+		sdk: &sdkLogin{
+			credentials: sdkconfig.FileOIDCCredentials{},
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				cfg.ClientID = d.oidcClientID
+				// When unset, the SDK falls back to DATABRICKS_OIDC_TOKEN_FILEPATH.
+				cfg.OIDCTokenFilepath = d.oidcTokenFilepath
+			},
+		},
+	},
+}
+
+// splitHost splits the server host name into its URL scheme and bare host.
+// The scheme defaults to https, as in the SQL client.
+func splitHost(host string) (scheme, name string) {
+	if s, rest, ok := strings.Cut(host, "://"); ok && (strings.EqualFold(s, "https") || strings.EqualFold(s, "http")) {
+		return strings.ToLower(s), rest
+	}
+	return "https", host
+}
+
+// hostWithPort adds port to host unless it is 0 or host already has a port.
+// The SQL client takes the port separately, so the SDK has to be given it too:
+// without it, the SDK talks to the default port 443.
+func hostWithPort(host string, port int) string {
+	if port == 0 {
+		return host
+	}
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
+}
+
+// sdkConfig returns the SDK config of login method name, to be used as the SQL
+// client's authenticator. The config resolves itself on the first request, so
+// a bad value surfaces when the connection is opened. Only environment
+// variables are read, never ~/.databrickscfg, so a profile on disk cannot
+// change the login method. Because auth_type is always set, credentials in
+// other DATABRICKS_* variables (such as DATABRICKS_TOKEN) are ignored.
+func (d *databaseImpl) sdkConfig(name string, login *sdkLogin) *sdkconfig.Config {
+	scheme, host := splitHost(d.serverHostname)
+	cfg := &sdkconfig.Config{
+		Host:        scheme + "://" + hostWithPort(host, d.port),
+		Loaders:     []sdkconfig.Loader{sdkconfig.ConfigAttributes},
+		AuthType:    name,
+		Cloud:       login.cloud,
+		Credentials: login.credentials,
+	}
+	// The login talks to the workspace itself, so it needs the same TLS settings
+	// as the SQL client.
+	if transport := d.customTransport(); transport != nil {
+		cfg.HTTPTransport = transport
+	}
+	if login.apply != nil {
+		login.apply(d, cfg)
+	}
+	return cfg
+}
+
+// connOption returns the SQL client option that logs in with this method.
+func (m loginMethod) connOption(name string, d *databaseImpl) dbsql.ConnOption {
+	if m.sdk != nil {
+		return dbsql.WithAuthenticator(d.sdkConfig(name, m.sdk))
+	}
+	return m.build(d)
 }
 
 // resolveLoginMethod picks the login method for the configured options and
