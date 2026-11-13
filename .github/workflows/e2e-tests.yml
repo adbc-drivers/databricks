@@ -268,7 +268,7 @@ jobs:
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
-          export TEST_FRAMEWORK="${{ env.E2E_TARGET_FRAMEWORK }}"
+          export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       # Always run, even on test failure or job cancellation, so we don't

@@ -203,7 +203,7 @@ jobs:
         shell: bash
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
-          export TEST_FRAMEWORK="${{ env.E2E_TARGET_FRAMEWORK }}"
+          export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
           # Reyden is a Lakehouse//RT warehouse: no DDL/DML (CREATE/DROP/UPDATE), no
           # EXTERNAL_LINKS, and no presigned-URL refresh (SEA GetResultChunk 404s, ES-2049942).
           # Curate the suite to the read/query subset by excluding tests that need those
