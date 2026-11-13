@@ -56,7 +56,7 @@ rules:
     ignore:
       - benchmarks.yml:48
       - benchmarks.yml:49
-      - e2e-tests.yml:45
+      - e2e-tests.yml:50
       - pr-validation.yml:29
       - reyden-rest-nightly.yml:28
       - rust-e2e.yml:15
