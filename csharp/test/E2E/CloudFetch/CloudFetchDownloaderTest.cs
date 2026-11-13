@@ -31,14 +31,10 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
-using Apache.Arrow;
 using Apache.Arrow.Adbc;
-using Apache.Arrow.Ipc;
-using Apache.Arrow.Types;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Hive.Service.Rpc.Thrift;
-using K4os.Compression.LZ4.Streams;
 using Moq;
 using Moq.Protected;
 using Xunit;
@@ -218,104 +214,6 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
 
             // Cleanup
             await downloader.StopAsync();
-        }
-
-        /// <summary>
-        /// ES-2356918 repro through the real CloudFetch download path: the downloaded file is an
-        /// LZ4-compressed Arrow stream made of several concatenated frames with an empty frame
-        /// after the 6th 4,096-row batch (the layout the warehouse produced for the incident).
-        /// Before the fix the decompressed stream ended at the empty frame and the reader got
-        /// 24,576 rows with no error.
-        /// </summary>
-        [Fact]
-        public async Task DownloadFileAsync_Lz4FileWithEmptyFrame_ReturnsAllRows()
-        {
-            const int batchRows = 4096, batchCount = 12, splitAfter = 6;
-            byte[] fileBytes = BuildLz4ArrowFileWithEmptyFrame(batchRows, batchCount, splitAfter);
-
-            var httpClient = new HttpClient(CreateMockHttpMessageHandler(fileBytes).Object);
-            var mockDownloadResult = new Mock<IDownloadResult>();
-            mockDownloadResult.Setup(r => r.FileUrl).Returns("http://test.com/file-empty-frame");
-            mockDownloadResult.Setup(r => r.StartRowOffset).Returns(0);
-            mockDownloadResult.Setup(r => r.ExpirationTime).Returns(DateTime.UtcNow.AddMinutes(30));
-            mockDownloadResult.Setup(r => r.HttpHeaders).Returns((IReadOnlyDictionary<string, string>?)null);
-            mockDownloadResult.Setup(r => r.Size).Returns(fileBytes.Length);
-            mockDownloadResult.Setup(r => r.RefreshAttempts).Returns(0);
-            mockDownloadResult.Setup(r => r.IsExpiredOrExpiringSoon(It.IsAny<int>())).Returns(false);
-            Stream? capturedStream = null;
-            mockDownloadResult.Setup(r => r.SetCompleted(It.IsAny<Stream>(), It.IsAny<long>()))
-                .Callback<Stream, long>((stream, _) => capturedStream = stream);
-
-            var downloader = new CloudFetchDownloader(
-                _mockStatement.Object,
-                _downloadQueue,
-                _resultQueue,
-                _mockMemoryManager.Object,
-                httpClient,
-                _mockResultFetcher.Object,
-                1, // maxParallelDownloads
-                true, // isLz4Compressed
-                maxRetries: 0,
-                retryTimeoutSeconds: 5,
-                retryDelayMs: 10);
-
-            await downloader.StartAsync(CancellationToken.None);
-            _downloadQueue.Add(mockDownloadResult.Object);
-            _downloadQueue.Add(EndOfResultsGuard.Instance);
-            var result = await downloader.GetNextDownloadedFileAsync(CancellationToken.None);
-
-            Assert.Same(mockDownloadResult.Object, result);
-            Assert.NotNull(capturedStream);
-            long rows = 0;
-            using (var reader = new ArrowStreamReader(capturedStream!))
-            {
-                RecordBatch? batch;
-                while ((batch = await reader.ReadNextRecordBatchAsync()) != null)
-                {
-                    using (batch) rows += batch.Length;
-                }
-            }
-            Assert.Equal((long)batchRows * batchCount, rows);
-
-            await downloader.StopAsync();
-        }
-
-        private static byte[] BuildLz4ArrowFileWithEmptyFrame(int batchRows, int batchCount, int splitAfter)
-        {
-            var schema = new Schema.Builder().Field(f => f.Name("id").DataType(Int64Type.Default)).Build();
-            byte[] ipcBytes;
-            long headLength = 0;
-            using (var ipc = new MemoryStream())
-            {
-                using (var writer = new ArrowStreamWriter(ipc, schema, leaveOpen: true))
-                {
-                    long next = 0;
-                    for (int b = 0; b < batchCount; b++)
-                    {
-                        var ids = new Int64Array.Builder();
-                        for (int r = 0; r < batchRows; r++) ids.Append(next++);
-                        writer.WriteRecordBatch(new RecordBatch(schema, new IArrowArray[] { ids.Build() }, batchRows));
-                        if (b == splitAfter - 1) headLength = ipc.Length;
-                    }
-                    writer.WriteEnd();
-                }
-                ipcBytes = ipc.ToArray();
-            }
-
-            // Frame 1: schema + first batches, frame 2: empty, frame 3: the rest + end-of-stream.
-            var parts = new[]
-            {
-                new ArraySegment<byte>(ipcBytes, 0, (int)headLength),
-                new ArraySegment<byte>(ipcBytes, 0, 0),
-                new ArraySegment<byte>(ipcBytes, (int)headLength, ipcBytes.Length - (int)headLength),
-            };
-            using var file = new MemoryStream();
-            foreach (var part in parts)
-            {
-                using var encoder = LZ4Stream.Encode(file, leaveOpen: true);
-                encoder.Write(part.Array!, part.Offset, part.Count);
-            }
-            return file.ToArray();
         }
 
         [Fact]

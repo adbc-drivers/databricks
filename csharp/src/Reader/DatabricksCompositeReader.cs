@@ -312,13 +312,7 @@ namespace AdbcDrivers.Databricks.Reader
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
                                     new("reader_type", _activeReader.GetType().Name)
                                 ]);
-                                // Snapshot the CloudFetch chunk metrics before disposing the active
-                                // reader and dropping the reference. A reader disposed before its
-                                // statement (the default with `using` declarations, where the reader
-                                // is declared after the statement and so disposed first) would
-                                // otherwise leave GetChunkMetrics() returning null at statement
-                                // Dispose time, losing both the chunk-detail telemetry and the
-                                // row-count shortfall warning (ES-2356918).
+                                // Keep metrics for statement telemetry: a `using` reader is often disposed first.
                                 if (_activeReader is CloudFetchReader cloudFetchReader)
                                 {
                                     _chunkMetricsSnapshot = cloudFetchReader.GetChunkMetrics();
@@ -393,16 +387,8 @@ namespace AdbcDrivers.Databricks.Reader
                 return cloudFetchReader.GetChunkMetrics();
             }
 
-            // Reader already disposed (e.g. a `using` reader declared after the statement is
-            // disposed first): fall back to the snapshot captured in Dispose so the statement's
-            // telemetry still sees the chunk metrics and row-count shortfall warning.
-            if (_chunkMetricsSnapshot != null)
-            {
-                return _chunkMetricsSnapshot;
-            }
-
-            // Not using CloudFetch or reader not initialized yet
-            return null;
+            // Reader already disposed, or not using CloudFetch / not initialized yet
+            return _chunkMetricsSnapshot;
         }
 
         /// <summary>

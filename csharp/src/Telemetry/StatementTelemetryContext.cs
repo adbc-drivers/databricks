@@ -174,18 +174,6 @@ namespace AdbcDrivers.Databricks.Telemetry
         public string? ErrorName { get; set; }
 
         /// <summary>
-        /// Name of a non-fatal data-integrity condition observed while reading results (e.g.
-        /// <see cref="RowCountShortfallErrorName"/>). Emitted as <c>DriverErrorInfo.error_name</c> only
-        /// when the statement has no real error, so it never masks one. The statement still succeeds.
-        /// </summary>
-        public string? WarningName { get; set; }
-
-        /// <summary>
-        /// <c>error_name</c> reported when CloudFetch decoded fewer rows than the server declared.
-        /// </summary>
-        public const string RowCountShortfallErrorName = "CloudFetchRowCountShortfall";
-
-        /// <summary>
         /// Gets or sets the error message.
         /// </summary>
         public string? ErrorMessage { get; set; }
@@ -316,21 +304,13 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             log.SqlOperation = sqlEvent;
 
-            // Add error info if present. A real error always wins over a warning.
-            if (HasError)
+            // Add error info if present (ErrorName alone is a non-fatal condition, e.g. row-count shortfall)
+            if (HasError || !string.IsNullOrEmpty(ErrorName))
             {
                 log.ErrorInfo = new DriverErrorInfo
                 {
                     ErrorName = ErrorName ?? string.Empty,
                     StackTrace = string.Empty // Stack trace intentionally left empty per privacy requirements
-                };
-            }
-            else if (!string.IsNullOrEmpty(WarningName))
-            {
-                log.ErrorInfo = new DriverErrorInfo
-                {
-                    ErrorName = WarningName,
-                    StackTrace = string.Empty
                 };
             }
 

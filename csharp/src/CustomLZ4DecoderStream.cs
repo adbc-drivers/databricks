@@ -55,8 +55,7 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Creates a new CustomLZ4DecoderStream instance.
         /// </summary>
-        /// <param name="inner">The inner stream containing compressed LZ4 data. Must be seekable so the
-        /// stream can tell a frame boundary from the end of the input (all callers pass a MemoryStream).</param>
+        /// <param name="inner">The inner stream containing compressed LZ4 data.</param>
         /// <param name="decoderFactory">Factory function to create the LZ4 decoder.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <param name="leaveOpen">Whether to leave the inner stream open when disposing.</param>
@@ -69,8 +68,6 @@ namespace AdbcDrivers.Databricks
             bool interactive = false)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-            if (!inner.CanSeek)
-                throw new ArgumentException("Inner stream must be seekable.", nameof(inner));
             _reader = new CustomLZ4FrameReader(inner, true, decoderFactory, bufferPool);
             _leaveOpen = leaveOpen;
             _interactive = interactive;
@@ -111,90 +108,62 @@ namespace AdbcDrivers.Databricks
         public override void Write(byte[] buffer, int offset, int count) =>
             throw new NotSupportedException("LZ4 decoder stream does not support writing");
 
-        // A Databricks result file may contain many concatenated LZ4 frames (one per Arrow batch).
-        // The K4os frame reader never reads across frames, and a read that starts on a frame's unread
-        // end mark returns 0 even when more frames follow. That happens whenever the previous read
-        // filled the caller's buffer exactly as a frame's data ended (a frame whose decoded size is a
-        // multiple of the read size, e.g. an 81,920-byte Arrow batch with .NET Framework's
-        // CopyToAsync), and for empty frames. Stream consumers (CopyTo, Arrow readers) treat 0 as
-        // end-of-stream, so without this loop every later frame was silently dropped (ES-2356918).
-        // Only the end of the compressed input means end-of-stream: keep reading while input bytes
-        // remain. Each retry consumes at least one frame header/end mark, so the loop always makes
-        // progress. (Same rule as the Rust kernel's MultiFrameLz4Reader and Python's _decompress_data.)
-        //
-        // Progress guard: with K4os 1.3.8 a 0-byte read at a non-EOF position always consumes a
-        // frame header/end mark (or throws). If a future reader ever returned 0 without advancing the
-        // inner stream while input remains, we throw instead of looping forever or returning 0 —
-        // returning 0 there would silently truncate the result, the very bug this loop fixes. (The
-        // Rust kernel's MultiFrameLz4Reader raises "LZ4 decoder stalled" in the same situation.)
-        private bool HasMoreInput => _inner.Position < _inner.Length;
+        // ES-2356918: a result file can hold many concatenated LZ4 frames (one per Arrow batch), but the
+        // K4os reader never reads across frames. A read that starts on a frame's end mark (the previous
+        // read filled the buffer exactly as the frame ended, or the frame is empty) returns 0 even though
+        // more frames follow, and CopyTo treats 0 as end-of-stream. Only the end of the compressed input
+        // is end-of-stream, so keep reading while input remains.
+        private long InputPosition => _inner.CanSeek ? _inner.Position : -1;
 
-        /// <summary>
-        /// Returns true if the read loop should retry after a read that produced no data; throws if
-        /// that read made no progress while compressed input remains.
-        /// </summary>
-        private bool ShouldRetryEmptyRead(long positionBeforeRead)
+        private bool MoreFramesFollow(bool gotData, long positionBefore)
         {
-            if (!HasMoreInput) return false;
-            if (_inner.Position == positionBeforeRead)
-            {
-                throw new InvalidDataException(
-                    $"LZ4 decoder made no progress with {_inner.Length - _inner.Position} compressed bytes remaining");
-            }
+            if (gotData || !_inner.CanSeek || _inner.Position >= _inner.Length) return false;
+            if (_inner.Position == positionBefore)
+                throw new InvalidDataException("LZ4 decoder made no progress before the end of the input");
             return true;
         }
 
         public override int ReadByte()
         {
             int value;
-            long previousPosition;
-            do
-            {
-                previousPosition = _inner.Position;
-                value = _reader.ReadOneByte();
-            } while (value < 0 && ShouldRetryEmptyRead(previousPosition));
+            long before;
+            do { before = InputPosition; value = _reader.ReadOneByte(); }
+            while (MoreFramesFollow(value >= 0, before));
             return value;
         }
 
         public override int Read(byte[] buffer, int offset, int count) =>
-            Read(buffer.AsSpan(offset, count));
+            ReadCore(buffer.AsSpan(offset, count));
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            ReadManyAsync(buffer.AsMemory(offset, count), cancellationToken);
+            ReadCoreAsync(buffer.AsMemory(offset, count), cancellationToken);
 
 #if NETSTANDARD2_1_OR_GREATER || NET5_0_OR_GREATER
-        public override int Read(Span<byte> buffer)
-#else
-        private int Read(Span<byte> buffer)
+        public override int Read(Span<byte> buffer) => ReadCore(buffer);
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            new(ReadCoreAsync(buffer, cancellationToken));
 #endif
+
+        private int ReadCore(Span<byte> buffer)
         {
-            if (buffer.IsEmpty) return 0;
             int read;
-            long previousPosition;
-            do
-            {
-                previousPosition = _inner.Position;
-                read = _reader.ReadManyBytes(buffer, _interactive);
-            } while (read == 0 && ShouldRetryEmptyRead(previousPosition));
+            long before;
+            do { before = InputPosition; read = _reader.ReadManyBytes(buffer, _interactive); }
+            while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
             return read;
         }
 
-#if NETSTANDARD2_1_OR_GREATER || NET5_0_OR_GREATER
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            new(ReadManyAsync(buffer, cancellationToken));
-#endif
-
-        private async Task<int> ReadManyAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        private async Task<int> ReadCoreAsync(Memory<byte> buffer, CancellationToken cancellationToken)
         {
-            if (buffer.IsEmpty) return 0;
             int read;
-            long previousPosition;
+            long before;
             do
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                previousPosition = _inner.Position;
+                before = InputPosition;
                 read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false);
-            } while (read == 0 && ShouldRetryEmptyRead(previousPosition));
+            }
+            while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
             return read;
         }
 

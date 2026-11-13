@@ -56,8 +56,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly long _totalExpectedRows;
         private long _rowsRead;
         private long _currentChunkExpectedRows;
-        private int _rowCountShortfallChunks;
-        private long _rowCountShortfallRows;
+        private long _rowCountShortfall;
         private long _currentChunkRowsRead;
 
         // Telemetry tracking
@@ -142,9 +141,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         else
                         {
-                            // The file's Arrow stream ended. If it delivered fewer rows than the
-                            // server declared for it, rows were lost (e.g. ES-2356918) — record it.
-                            RecordChunkRowShortfall();
+                            // Thrift declares a row count per file; SEA declares a total (checked below).
+                            if (_totalExpectedRows <= 0) RecordRowShortfall(_currentChunkExpectedRows, _currentChunkRowsRead);
                             // Clean up the current reader and download result
                             CleanupCurrentReaderAndDownloadResult();
                         }
@@ -164,14 +162,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
-                                // Only record a shortfall when results genuinely ran out. If the caller
-                                // cancelled, GetNextDownloadedFileAsync swallows the OperationCanceledException
-                                // and returns null; that is an intentional early stop, not lost rows, so it
-                                // must not count as a shortfall (see ChunkMetrics contract).
-                                if (!cancellationToken.IsCancellationRequested)
-                                {
-                                    RecordResultRowShortfall();
-                                }
+                                // A cancelled read also ends here (null file); that is not lost rows.
+                                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
+                                    RecordRowShortfall(_totalExpectedRows, _rowsRead);
                                 // Snapshot metrics before disposing the download manager
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
@@ -339,49 +332,18 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ChunkMetrics metrics = downloadManager != null
                 ? downloadManager.GetChunkMetrics()
                 : _cachedChunkMetrics ?? new ChunkMetrics();
-            metrics.RowCountShortfallChunks = _rowCountShortfallChunks;
-            metrics.RowCountShortfallRows = _rowCountShortfallRows;
+            metrics.RowCountShortfall = _rowCountShortfall;
             return metrics;
         }
 
-        /// <summary>
-        /// Thrift (per-link limiting): called when a file's Arrow stream ends. Records a shortfall if the
-        /// file decoded to fewer rows than its TSparkArrowResultLink.RowCount. Does not fail the read.
-        /// </summary>
-        private void RecordChunkRowShortfall()
+        // ES-2356918: rows the server declared but the decoded files did not deliver. Report-only.
+        private void RecordRowShortfall(long expectedRows, long rowsRead)
         {
-            if (_totalExpectedRows > 0 || _currentChunkExpectedRows <= 0 || _currentChunkRowsRead >= _currentChunkExpectedRows)
-            {
-                return;
-            }
-            long missing = _currentChunkExpectedRows - _currentChunkRowsRead;
-            _rowCountShortfallChunks++;
-            _rowCountShortfallRows += missing;
-            Activity.Current?.AddEvent("cloudfetch.chunk_row_count_shortfall", [
-                new("chunk_index", this.currentDownloadResult?.ChunkIndex ?? -1),
-                new("chunk_expected_rows", _currentChunkExpectedRows),
-                new("chunk_rows_read", _currentChunkRowsRead),
-                new("missing_rows", missing)
-            ]);
-        }
-
-        /// <summary>
-        /// SEA (global limiting): called once when there are no more files. Records a shortfall if fewer
-        /// rows were decoded than the manifest's TotalRowCount. Does not fail the read.
-        /// </summary>
-        private void RecordResultRowShortfall()
-        {
-            if (_totalExpectedRows <= 0 || _rowsRead >= _totalExpectedRows)
-            {
-                return;
-            }
-            long missing = _totalExpectedRows - _rowsRead;
-            _rowCountShortfallChunks++;
-            _rowCountShortfallRows += missing;
-            Activity.Current?.AddEvent("cloudfetch.result_row_count_shortfall", [
-                new("total_expected_rows", _totalExpectedRows),
-                new("rows_read", _rowsRead),
-                new("missing_rows", missing)
+            if (rowsRead >= expectedRows) return;
+            _rowCountShortfall += expectedRows - rowsRead;
+            Activity.Current?.AddEvent("cloudfetch.row_count_shortfall", [
+                new("expected_rows", expectedRows),
+                new("rows_read", rowsRead)
             ]);
         }
 
