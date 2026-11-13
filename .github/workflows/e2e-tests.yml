@@ -51,8 +51,10 @@ jobs:
     runs-on: windows-2022
     # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
     # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
-    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml and leaves
-    # generous headroom over the observed suite runtime.
+    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml. It is a
+    # fail-fast ceiling for a genuine hang, not a target: the new 10M/100M-row cases add
+    # substantial runtime on top of the previously observed ~42 min (thrift) / ~30 min
+    # (rest), so revisit this cap if a healthy run starts approaching it.
     timeout-minutes: 180
     strategy:
       fail-fast: false
