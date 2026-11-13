@@ -113,7 +113,7 @@ jobs:
           # Fine-grained PAT, read-only Contents on databricks/databricks-bot-engine.
           ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
           # Same SUPPLY-CHAIN PIN as the bot workflows (immutable SHA, never @main).
-          ENGINE_REF: ca9bbc565d31892031220b64a430f9a188b04c1d
+          ENGINE_REF: 434674335076efdb281224270b02501b47b1106b
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"

@@ -202,7 +202,7 @@ jobs:
           # Bump it together with the copies of the engine's SDK/CLI locks in
           # .github/bot-requirements/ and .github/claude-cli/ (all from the same engine
           # commit). The SHA is duplicated in every bot workflow: grep and update all of them.
-          ENGINE_REF: ca9bbc565d31892031220b64a430f9a188b04c1d
+          ENGINE_REF: 434674335076efdb281224270b02501b47b1106b
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
