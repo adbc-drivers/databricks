@@ -49,12 +49,12 @@ jobs:
     # 81,920 bytes at a time while .NET 8 rents a 131,072-byte buffer, so CloudFetch/LZ4
     # behavior differs between the two (ES-2356918 only reproduced on .NET Framework).
     runs-on: windows-2022
-    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
-    # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
-    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml. It is a
-    # fail-fast ceiling for a genuine hang, not a target: the new 10M/100M-row cases add
-    # substantial runtime on top of the previously observed ~42 min (thrift) / ~30 min
-    # (rest), so revisit this cap if a healthy run starts approaching it.
+    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung CloudFetch scan fails
+    # fast instead of blocking the queue for hours. 180 matches benchmarks.yml. It is a
+    # fail-fast ceiling for a genuine hang, not a target: the default merge_group run is the
+    # 1M-row case (~42 min thrift / ~30 min rest). The very-large 10M/100M-row cases only run
+    # on-demand (DATABRICKS_RUN_LARGE_CLOUDFETCH=true, set below for workflow_dispatch / the
+    # `e2e-test` label) and add substantial runtime, so revisit this cap if one approaches it.
     timeout-minutes: 180
     strategy:
       fail-fast: false
@@ -276,6 +276,14 @@ jobs:
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
           export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
+          # Opt-in to the very-large (10M/100M-row) CloudFetch cases in CloudFetchE2ETest only for
+          # on-demand runs (workflow_dispatch, or a PR carrying the `e2e-test` label). The default
+          # merge_group path skips them: each is ~10x/~100x the 1M case, so running them twice
+          # (thrift + rest) on every C# merge would add hours of merge-queue latency. See the
+          # TestCases() comment in csharp/test/E2E/CloudFetchE2ETest.cs.
+          if [[ "${{ github.event_name }}" != "merge_group" ]]; then
+            export DATABRICKS_RUN_LARGE_CLOUDFETCH=true
+          fi
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       # Always run, even on test failure or job cancellation, so we don't
