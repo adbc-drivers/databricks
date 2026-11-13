@@ -56,6 +56,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly long _totalExpectedRows;
         private long _rowsRead;
         private long _currentChunkExpectedRows;
+        private int _rowCountShortfallChunks;
+        private long _rowCountShortfallRows;
         private long _currentChunkRowsRead;
 
         // Telemetry tracking
@@ -140,6 +142,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         else
                         {
+                            // The file's Arrow stream ended. If it delivered fewer rows than the
+                            // server declared for it, rows were lost (e.g. ES-2356918) — record it.
+                            RecordChunkRowShortfall();
                             // Clean up the current reader and download result
                             CleanupCurrentReaderAndDownloadResult();
                         }
@@ -159,6 +164,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
+                                RecordResultRowShortfall();
                                 // Snapshot metrics before disposing the download manager
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
@@ -322,13 +328,54 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
         public ChunkMetrics GetChunkMetrics()
         {
-            if (downloadManager != null)
-            {
-                return downloadManager.GetChunkMetrics();
-            }
+            // Use cached metrics if the download manager was already disposed after results were exhausted
+            ChunkMetrics metrics = downloadManager != null
+                ? downloadManager.GetChunkMetrics()
+                : _cachedChunkMetrics ?? new ChunkMetrics();
+            metrics.RowCountShortfallChunks = _rowCountShortfallChunks;
+            metrics.RowCountShortfallRows = _rowCountShortfallRows;
+            return metrics;
+        }
 
-            // Return cached metrics if download manager was already disposed after results were exhausted
-            return _cachedChunkMetrics ?? new ChunkMetrics();
+        /// <summary>
+        /// Thrift (per-link limiting): called when a file's Arrow stream ends. Records a shortfall if the
+        /// file decoded to fewer rows than its TSparkArrowResultLink.RowCount. Does not fail the read.
+        /// </summary>
+        private void RecordChunkRowShortfall()
+        {
+            if (_totalExpectedRows > 0 || _currentChunkExpectedRows <= 0 || _currentChunkRowsRead >= _currentChunkExpectedRows)
+            {
+                return;
+            }
+            long missing = _currentChunkExpectedRows - _currentChunkRowsRead;
+            _rowCountShortfallChunks++;
+            _rowCountShortfallRows += missing;
+            Activity.Current?.AddEvent("cloudfetch.chunk_row_count_shortfall", [
+                new("chunk_index", this.currentDownloadResult?.ChunkIndex ?? -1),
+                new("chunk_expected_rows", _currentChunkExpectedRows),
+                new("chunk_rows_read", _currentChunkRowsRead),
+                new("missing_rows", missing)
+            ]);
+        }
+
+        /// <summary>
+        /// SEA (global limiting): called once when there are no more files. Records a shortfall if fewer
+        /// rows were decoded than the manifest's TotalRowCount. Does not fail the read.
+        /// </summary>
+        private void RecordResultRowShortfall()
+        {
+            if (_totalExpectedRows <= 0 || _rowsRead >= _totalExpectedRows)
+            {
+                return;
+            }
+            long missing = _totalExpectedRows - _rowsRead;
+            _rowCountShortfallChunks++;
+            _rowCountShortfallRows += missing;
+            Activity.Current?.AddEvent("cloudfetch.result_row_count_shortfall", [
+                new("total_expected_rows", _totalExpectedRows),
+                new("rows_read", _rowsRead),
+                new("missing_rows", missing)
+            ]);
         }
 
         protected override void Dispose(bool disposing)

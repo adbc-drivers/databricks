@@ -51,5 +51,19 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// This is the total time spent downloading (excluding parallel overlap).
         /// </summary>
         public long SumChunksDownloadTimeMs { get; internal set; }
+
+        /// <summary>
+        /// Number of result files whose decoded Arrow stream ended with fewer rows than the server
+        /// declared for them (Thrift: per-link RowCount; SEA: manifest TotalRowCount at end of
+        /// results). Non-zero means rows were lost between download and decode (ES-2356918).
+        /// Reading stops early only when the server-side count is exhausted or the file ends, so an
+        /// application that stops consuming early never increments this.
+        /// </summary>
+        public int RowCountShortfallChunks { get; internal set; }
+
+        /// <summary>
+        /// Total rows missing across <see cref="RowCountShortfallChunks"/> (declared minus decoded).
+        /// </summary>
+        public long RowCountShortfallRows { get; internal set; }
     }
 }

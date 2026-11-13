@@ -453,6 +453,13 @@ namespace AdbcDrivers.Databricks
                         metrics.SumChunksDownloadTimeMs);
                 }
 
+                // Rows lost between download and decode (ES-2356918): report through the existing
+                // DriverErrorInfo.error_name counter without failing the statement.
+                if (metrics != null && metrics.RowCountShortfallChunks > 0)
+                {
+                    ctx.WarningName = StatementTelemetryContext.RowCountShortfallErrorName;
+                }
+
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
 
                 var frontendLog = new TelemetryFrontendLog

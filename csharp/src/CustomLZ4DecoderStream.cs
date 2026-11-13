@@ -119,13 +119,27 @@ namespace AdbcDrivers.Databricks
         // remain. Each retry consumes at least one frame header/end mark, so the loop always makes
         // progress. (Same rule as the Rust kernel's MultiFrameLz4Reader and Python's _decompress_data.)
         //
-        // The loops below also carry an explicit progress guard: they only retry when the inner
-        // stream position actually advanced during the empty read. With K4os 1.3.8 a 0-byte read at
-        // a non-EOF position always consumes a frame header/end mark (or throws), so this never
-        // changes behavior today; it exists purely so the loop can never spin forever if a future
-        // reader ever returns 0 without advancing the inner stream (the sync paths are CPU-bound and
-        // expose no timeout/cancellation).
+        // Progress guard: with K4os 1.3.8 a 0-byte read at a non-EOF position always consumes a
+        // frame header/end mark (or throws). If a future reader ever returned 0 without advancing the
+        // inner stream while input remains, we throw instead of looping forever or returning 0 —
+        // returning 0 there would silently truncate the result, the very bug this loop fixes. (The
+        // Rust kernel's MultiFrameLz4Reader raises "LZ4 decoder stalled" in the same situation.)
         private bool HasMoreInput => _inner.Position < _inner.Length;
+
+        /// <summary>
+        /// Returns true if the read loop should retry after a read that produced no data; throws if
+        /// that read made no progress while compressed input remains.
+        /// </summary>
+        private bool ShouldRetryEmptyRead(long positionBeforeRead)
+        {
+            if (!HasMoreInput) return false;
+            if (_inner.Position == positionBeforeRead)
+            {
+                throw new InvalidDataException(
+                    $"LZ4 decoder made no progress with {_inner.Length - _inner.Position} compressed bytes remaining");
+            }
+            return true;
+        }
 
         public override int ReadByte()
         {
@@ -135,7 +149,7 @@ namespace AdbcDrivers.Databricks
             {
                 previousPosition = _inner.Position;
                 value = _reader.ReadOneByte();
-            } while (value < 0 && HasMoreInput && _inner.Position != previousPosition);
+            } while (value < 0 && ShouldRetryEmptyRead(previousPosition));
             return value;
         }
 
@@ -158,7 +172,7 @@ namespace AdbcDrivers.Databricks
             {
                 previousPosition = _inner.Position;
                 read = _reader.ReadManyBytes(buffer, _interactive);
-            } while (read == 0 && HasMoreInput && _inner.Position != previousPosition);
+            } while (read == 0 && ShouldRetryEmptyRead(previousPosition));
             return read;
         }
 
@@ -177,7 +191,7 @@ namespace AdbcDrivers.Databricks
                 cancellationToken.ThrowIfCancellationRequested();
                 previousPosition = _inner.Position;
                 read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false);
-            } while (read == 0 && HasMoreInput && _inner.Position != previousPosition);
+            } while (read == 0 && ShouldRetryEmptyRead(previousPosition));
             return read;
         }
 
