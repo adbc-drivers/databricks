@@ -1,0 +1,204 @@
+# Copyright (c) 2025 ADBC Drivers Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Learning PR guard: a consumer-side safety gate for the daily learning PR (head branch
+# `ai/learning-pr`, written by engineer-bot-learning.yaml) and for any PR that touches
+# .claude/knowledge/. It runs the ENGINE's own guard,
+# `python -m databricks_bot_engine.engineer_bot.learning_guard`, installed at the same
+# pinned ENGINE_REF as the bots. The guard checks journal files (new files only, sort after
+# the lessons mark, format and caps), lessons format and caps, the frozen archive, scripts
+# and executables, and secrets.
+#
+# This workflow only ever DISARMS auto-merge on a learning PR. It never arms it: the engine
+# arms it itself after its own check, pinned to the exact head commit. It disarms when the
+# guard fails or when the `learning-hold` label is present.
+#
+# Policy comes from the BASE checkout's .bot/config.yaml (read through the engine's parser),
+# so a PR cannot relax its own caps. The PR head is fetched as data only, for git diff and show.
+#
+# Bootstrap: until the base branch has the distilled setup (retrospective.lessons_path set),
+# there is nothing to enforce, so the job passes with a notice.
+#
+# No `paths:` filter, on purpose: a learning PR that touches only out-of-scope paths must still
+# be checked and must still lose auto-merge. The scope step decides, and the rest of the job is
+# skipped when the guard does not apply.
+name: Learning PR guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: learning-pr-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    # SECURITY: skip fork PRs. They cannot be the learning PR, and the App token is never minted for them.
+    if: github.event.pull_request.head.repo.fork == false
+    runs-on: [self-hosted, Linux, X64, peco-driver]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout base (guard policy comes from the base branch)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch PR head (data only)
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+
+      - name: Decide whether the guard applies
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          # Bootstrap: the base has no distilled-lessons setup yet, so there is nothing to enforce.
+          if ! grep -Eq '^[[:space:]]+lessons_path:[[:space:]]*[^#[:space:]]' .bot/config.yaml; then
+            echo "::notice::learning-pr guard: base has no retrospective.lessons_path yet; nothing to enforce"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HEAD_REF" = "ai/learning-pr" ]; then
+            echo "::notice::learning-pr guard applies: head branch is ai/learning-pr"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Read the diff into a variable first: piping git into a short-circuiting reader can
+          # SIGPIPE git and fail the pipeline under pipefail. The configured journal_dir,
+          # lessons_path and log_path are all under .claude/knowledge/ in this repo.
+          changed="$(git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA")"
+          if grep -q '^\.claude/knowledge/' <<<"$changed"; then
+            echo "::notice::learning-pr guard applies: the PR changes .claude/knowledge/"
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::learning-pr guard skipped: not ai/learning-pr and no .claude/knowledge/ change"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Python
+        if: steps.scope.outputs.run == 'true'
+        shell: bash
+        run: |
+          python3.11 -m venv "$RUNNER_TEMP/guard-venv"
+
+      - name: Install bot engine (pinned)
+        if: steps.scope.outputs.run == 'true'
+        env:
+          # Fine-grained PAT, read-only Contents on databricks/databricks-bot-engine.
+          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          # Same SUPPLY-CHAIN PIN as the bot workflows (immutable SHA, never @main).
+          ENGINE_REF: ca9bbc565d31892031220b64a430f9a188b04c1d
+        run: |
+          set -euo pipefail
+          : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
+          "$RUNNER_TEMP/guard-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/guard-venv/bin/pip" install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
+
+      - name: Run the engine's learning guard
+        id: guard
+        if: steps.scope.outputs.run == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          py="$RUNNER_TEMP/guard-venv/bin/python"
+          # Policy from the BASE checkout, through the engine's own validated parser. Prints one
+          # line of space-separated values (none of them contain spaces).
+          policy="$("$py" -c '
+          import yaml
+          from databricks_bot_engine.engineer_bot import retrospective
+          raw = yaml.safe_load(open(".bot/config.yaml", encoding="utf-8"))["retrospective"]
+          cfg = retrospective.parse_retro_config(raw)
+          print(cfg.journal_dir, raw["log_path"], cfg.lessons_path, cfg.lessons_budget_bytes,
+                cfg.journal_max_entries, cfg.journal_max_bytes)
+          ')"
+          read -r journal_dir archive_path lessons_path budget max_entries max_bytes <<<"$policy"
+          "$py" -m databricks_bot_engine.engineer_bot.learning_guard \
+            --repo-dir . --base "$BASE_SHA" --head "$HEAD_SHA" --head-branch "$HEAD_REF" \
+            --journal-dir "$journal_dir" --archive-path "$archive_path" \
+            --lessons-path "$lessons_path" --lessons-budget "$budget" \
+            --journal-max-entries "$max_entries" --journal-max-bytes "$max_bytes"
+
+      - name: Decide auto-merge action
+        id: decide
+        if: always() && steps.scope.outputs.run == 'true'
+        env:
+          GUARD_OUTCOME: ${{ steps.guard.outcome }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          action=none
+          if [ "$HEAD_REF" != "ai/learning-pr" ]; then
+            reason="head branch is not ai/learning-pr"
+          elif [ "$PR_AUTHOR" != "peco-engineer-bot[bot]" ]; then
+            reason="author is not the engineer-bot App"
+          elif grep -qF '"learning-hold"' <<<"$LABELS_JSON"; then
+            action=disable; reason="learning-hold label is present"
+          elif [ "$GUARD_OUTCOME" != "success" ]; then
+            action=disable; reason="guard outcome is $GUARD_OUTCOME"
+          else
+            reason="guard passed; arming is the engine's job, not this workflow's"
+          fi
+          echo "::notice::learning-pr auto-merge: action=$action ($reason)"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+
+      - name: Mint engineer-bot App token
+        id: app-token
+        if: always() && steps.scope.outputs.run == 'true' && steps.decide.outputs.action == 'disable'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          # Least privilege: this workflow only ever DISABLES auto-merge, which needs
+          # pull-requests write. Nothing else (it never merges).
+          permission-pull-requests: write
+
+      - name: Disable auto-merge
+        id: apply
+        if: always() && steps.scope.outputs.run == 'true' && steps.decide.outputs.action == 'disable'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto; then
+            # Disabling fails when auto-merge is already off. Accept that, but fail if it is still on.
+            state=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json autoMergeRequest --jq '.autoMergeRequest // "null"')
+            if [ "$state" != "null" ]; then
+              echo "::error::could not disable auto-merge on PR $PR_NUMBER"
+              exit 1
+            fi
+          fi
