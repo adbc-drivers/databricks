@@ -453,6 +453,12 @@ namespace AdbcDrivers.Databricks
                         metrics.SumChunksDownloadTimeMs);
                 }
 
+                // ES-2356918: report lost rows as error_name without failing the statement.
+                if (!ctx.HasError && metrics?.RowCountShortfall > 0)
+                {
+                    ctx.ErrorName = "CloudFetchRowCountShortfall";
+                }
+
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
 
                 var frontendLog = new TelemetryFrontendLog
