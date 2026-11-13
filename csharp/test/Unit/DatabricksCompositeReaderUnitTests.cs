@@ -27,6 +27,8 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
+using AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch;
 using Apache.Arrow;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
@@ -456,6 +458,30 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             mockReader.Protected().Verify("Dispose", Times.Once(), ItExpr.IsAny<bool>());
             mockPoller.Verify(p => p.Stop(), Times.Once);
             mockPoller.Verify(p => p.Dispose(), Times.Once);
+        }
+
+        // ES-2356918: a `using` reader is often disposed before its statement; the CloudFetch metrics
+        // (including the row-count shortfall) must still be available to statement telemetry.
+        [Fact]
+        public async Task GetChunkMetrics_AfterDispose_ReturnsSnapshot()
+        {
+            var mockClient = CreateMockClient();
+            mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TFetchResultsResp
+                {
+                    HasMoreRows = false,
+                    Results = new TRowSet { ResultLinks = new List<TSparkArrowResultLink> { new TSparkArrowResultLink() } }
+                });
+            var reader = new TestableDatabricksCompositeReader(
+                CreateMockStatement(mockClient).Object, _testSchema, CreateMockResponse().Object, false, _httpClient)
+            {
+                MockReader = CloudFetchReaderRowCountShortfallTests.CreateReader(0, (875_733, 24_576))
+            };
+
+            Assert.Equal(24_576, await CloudFetchReaderRowCountShortfallTests.DrainAsync(reader));
+            reader.Dispose();
+
+            Assert.Equal(875_733 - 24_576, reader.GetChunkMetrics()?.RowCountShortfall);
         }
 
         public void Dispose()
