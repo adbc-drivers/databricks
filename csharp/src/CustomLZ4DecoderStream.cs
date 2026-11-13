@@ -111,10 +111,13 @@ namespace AdbcDrivers.Databricks
         public override void Write(byte[] buffer, int offset, int count) =>
             throw new NotSupportedException("LZ4 decoder stream does not support writing");
 
-        // A Databricks result file may contain several concatenated LZ4 frames, some of them empty.
-        // The K4os frame reader returns 0 from a read that hits an empty frame, even when more frames
-        // follow. Stream consumers (CopyTo, Arrow readers) treat 0 as end-of-stream, so without this
-        // loop every frame after an empty one was silently dropped (ES-2356918).
+        // A Databricks result file may contain many concatenated LZ4 frames (one per Arrow batch).
+        // The K4os frame reader never reads across frames, and a read that starts on a frame's unread
+        // end mark returns 0 even when more frames follow. That happens whenever the previous read
+        // filled the caller's buffer exactly as a frame's data ended (a frame whose decoded size is a
+        // multiple of the read size, e.g. an 81,920-byte Arrow batch with .NET Framework's
+        // CopyToAsync), and for empty frames. Stream consumers (CopyTo, Arrow readers) treat 0 as
+        // end-of-stream, so without this loop every later frame was silently dropped (ES-2356918).
         // Only the end of the compressed input means end-of-stream: keep reading while input bytes
         // remain. Each retry consumes at least one frame header/end mark, so the loop always makes
         // progress. (Same rule as the Rust kernel's MultiFrameLz4Reader and Python's _decompress_data.)
