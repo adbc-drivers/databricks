@@ -24,9 +24,15 @@ pushd ${source_dir}
 # TEST_FILTER (optional) is a VSTest --filter expression; when set, only matching
 # tests run. Used by the Reyden nightly to exclude tests that require warehouse
 # capabilities Lakehouse//RT does not support (DDL/DML, presigned-URL refresh).
+# TEST_FRAMEWORK (optional) runs a single target framework (e.g. net472 on Windows);
+# by default every framework the test project targets on this OS runs.
+framework_args=()
+if [ -n "${TEST_FRAMEWORK:-}" ]; then
+  framework_args=(--framework "${TEST_FRAMEWORK}")
+fi
 if [ -n "${TEST_FILTER:-}" ]; then
-  dotnet test --verbosity normal --filter "${TEST_FILTER}"
+  dotnet test --verbosity normal "${framework_args[@]}" --filter "${TEST_FILTER}"
 else
-  dotnet test --verbosity normal
+  dotnet test --verbosity normal "${framework_args[@]}"
 fi
 popd
