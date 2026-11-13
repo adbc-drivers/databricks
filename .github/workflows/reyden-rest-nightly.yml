@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   reyden-rest-nightly:
-    name: "Reyden REST Nightly E2E (net472)"
+    name: "Reyden REST Nightly E2E"
     # Windows / .NET Framework 4.7.2, the runtime Power BI Desktop and the on-premises data
     # gateway load the driver in (same as e2e-tests.yml).
     runs-on: windows-2022

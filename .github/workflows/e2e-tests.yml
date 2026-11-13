@@ -23,11 +23,6 @@ on:
         default: 'both'
         type: choice
         options: [both, thrift, rest]
-      run_large_cloudfetch:
-        description: 'Also run the very-large (10M/100M-row) CloudFetch cases (slow/expensive; off by default)'
-        required: false
-        default: false
-        type: boolean
   push:
     branches:
       - main
@@ -48,25 +43,19 @@ concurrency:
 
 jobs:
   run-e2e-tests:
-    name: "E2E Tests (${{ matrix.protocol }}, net472)"
+    name: "E2E Tests (${{ matrix.protocol }})"
     # Run on Windows against .NET Framework 4.7.2, the runtime Power BI Desktop and the
     # on-premises data gateway load the driver in. .NET Framework's Stream.CopyTo reads
     # 81,920 bytes at a time while .NET 8 rents a 131,072-byte buffer, so CloudFetch/LZ4
     # behavior differs between the two (ES-2356918 only reproduced on .NET Framework).
     runs-on: windows-2022
-    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung CloudFetch scan fails
-    # fast instead of blocking the queue for hours, rather than letting the default 180 cap be a
-    # target. Two tiers, keyed on the SAME positive triggers that opt into the large cases below
-    # (workflow_dispatch + `run_large_cloudfetch`, or the `e2e-test-large` label):
-    #   * Default (everything else): 180 min (matches benchmarks.yml). The merge_group run is the
-    #     1M-row case (~42 min thrift / ~30 min rest), so 180 is a fail-fast ceiling for a hang,
-    #     not a target.
-    #   * Large on-demand: 360 min (GitHub's default). When enabled, a single matrix entry runs the
-    #     full suite PLUS two 10M-row scans PLUS a 100M-row scan (~10x/~100x the 1M case), which can
-    #     plausibly exceed 180 min; a timeout there would fail the already-passed ordinary cases in
-    #     the same job. The larger cap gives the expensive path headroom without loosening the cheap
-    #     path. Revisit if a large run approaches 360.
-    timeout-minutes: ${{ ((github.event_name == 'workflow_dispatch' && inputs.run_large_cloudfetch) || (github.event.action == 'labeled' && github.event.label.name == 'e2e-test-large')) && 360 || 180 }}
+    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
+    # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
+    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml. It is a
+    # fail-fast ceiling for a genuine hang, not a target: with the 10M/100M-row cases a
+    # healthy net472 run measured ~47 min (thrift) / ~43 min (rest) (run 43401852813),
+    # so revisit this cap if a healthy run starts approaching it.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -91,8 +80,8 @@ jobs:
         id: gate
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            if [[ "${{ github.event.action }}" == "labeled" ]] && { [[ "${{ github.event.label.name }}" == "e2e-test" ]] || [[ "${{ github.event.label.name }}" == "e2e-test-large" ]]; }; then
-              echo "run=true" >> $GITHUB_OUTPUT && echo "✅ ${{ github.event.label.name }} label added — running E2E tests"
+            if [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test" ]]; then
+              echo "run=true" >> $GITHUB_OUTPUT && echo "✅ e2e-test label added — running E2E tests"
             else
               # Auto-pass on PR so it can enter the queue; tests run in merge queue
               echo "run=false" >> $GITHUB_OUTPUT && echo "⏭️ PR event — E2E tests run in merge queue"
@@ -287,21 +276,6 @@ jobs:
         run: |
           export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
           export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
-          # Opt-in to the very-large (10M/100M-row) CloudFetch cases in CloudFetchE2ETest only for
-          # explicit on-demand runs: a workflow_dispatch with the `run_large_cloudfetch` input set
-          # true, or a PR carrying the dedicated `e2e-test-large` label. Every other trigger skips
-          # them: each is ~10x/~100x the 1M case, so running them twice (thrift + rest) on every C#
-          # merge (merge_group) or post-merge push to main would add hours of latency / warehouse
-          # load on routine changes. The plain `e2e-test` label keeps its original lightweight
-          # meaning (normal E2E suite, 1M case only) so routine label-triggered runs stay cheap;
-          # only `e2e-test-large` opts into the expensive cases. A plain manual dispatch (e.g.
-          # re-running after a flake) also stays cheap because the input defaults to false. Gate
-          # positively on the two intended triggers so push/merge_group/`e2e-test` never opt in.
-          # See the TestCases() comment in csharp/test/E2E/CloudFetchE2ETest.cs.
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.run_large_cloudfetch }}" == "true" ]] || \
-             ( [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test-large" ]] ); then
-            export DATABRICKS_RUN_LARGE_CLOUDFETCH=true
-          fi
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       # Always run, even on test failure or job cancellation, so we don't

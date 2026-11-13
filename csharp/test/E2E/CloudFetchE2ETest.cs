@@ -152,27 +152,12 @@ namespace AdbcDrivers.Databricks.Tests
             yield return new object[] { largeQuery, 1000000, true, false };
             yield return new object[] { largeQuery, 1000000, false, false };
 
-            // Very-large CloudFetch results (10M / 100M rows): more files and more LZ4 frames per
-            // result, so more chances to hit frame/read-buffer boundaries (ES-2356918). CloudFetch
-            // only: inline results at this size would be slow and don't exercise the CloudFetch
-            // download/decompress path.
-            //
-            // These are opt-in: a 10M-row scan is ~10x and a 100M-row scan ~100x the 1M case
-            // (already ~42 min thrift / ~30 min rest), so running them on every merge-queue entry
-            // (twice, thrift + rest) would add hours of serialized latency and warehouse load to
-            // every C# PR. They run only when DATABRICKS_RUN_LARGE_CLOUDFETCH=true, which CI sets
-            // for explicit on-demand runs (the `e2e-test-large` label, or a `workflow_dispatch` with
-            // `run_large_cloudfetch=true`) but not for the plain `e2e-test` label, a default
-            // `workflow_dispatch`, or the merge_group path. See .github/workflows/e2e-tests.yml.
-            if (string.Equals(
-                    Environment.GetEnvironmentVariable("DATABRICKS_RUN_LARGE_CLOUDFETCH"),
-                    "true",
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                yield return new object[] { query10M, 10000000, true, true };
-                yield return new object[] { query10M, 10000000, true, false };
-                yield return new object[] { query100M, 100000000, true, true };
-            }
+            // Larger CloudFetch results: more files and more LZ4 frames per result, so more chances to
+            // hit frame/read-buffer boundaries (ES-2356918). CloudFetch only: inline results at this
+            // size would be slow and don't exercise the CloudFetch download/decompress path.
+            yield return new object[] { query10M, 10000000, true, true };
+            yield return new object[] { query10M, 10000000, true, false };
+            yield return new object[] { query100M, 100000000, true, true };
         }
 
         /// <summary>

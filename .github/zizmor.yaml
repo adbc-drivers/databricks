@@ -56,7 +56,7 @@ rules:
     ignore:
       - benchmarks.yml:48
       - benchmarks.yml:49
-      - e2e-tests.yml:50
+      - e2e-tests.yml:45
       - pr-validation.yml:29
       - reyden-rest-nightly.yml:28
       - rust-e2e.yml:15
@@ -112,8 +112,7 @@ rules:
       - e2e-tests.yml:244
       - e2e-tests.yml:246
       - e2e-tests.yml:248
-      - e2e-tests.yml:287
-      - e2e-tests.yml:303
+      - e2e-tests.yml:292
       - engineer-bot-followup.yml:128
       - reviewer-bot-followup.yml:146
       - reyden-rest-nightly.yml:68
