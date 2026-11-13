@@ -161,8 +161,9 @@ namespace AdbcDrivers.Databricks.Tests
             // (already ~42 min thrift / ~30 min rest), so running them on every merge-queue entry
             // (twice, thrift + rest) would add hours of serialized latency and warehouse load to
             // every C# PR. They run only when DATABRICKS_RUN_LARGE_CLOUDFETCH=true, which CI sets
-            // for on-demand runs (the `e2e-test` label / workflow_dispatch) but not for the default
-            // merge_group path. See .github/workflows/e2e-tests.yml.
+            // for explicit on-demand runs (the `e2e-test-large` label, or a `workflow_dispatch` with
+            // `run_large_cloudfetch=true`) but not for the plain `e2e-test` label, a default
+            // `workflow_dispatch`, or the merge_group path. See .github/workflows/e2e-tests.yml.
             if (string.Equals(
                     Environment.GetEnvironmentVariable("DATABRICKS_RUN_LARGE_CLOUDFETCH"),
                     "true",
