@@ -118,12 +118,24 @@ namespace AdbcDrivers.Databricks
         // Only the end of the compressed input means end-of-stream: keep reading while input bytes
         // remain. Each retry consumes at least one frame header/end mark, so the loop always makes
         // progress. (Same rule as the Rust kernel's MultiFrameLz4Reader and Python's _decompress_data.)
+        //
+        // The loops below also carry an explicit progress guard: they only retry when the inner
+        // stream position actually advanced during the empty read. With K4os 1.3.8 a 0-byte read at
+        // a non-EOF position always consumes a frame header/end mark (or throws), so this never
+        // changes behavior today; it exists purely so the loop can never spin forever if a future
+        // reader ever returns 0 without advancing the inner stream (the sync paths are CPU-bound and
+        // expose no timeout/cancellation).
         private bool HasMoreInput => _inner.Position < _inner.Length;
 
         public override int ReadByte()
         {
             int value;
-            while ((value = _reader.ReadOneByte()) < 0 && HasMoreInput) { }
+            long previousPosition;
+            do
+            {
+                previousPosition = _inner.Position;
+                value = _reader.ReadOneByte();
+            } while (value < 0 && HasMoreInput && _inner.Position != previousPosition);
             return value;
         }
 
@@ -141,7 +153,12 @@ namespace AdbcDrivers.Databricks
         {
             if (buffer.IsEmpty) return 0;
             int read;
-            while ((read = _reader.ReadManyBytes(buffer, _interactive)) == 0 && HasMoreInput) { }
+            long previousPosition;
+            do
+            {
+                previousPosition = _inner.Position;
+                read = _reader.ReadManyBytes(buffer, _interactive);
+            } while (read == 0 && HasMoreInput && _inner.Position != previousPosition);
             return read;
         }
 
@@ -154,11 +171,13 @@ namespace AdbcDrivers.Databricks
         {
             if (buffer.IsEmpty) return 0;
             int read;
-            while ((read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false)) == 0
-                && HasMoreInput)
+            long previousPosition;
+            do
             {
                 cancellationToken.ThrowIfCancellationRequested();
-            }
+                previousPosition = _inner.Position;
+                read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false);
+            } while (read == 0 && HasMoreInput && _inner.Position != previousPosition);
             return read;
         }
 
