@@ -29,7 +29,7 @@ rules:
       - benchmarks.yml:321
       - benchmarks.yml:577
       - csharp-sync-latest.yml:43
-      - e2e-tests.yml:71
+      - e2e-tests.yml:73
       - reyden-rest-nightly.yml:49
       - trigger-integration-tests.yml:305
       - trigger-integration-tests.yml:403
@@ -99,20 +99,20 @@ rules:
       - benchmarks.yml:264
       - csharp-sync-latest.yml:72
       - csharp-sync-latest.yml:82
-      - e2e-tests.yml:81
-      - e2e-tests.yml:88
-      - e2e-tests.yml:114
-      - e2e-tests.yml:117
-      - e2e-tests.yml:118
-      - e2e-tests.yml:140
-      - e2e-tests.yml:144
-      - e2e-tests.yml:161
-      - e2e-tests.yml:238
-      - e2e-tests.yml:241
-      - e2e-tests.yml:242
+      - e2e-tests.yml:83
+      - e2e-tests.yml:90
+      - e2e-tests.yml:116
+      - e2e-tests.yml:119
+      - e2e-tests.yml:120
+      - e2e-tests.yml:142
+      - e2e-tests.yml:146
+      - e2e-tests.yml:163
+      - e2e-tests.yml:240
+      - e2e-tests.yml:243
       - e2e-tests.yml:244
       - e2e-tests.yml:246
-      - e2e-tests.yml:290
+      - e2e-tests.yml:248
+      - e2e-tests.yml:292
       - engineer-bot-followup.yml:128
       - reviewer-bot-followup.yml:146
       - reyden-rest-nightly.yml:68
