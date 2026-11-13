@@ -25,7 +25,7 @@ using K4os.Compression.LZ4.Streams;
 using Microsoft.IO;
 using Xunit;
 
-namespace AdbcDrivers.Databricks.Tests
+namespace AdbcDrivers.Databricks.Tests.Unit
 {
     public class Lz4UtilitiesTests
     {
