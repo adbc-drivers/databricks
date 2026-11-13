@@ -169,7 +169,7 @@ namespace AdbcDrivers.Databricks.Tests
         /// Integration test for running queries against a real Databricks cluster with different CloudFetch settings.
         /// Runs under the protocol selected by the connection config / CI matrix (rest or thrift).
         /// </summary>
-        [Theory]
+        [SkippableTheory]
         [MemberData(nameof(TestCases))]
         public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
