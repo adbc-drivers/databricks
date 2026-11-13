@@ -49,6 +49,11 @@ jobs:
     # 81,920 bytes at a time while .NET 8 rents a 131,072-byte buffer, so CloudFetch/LZ4
     # behavior differs between the two (ES-2356918 only reproduced on .NET Framework).
     runs-on: windows-2022
+    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
+    # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
+    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml and leaves
+    # generous headroom over the observed suite runtime.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
