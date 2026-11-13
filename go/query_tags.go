@@ -118,134 +118,105 @@ func (d *databaseImpl) setQueryTag(name, value string) error {
 	return nil
 }
 
-// setQueryTag validates and stores one per-statement override. The limits apply
-// to the tags the statement would send, i.e. connection defaults plus overrides.
-func (s *statementImpl) setQueryTag(name, value string) error {
-	candidate := maps.Clone(s.queryTags)
-	if candidate == nil {
-		candidate = make(map[string]string)
-	}
-	candidate[name] = value
-	if err := validateQueryTag(&s.ErrorHelper, name, value, len(mergeQueryTags(s.connQueryTags(), candidate))); err != nil {
-		return err
-	}
-	s.queryTags = candidate
-	return nil
-}
-
-func (s *statementImpl) connQueryTags() map[string]string {
-	if s.conn == nil {
-		return nil
-	}
-	return s.conn.tags()
-}
-
-// getQueryTag returns the statement override for name, falling back to the
-// connection default.
-func (s *statementImpl) getQueryTag(name string) (string, bool) {
-	if v, ok := s.queryTags[name]; ok {
-		return v, true
-	}
-	v, ok := s.connQueryTags()[name]
-	return v, ok
-}
-
-// effectiveQueryTags is what this statement sends: the connection defaults with
-// the statement's overrides applied.
-func (s *statementImpl) effectiveQueryTags() map[string]string {
-	return mergeQueryTags(s.connQueryTags(), s.queryTags)
-}
-
-// unsetQueryTag removes a database-level default tag. It is not an error if the
-// tag is not set.
-func (d *databaseImpl) unsetQueryTag(name string) error {
-	if err := requireQueryTagName(&d.ErrorHelper, name); err != nil {
-		return err
-	}
-	delete(d.queryTags, name)
-	return nil
-}
-
-// unsetQueryTag removes a per-statement override, so the tag falls back to the
-// connection default if there is one. A default cannot be removed for a single
-// statement: Databricks merges the session's tags into every statement's tags.
-func (s *statementImpl) unsetQueryTag(name string) error {
-	if err := requireQueryTagName(&s.ErrorHelper, name); err != nil {
-		return err
-	}
-	if _, ok := s.queryTags[name]; ok {
-		candidate := maps.Clone(s.queryTags)
-		delete(candidate, name)
-		s.queryTags = candidate
-		return nil
-	}
-	if _, ok := s.connQueryTags()[name]; ok {
-		return s.ErrorHelper.Errorf(adbc.StatusInvalidArgument,
-			"cannot remove query tag %q for a single statement: it is a default of the connection, "+
-				"remove it with %s on the connection or the database", name, OptionUnsetQueryTag)
-	}
-	return nil
-}
-
-// tags returns a copy of the connection's query tags.
-func (c *connectionImpl) tags() map[string]string {
-	c.queryTagsMu.RLock()
-	defer c.queryTagsMu.RUnlock()
-	return maps.Clone(c.queryTags)
-}
-
-// setQueryTag validates and stores one connection-level tag. The limits apply to
-// the tags a statement would send, i.e. the connection's tags.
+// setQueryTag validates and stores one connection-level tag. Statements read the
+// tags under the same lock when they run.
 func (c *connectionImpl) setQueryTag(name, value string) error {
 	c.queryTagsMu.Lock()
 	defer c.queryTagsMu.Unlock()
-	candidate := maps.Clone(c.queryTags)
-	if candidate == nil {
-		candidate = make(map[string]string)
+	total := len(c.queryTags)
+	if _, exists := c.queryTags[name]; !exists {
+		total++
 	}
-	candidate[name] = value
-	if err := validateQueryTag(&c.ErrorHelper, name, value, len(candidate)); err != nil {
+	if err := validateQueryTag(&c.ErrorHelper, name, value, total); err != nil {
 		return err
 	}
-	c.queryTags = candidate
+	if c.queryTags == nil {
+		c.queryTags = make(map[string]string)
+	}
+	c.queryTags[name] = value
 	return nil
 }
 
-func (c *connectionImpl) getQueryTag(name string) (string, error) {
+// setQueryTag validates and stores one per-statement override. The limits apply
+// to the tags the statement would send. A statement is not shared between
+// goroutines, so it needs no lock.
+func (s *statementImpl) setQueryTag(name, value string) error {
+	if err := validateQueryTag(&s.ErrorHelper, name, value, s.conn.tagCount(s.queryTags, name)); err != nil {
+		return err
+	}
+	if s.queryTags == nil {
+		s.queryTags = make(map[string]string)
+	}
+	s.queryTags[name] = value
+	return nil
+}
+
+// tag returns the connection's tag for name. It is safe to call on a nil connection.
+func (c *connectionImpl) tag(name string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
 	c.queryTagsMu.RLock()
 	defer c.queryTagsMu.RUnlock()
-	if v, ok := c.queryTags[name]; ok {
+	v, ok := c.queryTags[name]
+	return v, ok
+}
+
+// tagCount is the number of tags a statement would send if it also set name:
+// the connection's tags and the statement's overrides, counted by name.
+func (c *connectionImpl) tagCount(overrides map[string]string, name string) int {
+	n := len(overrides)
+	_, known := overrides[name]
+	if c != nil {
+		c.queryTagsMu.RLock()
+		defer c.queryTagsMu.RUnlock()
+		n = len(c.queryTags)
+		for k := range overrides {
+			if _, ok := c.queryTags[k]; !ok {
+				n++
+			}
+		}
+		if _, ok := c.queryTags[name]; ok {
+			known = true
+		}
+	}
+	if !known {
+		n++
+	}
+	return n
+}
+
+// mergedTags is the connection's tags with overrides on top, as a new map, or nil
+// when there are none. It is safe to call on a nil connection.
+func (c *connectionImpl) mergedTags(overrides map[string]string) map[string]string {
+	if c == nil {
+		return mergeQueryTags(nil, overrides)
+	}
+	c.queryTagsMu.RLock()
+	defer c.queryTagsMu.RUnlock()
+	return mergeQueryTags(c.queryTags, overrides)
+}
+
+func (c *connectionImpl) getQueryTag(name string) (string, error) {
+	if v, ok := c.tag(name); ok {
 		return v, nil
 	}
 	return "", queryTagNotSet(&c.ErrorHelper, name)
 }
 
-// unsetQueryTag removes a connection-level tag. The database's defaults are also
-// set on the session when the connection is opened, and Databricks merges the
-// session's tags into every statement, so a tag that was set is also unset on
-// the session. It is not an error if the tag is not set.
-func (c *connectionImpl) unsetQueryTag(ctx context.Context, name string) error {
-	if err := requireQueryTagName(&c.ErrorHelper, name); err != nil {
-		return err
+// getQueryTag returns the statement override for name, falling back to the
+// connection's tag.
+func (s *statementImpl) getQueryTag(name string) (string, bool) {
+	if v, ok := s.queryTags[name]; ok {
+		return v, true
 	}
-	c.queryTagsMu.RLock()
-	_, ok := c.queryTags[name]
-	c.queryTagsMu.RUnlock()
-	if !ok {
-		return nil
-	}
-	if c.conn != nil {
-		literal := strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(name)
-		if _, err := c.conn.ExecContext(ctx, "SET QUERY_TAGS['"+literal+"'] = UNSET"); err != nil {
-			return c.ErrorHelper.Errorf(adbc.StatusInternal, "failed to remove query tag %q: %v", name, err)
-		}
-	}
-	c.queryTagsMu.Lock()
-	defer c.queryTagsMu.Unlock()
-	candidate := maps.Clone(c.queryTags)
-	delete(candidate, name)
-	c.queryTags = candidate
-	return nil
+	return s.conn.tag(name)
+}
+
+// effectiveQueryTags is what this statement sends: the connection's tags with the
+// statement's overrides applied.
+func (s *statementImpl) effectiveQueryTags() map[string]string {
+	return s.conn.mergedTags(s.queryTags)
 }
 
 func withQueryTags(ctx context.Context, tags map[string]string) context.Context {
