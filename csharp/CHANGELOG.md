@@ -20,10 +20,28 @@ All notable changes to the C# Databricks ADBC driver are documented in this file
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-13
+
 ### Added
 
 - Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`, including
-  nested values; WKT/EWKT strings remain the default for backward compatibility.
+  nested values; WKT/EWKT strings remain the default for backward compatibility
+  (#699, #700, #701).
+- Request native metadata results for catalogs, schemas, tables, columns,
+  primary keys, and cross-references over the Statement Execution API (#692).
+- Route Lakehouse//RT sessions through warehouse URLs when the server marks a
+  session as RT (#750).
+- Request FAST execution mode and exchange session versions with the server
+  (#751).
+- Report CloudFetch row-count shortfalls (rows the server declared but the
+  driver didn't decode) in telemetry and traces (#764).
+
+### Fixed
+
+- Fix CloudFetch results with LZ4 being silently truncated when an LZ4 frame
+  ended exactly at the read buffer boundary (#764).
+- Fix Thrift cancellation leaving partial bytes that could corrupt the next
+  cleanup request (#706).
 
 ## [1.1.11] - 2026-10-06
 
