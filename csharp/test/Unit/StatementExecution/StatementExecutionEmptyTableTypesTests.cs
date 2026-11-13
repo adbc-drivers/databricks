@@ -106,7 +106,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : executeBody;
+                    var body = path.EndsWith("/sessions") ? sessionBody : executeBody;
                     return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
                 });
 
@@ -171,7 +171,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     "SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
-                    if (req.RequestUri?.AbsolutePath.EndsWith("/api/2.0/sql/sessions") == true)
+                    if (req.RequestUri?.AbsolutePath.EndsWith("/sessions") == true)
                         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
                     if (req.Method != HttpMethod.Post)
                         return new HttpResponseMessage(HttpStatusCode.OK);
