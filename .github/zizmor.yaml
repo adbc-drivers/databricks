@@ -113,6 +113,7 @@ rules:
       - e2e-tests.yml:246
       - e2e-tests.yml:248
       - e2e-tests.yml:287
+      - e2e-tests.yml:303
       - engineer-bot-followup.yml:128
       - reviewer-bot-followup.yml:146
       - reyden-rest-nightly.yml:68
