@@ -155,11 +155,6 @@ namespace AdbcDrivers.Databricks.Tests
             // Larger CloudFetch results: more files and more LZ4 frames per result, so more chances to
             // hit frame/read-buffer boundaries (ES-2356918). CloudFetch only: inline results at this
             // size would be slow and don't exercise the CloudFetch download/decompress path.
-            //
-            // These very large cases (10M/100M rows) run on the Thrift leg ONLY (see Skip.If in
-            // TestCloudFetch): the ES-2356918 boundary behavior is framework-specific (net472 vs net8),
-            // not protocol-specific, so one protocol leg still exercises it. Running them on both legs
-            // would double a ~100M-row TPC-DS scan across the CI matrix for no extra coverage.
             yield return new object[] { query10M, 10000000, true, true };
             yield return new object[] { query10M, 10000000, true, false };
             yield return new object[] { query100M, 100000000, true, true };
@@ -169,7 +164,7 @@ namespace AdbcDrivers.Databricks.Tests
         /// Integration test for running queries against a real Databricks cluster with different CloudFetch settings.
         /// Runs under the protocol selected by the connection config / CI matrix (rest or thrift).
         /// </summary>
-        [SkippableTheory]
+        [Theory]
         [MemberData(nameof(TestCases))]
         public async Task TestCloudFetch(string query, int rowCount, bool useCloudFetch, bool enableDirectResults)
         {
@@ -177,15 +172,6 @@ namespace AdbcDrivers.Databricks.Tests
             // not from the test — so the rest-only setup below tracks the configured protocol.
             string protocol = string.IsNullOrEmpty(TestConfiguration.Protocol)
                 ? "thrift" : TestConfiguration.Protocol.ToLowerInvariant();
-
-            // Very large result cases (10M/100M rows) run on the Thrift leg only. The ES-2356918
-            // frame/read-buffer boundary behavior they target is framework-specific (net472 vs net8),
-            // not protocol-specific, so running them on a single protocol leg still exercises the
-            // boundary while avoiding a doubled ~100M-row TPC-DS scan across the thrift and rest CI
-            // matrix legs. The 1M-row largeQuery CloudFetch case still runs on both legs.
-            Skip.If(rowCount >= 10000000 && protocol == "rest",
-                "Very large CloudFetch cases (10M/100M rows) run on the Thrift leg only; the " +
-                "ES-2356918 boundary behavior is framework-specific (net472 vs net8), not protocol-specific.");
 
             var parameters = new Dictionary<string, string>
             {
