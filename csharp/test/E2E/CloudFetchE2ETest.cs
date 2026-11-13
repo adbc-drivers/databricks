@@ -133,8 +133,6 @@ namespace AdbcDrivers.Databricks.Tests
             string zeroQuery = "SELECT * FROM range(1000) LIMIT 0";
             string smallQuery = "SELECT * FROM range(1000)";
             string largeQuery = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 1000000";
-            string query5M = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 5000000";
-            string query10M = "SELECT * FROM main.tpcds_sf100_delta.store_sales LIMIT 10000000";
 
             // LIMIT 0 test cases - edge case for empty result set (PECO-2524)
             yield return new object[] { zeroQuery, 0, true, true };
@@ -152,14 +150,8 @@ namespace AdbcDrivers.Databricks.Tests
             yield return new object[] { largeQuery, 1000000, true, false };
             yield return new object[] { largeQuery, 1000000, false, false };
 
-            // Larger CloudFetch results: more files and more LZ4 frames per result, so more chances to
-            // hit frame/read-buffer boundaries (ES-2356918). CloudFetch only: inline results at this
-            // size would be slow and don't exercise the CloudFetch download/decompress path.
-            // Much larger results (28.8M and 288M rows, COUNT(*)-checked) run nightly in
-            // databricks-driver-test (specs/cloudfetch-nightly.yaml).
-            yield return new object[] { query5M, 5000000, true, true };
-            yield return new object[] { query10M, 10000000, true, true };
-            yield return new object[] { query10M, 10000000, true, false };
+            // Larger CloudFetch results (28.8M and 288M rows, checked against COUNT(*)) run nightly in
+            // databricks-driver-test (specs/cloudfetch-nightly.yaml) rather than on every merge here.
         }
 
         /// <summary>
@@ -234,7 +226,7 @@ namespace AdbcDrivers.Databricks.Tests
             Console.WriteLine($"[TEST] Reading batches...");
             while ((batch = await result.Stream.ReadNextRecordBatchAsync()) != null)
             {
-                // Dispose each batch: the multi-million-row cases would otherwise hold gigabytes of Arrow buffers.
+                // Dispose each batch so large results don't accumulate Arrow buffers until GC.
                 using var _ = batch;
                 totalRows += batch.Length;
                 batchCount++;

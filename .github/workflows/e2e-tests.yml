@@ -52,8 +52,8 @@ jobs:
     # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
     # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
     # merge queue instead of blocking it for hours. 180 matches benchmarks.yml. It is a
-    # fail-fast ceiling for a genuine hang, not a target: with the 5M/10M-row cases a
-    # healthy net472 run takes well under an hour per protocol leg,
+    # fail-fast ceiling for a genuine hang, not a target: a healthy net472 run takes
+    # well under an hour per protocol leg (about 35-37 min measured),
     # so revisit this cap if a healthy run starts approaching it.
     timeout-minutes: 180
     strategy:
