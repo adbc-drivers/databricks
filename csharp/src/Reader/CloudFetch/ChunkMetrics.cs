@@ -52,7 +52,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// </summary>
         public long SumChunksDownloadTimeMs { get; internal set; }
 
-
         /// <summary>
         /// Rows the server declared but CloudFetch did not decode (ES-2356918). Expected to be 0.
         /// </summary>

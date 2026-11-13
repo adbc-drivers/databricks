@@ -141,7 +141,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         else
                         {
-                            // Thrift declares a row count per file; SEA declares a total (checked below).
+                            // This file's Arrow stream ended. Thrift (per-file limiting): check it against its link RowCount.
+                            // SEA (global limiting) doesn't track per-file rows, so it is checked once at "no more files" below.
                             if (_totalExpectedRows <= 0) RecordRowShortfall(_currentChunkExpectedRows, _currentChunkRowsRead);
                             // Clean up the current reader and download result
                             CleanupCurrentReaderAndDownloadResult();
