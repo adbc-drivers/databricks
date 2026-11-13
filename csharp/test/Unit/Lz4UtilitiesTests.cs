@@ -146,6 +146,41 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.True(expected.AsSpan().SequenceEqual(result.ToArray()));
         }
 
+        // ES-2356918 actual trigger: K4os returns 0 from the read that follows a read which filled the
+        // caller's buffer exactly as a frame's data ended (the end mark is still unread). No empty frame
+        // is needed: any frame whose decoded size is a multiple of the read size truncates the stream.
+        // The customer's .NET Framework 4.8 CopyToAsync reads exactly 81,920 bytes; .NET 8's CopyTo rents
+        // a pooled 131,072-byte buffer, so these tests read with an explicit buffer size.
+        [Theory]
+        [InlineData(81_920, 81_920)]           // .NET Framework CopyTo buffer, frame == buffer
+        [InlineData(163_840, 81_920)]          // frame == 2 x buffer
+        [InlineData(131_072, 131_072)]         // .NET 8 pooled CopyTo buffer
+        [InlineData(4_096, 4_096)]
+        public void DecoderStream_FrameEndingExactlyAtReadBufferEnd_ReadsNextFrame(int frameSize, int bufferSize)
+        {
+            var (compressed, expected) = MultiFrame(400, frameSize, 30_000);
+            using var decoder = new CustomLZ4DecoderStream(
+                new MemoryStream(compressed), d => d.CreateDecoder(), _bufferPool);
+            using var output = new MemoryStream();
+            var buffer = new byte[bufferSize];
+            int read;
+            while ((read = decoder.Read(buffer, 0, buffer.Length)) > 0) output.Write(buffer, 0, read);
+            Assert.Equal(expected.Length, output.Length);
+            Assert.True(expected.AsSpan().SequenceEqual(output.ToArray()));
+        }
+
+        [Theory]
+        [InlineData(81_920)]
+        [InlineData(131_072)]
+        public async Task DecompressLz4_FrameSizedLikeCopyBuffer_ReturnsAllData(int frameSize)
+        {
+            // Through the real Lz4Utilities copy path, on whichever buffer size this runtime uses.
+            var (compressed, expected) = MultiFrame(400, frameSize, frameSize, 30_000);
+            Assert.Equal(expected.Length, Lz4Utilities.DecompressLz4(compressed, _memoryManager, _bufferPool).Length);
+            using var asyncResult = await Lz4Utilities.DecompressLz4Async(compressed, _memoryManager, _bufferPool);
+            Assert.Equal(expected.Length, asyncResult.Length);
+        }
+
         [Fact]
         public void DecompressLz4_OnlyEmptyFrames_ReturnsEmpty()
         {
