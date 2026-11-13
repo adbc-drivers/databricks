@@ -23,11 +23,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader;
+using AdbcDrivers.Databricks.Reader.CloudFetch;
 using Apache.Arrow;
+using Apache.Arrow.Ipc;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Types;
@@ -456,6 +459,115 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             mockReader.Protected().Verify("Dispose", Times.Once(), ItExpr.IsAny<bool>());
             mockPoller.Verify(p => p.Stop(), Times.Once);
             mockPoller.Verify(p => p.Dispose(), Times.Once);
+        }
+
+        /// <summary>
+        /// Regression test for the reviewer gap (ES-2356918 follow-up): a reader disposed before its
+        /// statement — the default with `using` declarations, where the reader is declared after the
+        /// statement and so disposed first — used to leave <see cref="DatabricksCompositeReader.GetChunkMetrics"/>
+        /// returning null (because Dispose set _activeReader = null), losing both the chunk-detail
+        /// telemetry and the row-count shortfall warning. The composite reader now snapshots the
+        /// CloudFetch metrics in Dispose, so GetChunkMetrics still reports them afterwards.
+        /// </summary>
+        [Fact]
+        public async Task GetChunkMetrics_AfterDispose_ReturnsSnapshotIncludingShortfall()
+        {
+            // Arrange: a real CloudFetchReader that records a row-count shortfall (file decodes to
+            // fewer rows than the server declared) when drained through the composite reader.
+            var cloudFetchReader = CreateShortfallCloudFetchReader();
+
+            // Non-empty ResultLinks on the fetch response makes ShouldUseCloudFetch true, so the lazy
+            // read path routes through CreateCloudFetchReader (overridden to return our real reader).
+            // Note: the fetch path is used rather than direct results because CreateCloudFetchReader is
+            // called from the base constructor, before the object initializer assigns MockReader.
+            var mockClient = CreateMockClient();
+            var fetchResponse = new TFetchResultsResp
+            {
+                HasMoreRows = false,
+                Results = new TRowSet
+                {
+                    ResultLinks = new List<TSparkArrowResultLink> { new TSparkArrowResultLink() }
+                }
+            };
+            mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(fetchResponse);
+            var mockStatement = CreateMockStatement(mockClient);
+            var mockResponse = CreateMockResponse();
+
+            var reader = new TestableDatabricksCompositeReader(
+                mockStatement.Object,
+                _testSchema,
+                mockResponse.Object,
+                false,
+                _httpClient)
+            {
+                MockReader = cloudFetchReader
+            };
+
+            // Drain through the composite, which initializes the active reader and records the shortfall.
+            long drained = 0;
+            RecordBatch? batch;
+            while ((batch = await reader.ReadNextRecordBatchAsync()) != null)
+            {
+                using (batch) drained += batch.Length;
+            }
+            Assert.Equal(24_576, drained);
+            Assert.True(reader.CloudFetchReaderCreated);
+
+            // Sanity: metrics are available while the reader is still alive.
+            Assert.Equal(1, reader.GetChunkMetrics()?.RowCountShortfallChunks);
+
+            // Act: dispose the reader first (as `using var reader` after the statement would).
+            reader.Dispose();
+
+            // Assert: the snapshot is still returned after dispose, carrying the shortfall that
+            // DatabricksStatement.Dispose turns into the CloudFetchRowCountShortfall warning.
+            ChunkMetrics? metrics = reader.GetChunkMetrics();
+            Assert.NotNull(metrics);
+            Assert.Equal(1, metrics!.RowCountShortfallChunks);
+            Assert.Equal(875_733 - 24_576, metrics.RowCountShortfallRows);
+        }
+
+        private static readonly Schema s_cloudFetchSchema =
+            new Schema.Builder().Field(f => f.Name("id").DataType(Int64Type.Default)).Build();
+
+        private static Stream ArrowFile(int rows)
+        {
+            var ms = new MemoryStream();
+            using (var writer = new ArrowStreamWriter(ms, s_cloudFetchSchema, leaveOpen: true))
+            {
+                var ids = new Int64Array.Builder();
+                for (int i = 0; i < rows; i++) ids.Append(i);
+                writer.WriteRecordBatch(new RecordBatch(s_cloudFetchSchema, new IArrowArray[] { ids.Build() }, rows));
+                writer.WriteEnd();
+            }
+            ms.Position = 0;
+            return ms;
+        }
+
+        private CloudFetchReader CreateShortfallCloudFetchReader()
+        {
+            // Link declares 875,733 rows but the file decodes to 24,576 — the incident shape.
+            var file = new Mock<IDownloadResult>();
+            file.Setup(r => r.ChunkIndex).Returns(0);
+            file.Setup(r => r.RowCount).Returns(875_733);
+            file.Setup(r => r.DownloadCompletedTask).Returns(Task.CompletedTask);
+            file.Setup(r => r.DataStream).Returns(ArrowFile(24_576));
+            file.Setup(r => r.Size).Returns(1024);
+
+            var queue = new Queue<IDownloadResult>(new[] { file.Object });
+            var manager = new Mock<ICloudFetchDownloadManager>();
+            manager.Setup(m => m.GetNextDownloadedFileAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(() => queue.Count > 0 ? queue.Dequeue() : null);
+            manager.Setup(m => m.GetChunkMetrics()).Returns(() => new ChunkMetrics());
+
+            var statement = new Mock<IHiveServer2Statement>();
+            statement.Setup(s => s.Trace).Returns(new ActivityTrace("TestActivitySource"));
+            statement.Setup(s => s.TraceParent).Returns((string?)null);
+            statement.Setup(s => s.AssemblyVersion).Returns("1.0.0");
+            statement.Setup(s => s.AssemblyName).Returns("TestAssembly");
+
+            return new CloudFetchReader(statement.Object, s_cloudFetchSchema, null, manager.Object, totalExpectedRows: 0);
         }
 
         public void Dispose()

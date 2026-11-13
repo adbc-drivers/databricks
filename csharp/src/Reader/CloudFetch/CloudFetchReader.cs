@@ -164,7 +164,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
-                                RecordResultRowShortfall();
+                                // Only record a shortfall when results genuinely ran out. If the caller
+                                // cancelled, GetNextDownloadedFileAsync swallows the OperationCanceledException
+                                // and returns null; that is an intentional early stop, not lost rows, so it
+                                // must not count as a shortfall (see ChunkMetrics contract).
+                                if (!cancellationToken.IsCancellationRequested)
+                                {
+                                    RecordResultRowShortfall();
+                                }
                                 // Snapshot metrics before disposing the download manager
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();

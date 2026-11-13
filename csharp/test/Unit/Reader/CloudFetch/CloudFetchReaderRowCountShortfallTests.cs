@@ -28,7 +28,7 @@ using Apache.Arrow.Types;
 using Moq;
 using Xunit;
 
-namespace AdbcDrivers.Databricks.Tests.CloudFetch
+namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 {
     /// <summary>
     /// ES-2356918 follow-up: when a CloudFetch file decodes to fewer rows than the server declared,
@@ -69,8 +69,11 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
         {
             var queue = new Queue<IDownloadResult>(files);
             var manager = new Mock<ICloudFetchDownloadManager>();
+            // Mirror the real downloader: it swallows OperationCanceledException and returns null
+            // when the caller's token fires, rather than propagating the cancellation.
             manager.Setup(m => m.GetNextDownloadedFileAsync(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(() => queue.Count > 0 ? queue.Dequeue() : null);
+                .ReturnsAsync((CancellationToken ct) =>
+                    ct.IsCancellationRequested ? null : (queue.Count > 0 ? queue.Dequeue() : null));
             manager.Setup(m => m.GetChunkMetrics()).Returns(() => new ChunkMetrics());
 
             var statement = new Mock<IHiveServer2Statement>();
@@ -151,6 +154,25 @@ namespace AdbcDrivers.Databricks.Tests.CloudFetch
 
             Assert.Equal(1_000, await DrainAsync(reader));
             Assert.Equal(0, reader.GetChunkMetrics().RowCountShortfallChunks);
+        }
+
+        [Fact]
+        public async Task Sea_ReadCancelledWhileWaitingForFile_RecordsNothing()
+        {
+            // On SEA the downloader swallows the OperationCanceledException and returns null from
+            // GetNextDownloadedFileAsync when the caller's token fires. That is an intentional early
+            // stop, not lost rows, so it must not be counted as a shortfall (ChunkMetrics contract).
+            var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            // Manifest declares 1000 rows but we never get a file because the read was cancelled.
+            using var reader = CreateReader(1_000, File(0, 1_000, 1_000));
+
+            Assert.Null(await reader.ReadNextRecordBatchAsync(cts.Token));
+
+            var metrics = reader.GetChunkMetrics();
+            Assert.Equal(0, metrics.RowCountShortfallChunks);
+            Assert.Equal(0, metrics.RowCountShortfallRows);
         }
 
         [Fact]
