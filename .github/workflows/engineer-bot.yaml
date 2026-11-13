@@ -123,34 +123,32 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+      - name: Install bot engine (pinned) + Claude SDK/CLI (hash-locked)
         env:
           # Fine-grained PAT, read-only Contents on databricks/databricks-bot-engine.
           ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
-          # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
-          # install from the force-pushable `@main` ref in a secret-bearing job. Bump
-          # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
-          # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
-          # unpinned to match the hub (databricks-driver-test); pin them to exact
-          # versions here if you want full reproducibility.
-          ENGINE_REF: d05dcb113332401b4aee8d6aa05c7107399ad44f
+          # SUPPLY-CHAIN PIN: an immutable commit SHA, never @main in a secret-bearing job.
+          # Bump it together with the copies of the engine's SDK/CLI locks in
+          # .github/bot-requirements/ and .github/claude-cli/ (all from the same engine
+          # commit). The SHA is duplicated in every bot workflow: grep and update all of them.
+          ENGINE_REF: 434674335076efdb281224270b02501b47b1106b
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
-          # The dedicated engine repo (PRIVATE for now → install via the PAT). Once
-          # it's public, drop the `x-access-token:${ENGINE_PAT}@` prefix (anonymous);
-          # ENGINE_REF stays pinned to a commit SHA / release tag for reproducibility.
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
-          # The engine drives the Claude Agent SDK + Claude Code CLI (public registries).
-          pip install claude-agent-sdk
-          # Global npm dir (/usr/local/lib) is root-owned on the self-hosted
-          # runner; install to a per-job prefix the runner user owns and put
-          # it on PATH so later steps find the `claude` CLI the SDK shells to.
-          export NPM_CONFIG_PREFIX="$RUNNER_TEMP/npm-global"
-          mkdir -p "$NPM_CONFIG_PREFIX/bin"
-          npm install -g @anthropic-ai/claude-code
-          echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
+          # Claude Agent SDK, hash-locked to the engine's own requirements/claude-sdk.lock.
+          pip install --require-hashes -r .github/bot-requirements/claude-sdk.lock
+          # Claude Code CLI, pinned by the copied package-lock.json. The CLI needs Node 22+.
+          # It is installed under RUNNER_TEMP, not in the checkout, so no node_modules
+          # lands where the bot publishes from.
+          node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' \
+            || { echo "::error::Node 22+ is required for the Claude Code CLI"; exit 1; }
+          cli_dir="$RUNNER_TEMP/claude-cli"
+          mkdir -p "$cli_dir"
+          cp .github/claude-cli/package.json .github/claude-cli/package-lock.json "$cli_dir/"
+          npm ci --prefix "$cli_dir"
+          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
 
       # Give the agent a LIVE workspace connection so its E2E tests
       # (csharp/test/E2E/) actually run instead of silently Skip-ing — they gate on
@@ -210,6 +208,7 @@ jobs:
           # databricks-claude-opus-4-8 serving endpoint; DATABRICKS_TOKEN authenticates it
           # (Bearer). Both already exist as adbc CI secrets — no new secrets needed.
           MODEL_ENDPOINT:   https://${{ secrets.DATABRICKS_HOST }}/serving-endpoints/databricks-claude-opus-4-8/invocations
+          TARGET_LANGUAGE: csharp   # lang tag the engine matches lessons on (C# driver)
           REPO_RULES_FILES: csharp/CLAUDE.md,rust/CLAUDE.md   # adbc keeps conventions per-language (no root CLAUDE.md)
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         # engine #89 externalized the prompts: the author phase now REQUIRES both
