@@ -56,9 +56,6 @@ func (c *connectionImpl) SetOption(ctx context.Context, key, val string) error {
 	if name, ok := queryTagName(key); ok {
 		return c.setQueryTag(name, val)
 	}
-	if key == OptionUnsetQueryTag {
-		return c.unsetQueryTag(ctx, val)
-	}
 	return c.ConnectionImplBase.SetOption(ctx, key, val)
 }
 
