@@ -277,11 +277,14 @@ jobs:
           export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
           export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
           # Opt-in to the very-large (10M/100M-row) CloudFetch cases in CloudFetchE2ETest only for
-          # on-demand runs (workflow_dispatch, or a PR carrying the `e2e-test` label). The default
-          # merge_group path skips them: each is ~10x/~100x the 1M case, so running them twice
-          # (thrift + rest) on every C# merge would add hours of merge-queue latency. See the
-          # TestCases() comment in csharp/test/E2E/CloudFetchE2ETest.cs.
-          if [[ "${{ github.event_name }}" != "merge_group" ]]; then
+          # on-demand runs (workflow_dispatch, or a PR carrying the `e2e-test` label). Every other
+          # trigger skips them: each is ~10x/~100x the 1M case, so running them twice (thrift +
+          # rest) on every C# merge (merge_group) or post-merge push to main would add hours of
+          # latency / warehouse load on routine changes. Gate positively on the two intended
+          # triggers so push/merge_group never opt in. See the TestCases() comment in
+          # csharp/test/E2E/CloudFetchE2ETest.cs.
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
+             ( [[ "${{ github.event.action }}" == "labeled" ]] && [[ "${{ github.event.label.name }}" == "e2e-test" ]] ); then
             export DATABRICKS_RUN_LARGE_CLOUDFETCH=true
           fi
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
