@@ -55,7 +55,8 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Creates a new CustomLZ4DecoderStream instance.
         /// </summary>
-        /// <param name="inner">The inner stream containing compressed LZ4 data.</param>
+        /// <param name="inner">The inner stream containing compressed LZ4 data. Must be seekable: the stream
+        /// uses <c>Position &lt; Length</c> to tell a frame boundary from the end of the input (ES-2356918).</param>
         /// <param name="decoderFactory">Factory function to create the LZ4 decoder.</param>
         /// <param name="bufferPool">The ArrayPool to use for buffer allocation (from DatabricksDatabase).</param>
         /// <param name="leaveOpen">Whether to leave the inner stream open when disposing.</param>
@@ -68,6 +69,8 @@ namespace AdbcDrivers.Databricks
             bool interactive = false)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            if (!inner.CanSeek)
+                throw new ArgumentException("Inner stream must be seekable.", nameof(inner));
             _reader = new CustomLZ4FrameReader(inner, true, decoderFactory, bufferPool);
             _leaveOpen = leaveOpen;
             _interactive = interactive;
@@ -108,21 +111,69 @@ namespace AdbcDrivers.Databricks
         public override void Write(byte[] buffer, int offset, int count) =>
             throw new NotSupportedException("LZ4 decoder stream does not support writing");
 
-        public override int ReadByte() => _reader.ReadOneByte();
+        // ES-2356918: a result file can hold many concatenated LZ4 frames (one per Arrow batch), but the
+        // K4os reader never reads across frames. A read that starts on a frame's end mark (the previous
+        // read filled the buffer exactly as the frame ended, or the frame is empty) returns 0 even though
+        // more frames follow, and CopyTo treats 0 as end-of-stream. Only the end of the compressed input
+        // is end-of-stream, so keep reading while input remains.
+        //
+        // This relies on K4os (1.3.8, Directory.Packages.props) not reading ahead: StreamLZ4FrameReader
+        // requests exactly the header/block/checksum bytes it needs from _inner, so _inner.Position is
+        // the number of compressed bytes consumed. If a K4os upgrade buffered input past the current
+        // frame, Position could reach Length while frames remain and the truncation would return. The
+        // frame-boundary tests in Lz4UtilitiesTests (~100 KB inputs) fail if the remaining input gets
+        // buffered, but a K4os upgrade should be treated as needing a re-check of this assumption.
+        private bool MoreFramesFollow(bool gotData, long positionBefore)
+        {
+            if (gotData || _inner.Position >= _inner.Length) return false;
+            if (_inner.Position == positionBefore)
+                throw new InvalidDataException("LZ4 decoder made no progress before the end of the input");
+            return true;
+        }
+
+        public override int ReadByte()
+        {
+            int value;
+            long before;
+            do { before = _inner.Position; value = _reader.ReadOneByte(); }
+            while (MoreFramesFollow(value >= 0, before));
+            return value;
+        }
 
         public override int Read(byte[] buffer, int offset, int count) =>
-            _reader.ReadManyBytes(buffer.AsSpan(offset, count), _interactive);
+            ReadCore(buffer.AsSpan(offset, count));
 
         public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            _reader.ReadManyBytesAsync(cancellationToken, buffer.AsMemory(offset, count), _interactive);
+            ReadCoreAsync(buffer.AsMemory(offset, count), cancellationToken);
 
 #if NETSTANDARD2_1_OR_GREATER || NET5_0_OR_GREATER
-        public override int Read(Span<byte> buffer) =>
-            _reader.ReadManyBytes(buffer, _interactive);
+        public override int Read(Span<byte> buffer) => ReadCore(buffer);
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            new(_reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive));
+            new(ReadCoreAsync(buffer, cancellationToken));
 #endif
+
+        private int ReadCore(Span<byte> buffer)
+        {
+            int read;
+            long before;
+            do { before = _inner.Position; read = _reader.ReadManyBytes(buffer, _interactive); }
+            while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
+            return read;
+        }
+
+        private async Task<int> ReadCoreAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+        {
+            int read;
+            long before;
+            do
+            {
+                before = _inner.Position;
+                read = await _reader.ReadManyBytesAsync(cancellationToken, buffer, _interactive).ConfigureAwait(false);
+            }
+            while (!buffer.IsEmpty && MoreFramesFollow(read > 0, before));
+            return read;
+        }
 
         public override void Flush()
         {
