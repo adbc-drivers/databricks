@@ -1155,9 +1155,7 @@ namespace AdbcDrivers.Databricks.Tests
 
         // Upper bound for a single metadata RPC or batch read in these tests. A hung server call
         // should fail one test within minutes rather than consuming the whole OAuth token lifetime.
-        // 15 minutes on the v1.1 line (5 on main): without native SEA metadata (#692), REST
-        // metastore-wide GetTables runs SHOW TABLES IN ALL CATALOGS as SQL, which took ~9 minutes.
-        private static readonly TimeSpan MetadataCallTimeout = TimeSpan.FromMinutes(15);
+        private static readonly TimeSpan MetadataCallTimeout = TimeSpan.FromMinutes(5);
 
         private static async Task<T> WithMetadataTimeout<T>(ValueTask<T> operation, string description)
         {
