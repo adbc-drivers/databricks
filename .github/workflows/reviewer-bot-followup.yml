@@ -217,12 +217,15 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files=""
-          # The script comes from the PR checkout: run it with an empty environment (no
-          # token) and accept only a well-formed value. A missing script (an older
-          # branch), a failure or anything else falls back to every language.
-          tags=$(printf '%s\n' "$files" | env -i PATH="$PATH" .github/scripts/lesson-tags.sh) || tags=""
+          # Run the BASE branch's copy of the script (fetched through the API), never the
+          # PR's, with an empty environment, and accept only a well-formed value. A base
+          # without the script, a failure or anything else falls back to every language.
+          script=$(gh api "repos/$REPO/contents/.github/scripts/lesson-tags.sh?ref=$BASE_SHA" \
+            --jq .content | base64 -d) || script=""
+          tags=$(printf '%s\n' "$files" | env -i PATH="$PATH" bash -c "$script") || tags=""
           [[ $tags =~ ^lang=(csharp|go|rust)(,(csharp|go|rust))*$ ]] || tags="lang=csharp,go,rust"
           echo "lessons: $tags"
           echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"

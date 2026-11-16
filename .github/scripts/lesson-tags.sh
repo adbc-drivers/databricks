@@ -40,10 +40,16 @@ if [ -n "${ISSUE_TITLE:-}${ISSUE_LABELS:-}" ]; then
   if [[ $labels == *",rust,"* || $title =~ \(rust\)|^rust:|rust\ driver ]]; then
     add rust
   fi
+  # A title that names another language may also name Go as a plain word ("Fix Go
+  # and C# ..."): include it. An extra language only adds lessons, never removes.
+  if [ -n "$langs" ] && [[ $title =~ (^|[^a-z])go([^a-z]|$) ]]; then
+    add go
+  fi
 else
   while IFS= read -r path || [ -n "$path" ]; do
     case "$path" in
-      csharp/* | ci/scripts/csharp* | .github/workflows/csharp*) add csharp ;;
+      csharp/* | ci/scripts/csharp* | .github/workflows/csharp* | .github/workflows/e2e-tests.yml \
+        | .github/workflows/reyden-rest-nightly.yml) add csharp ;;
       go/* | ci/scripts/go_* | .github/workflows/go_*) add go ;;
       rust/* | ci/scripts/rust* | .github/workflows/rust*) add rust ;;
     esac
