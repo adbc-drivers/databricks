@@ -265,6 +265,7 @@ namespace AdbcDrivers.Databricks
         /// More rows than declared are not an error: the driver trims them (for example, the last batch of a LIMIT query).
         /// Default value is false if not specified.
         /// </summary>
+        [FeatureFlagType(FeatureFlagValueKind.Boolean)]
         public const string CloudFetchFailOnRowCountMismatch = "adbc.databricks.cloudfetch.fail_on_row_count_mismatch";
 
         /// <summary>
