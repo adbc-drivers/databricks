@@ -50,6 +50,7 @@ namespace AdbcDrivers.Databricks.Reader
         public override Schema Schema { get { return _schema; } }
 
         private BaseDatabricksReader? _activeReader;
+        private ChunkMetrics? _chunkMetricsSnapshot;
         private readonly IHiveServer2Statement _statement;
         private readonly Schema _schema;
         private readonly IResponse _response;
@@ -311,6 +312,11 @@ namespace AdbcDrivers.Databricks.Reader
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
                                     new("reader_type", _activeReader.GetType().Name)
                                 ]);
+                                // Keep metrics for statement telemetry: a `using` reader is often disposed first.
+                                if (_activeReader is CloudFetchReader cloudFetchReader)
+                                {
+                                    _chunkMetricsSnapshot = cloudFetchReader.GetChunkMetrics();
+                                }
                                 _activeReader.Dispose();
                                 _activeReader = null;
                             }
@@ -381,8 +387,8 @@ namespace AdbcDrivers.Databricks.Reader
                 return cloudFetchReader.GetChunkMetrics();
             }
 
-            // Not using CloudFetch or reader not initialized yet
-            return null;
+            // Reader already disposed, or not using CloudFetch / not initialized yet
+            return _chunkMetricsSnapshot;
         }
 
         /// <summary>

@@ -149,6 +149,9 @@ namespace AdbcDrivers.Databricks.Tests
             yield return new object[] { largeQuery, 1000000, false, true };
             yield return new object[] { largeQuery, 1000000, true, false };
             yield return new object[] { largeQuery, 1000000, false, false };
+
+            // Larger CloudFetch results (28.8M and 288M rows, checked against COUNT(*)) run nightly in
+            // databricks-driver-test (specs/cloudfetch-nightly.yaml) rather than on every merge here.
         }
 
         /// <summary>
@@ -223,6 +226,8 @@ namespace AdbcDrivers.Databricks.Tests
             Console.WriteLine($"[TEST] Reading batches...");
             while ((batch = await result.Stream.ReadNextRecordBatchAsync()) != null)
             {
+                // Dispose each batch so large results don't accumulate Arrow buffers until GC.
+                using var _ = batch;
                 totalRows += batch.Length;
                 batchCount++;
                 if (batchCount % 10 == 0)

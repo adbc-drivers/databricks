@@ -1077,7 +1077,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     {
                         activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.start"));
                         // Delete session synchronously during dispose
-                        _client.DeleteSessionAsync(_sessionId, _warehouseId, CancellationToken.None).GetAwaiter().GetResult();
+                        _client.DeleteSessionAsync(CancellationToken.None).GetAwaiter().GetResult();
                         activity?.AddEvent(new System.Diagnostics.ActivityEvent("session.delete.success"));
                     }
                     catch (Exception ex)

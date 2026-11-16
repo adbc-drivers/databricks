@@ -304,8 +304,8 @@ namespace AdbcDrivers.Databricks.Telemetry
 
             log.SqlOperation = sqlEvent;
 
-            // Add error info if present
-            if (HasError)
+            // Add error info if present (ErrorName alone is a non-fatal condition, e.g. row-count shortfall)
+            if (HasError || !string.IsNullOrEmpty(ErrorName))
             {
                 log.ErrorInfo = new DriverErrorInfo
                 {

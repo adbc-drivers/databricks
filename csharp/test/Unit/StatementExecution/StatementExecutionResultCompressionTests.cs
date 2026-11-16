@@ -70,7 +70,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    if (path.EndsWith("/sessions"))
                     {
                         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
                     }
@@ -294,7 +294,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    if (path.EndsWith("/sessions"))
                     {
                         return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sessionBody) };
                     }

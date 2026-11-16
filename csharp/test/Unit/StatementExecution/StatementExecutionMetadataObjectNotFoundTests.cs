@@ -72,7 +72,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    if (path.EndsWith("/api/2.0/sql/sessions"))
+                    if (path.EndsWith("/sessions"))
                     {
                         return new HttpResponseMessage(HttpStatusCode.OK)
                         {
@@ -123,7 +123,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : failedBody;
+                    var body = path.EndsWith("/sessions") ? sessionBody : failedBody;
                     return new HttpResponseMessage(HttpStatusCode.OK)
                     {
                         Content = new StringContent(body),
@@ -853,7 +853,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : executeBody;
+                    var body = path.EndsWith("/sessions") ? sessionBody : executeBody;
                     return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
                 });
 
@@ -997,7 +997,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                 .ReturnsAsync((HttpRequestMessage req, CancellationToken _) =>
                 {
                     var path = req.RequestUri?.AbsolutePath ?? string.Empty;
-                    var body = path.EndsWith("/api/2.0/sql/sessions") ? sessionBody : executeBody;
+                    var body = path.EndsWith("/sessions") ? sessionBody : executeBody;
                     return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
                 });
             return new HttpClient(handler.Object);

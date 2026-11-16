@@ -355,7 +355,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
                     ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
                 .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
                 {
-                    if (request.RequestUri?.AbsolutePath.EndsWith("/sql/sessions") == true)
+                    if (request.RequestUri?.AbsolutePath.EndsWith("/sessions") == true)
                         return Response("{\"session_id\":\"s1\"}");
                     if (request.Method != HttpMethod.Post)
                         return new HttpResponseMessage(HttpStatusCode.OK);

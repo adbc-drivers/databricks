@@ -27,8 +27,14 @@ concurrency:
 jobs:
   reyden-rest-nightly:
     name: "Reyden REST Nightly E2E"
-    runs-on: ubuntu-latest
+    # Windows / .NET Framework 4.7.2, the runtime Power BI Desktop and the on-premises data
+    # gateway load the driver in (same as e2e-tests.yml).
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: bash
     env:
+      E2E_TARGET_FRAMEWORK: net472
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       # Reyden warehouse (Lakehouse//RT): used for the actual E2E test connection over REST/SEA.
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_REYDEN_HTTP_PATH }}
@@ -51,6 +57,11 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
       - name: Generate OAuth access token
         id: oauth
         run: |
@@ -60,7 +71,7 @@ jobs:
             -d "client_id=${{ env.DATABRICKS_TEST_CLIENT_ID }}" \
             -d "client_secret=${{ env.DATABRICKS_TEST_CLIENT_SECRET }}" \
             -d "scope=sql")
-          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$OAUTH_TOKEN" ]; then
             echo "ERROR: Failed to generate OAuth token"
             exit 1
@@ -96,7 +107,7 @@ jobs:
             -H "Authorization: Bearer $OAUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          STATUS=$(echo "$RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
           if [ "$STATUS" != "SUCCEEDED" ]; then
             echo "ERROR: CREATE SCHEMA failed (status=$STATUS)"
             echo "Response: $RESPONSE"
@@ -111,7 +122,7 @@ jobs:
           WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
           DATABRICKS_SERVER_HOSTNAME: ${{ env.DATABRICKS_SERVER_HOSTNAME }}
         run: |
-          python3 - <<'PYEOF'
+          python - <<'PYEOF'
           import json, os, re, sys, urllib.request
 
           with open("csharp/test/Resources/Databricks.sql") as f:
@@ -181,7 +192,7 @@ jobs:
             }
           }
           EOF
-          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV
+          echo "DATABRICKS_TEST_CONFIG_FILE=$(cygpath -w "$HOME/.databricks/connection.json")" >> $GITHUB_ENV
 
       - name: Build
         shell: bash
@@ -191,7 +202,8 @@ jobs:
       - name: Run All Tests
         shell: bash
         run: |
-          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
+          export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
           # Reyden is a Lakehouse//RT warehouse: no DDL/DML (CREATE/DROP/UPDATE), no
           # EXTERNAL_LINKS, and no presigned-URL refresh (SEA GetResultChunk 404s, ES-2049942).
           # Curate the suite to the read/query subset by excluding tests that need those
@@ -228,7 +240,7 @@ jobs:
             -H "Authorization: Bearer $OAUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          STATUS=$(echo "$RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
           if [ "$STATUS" != "SUCCEEDED" ]; then
             echo "WARNING: DROP SCHEMA failed (status=$STATUS)"
             echo "Response: $RESPONSE"

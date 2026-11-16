@@ -56,6 +56,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private readonly long _totalExpectedRows;
         private long _rowsRead;
         private long _currentChunkExpectedRows;
+        private long _rowCountShortfall;
         private long _currentChunkRowsRead;
 
         // Telemetry tracking
@@ -140,6 +141,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         }
                         else
                         {
+                            // This file's Arrow stream ended. Thrift (per-file limiting): check it against its link RowCount.
+                            // SEA (global limiting) doesn't track per-file rows, so it is checked once at "no more files" below.
+                            if (_totalExpectedRows <= 0) RecordRowShortfall(_currentChunkExpectedRows, _currentChunkRowsRead);
                             // Clean up the current reader and download result
                             CleanupCurrentReaderAndDownloadResult();
                         }
@@ -159,6 +163,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
+                                // A cancelled read also ends here (null file); that is not lost rows.
+                                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
+                                    RecordRowShortfall(_totalExpectedRows, _rowsRead);
                                 // Snapshot metrics before disposing the download manager
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
@@ -322,13 +329,23 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <returns>A ChunkMetrics object containing aggregated metrics.</returns>
         public ChunkMetrics GetChunkMetrics()
         {
-            if (downloadManager != null)
-            {
-                return downloadManager.GetChunkMetrics();
-            }
+            // Use cached metrics if the download manager was already disposed after results were exhausted
+            ChunkMetrics metrics = downloadManager != null
+                ? downloadManager.GetChunkMetrics()
+                : _cachedChunkMetrics ?? new ChunkMetrics();
+            metrics.RowCountShortfall = _rowCountShortfall;
+            return metrics;
+        }
 
-            // Return cached metrics if download manager was already disposed after results were exhausted
-            return _cachedChunkMetrics ?? new ChunkMetrics();
+        // ES-2356918: rows the server declared but the decoded files did not deliver. Report-only.
+        private void RecordRowShortfall(long expectedRows, long rowsRead)
+        {
+            if (rowsRead >= expectedRows) return;
+            _rowCountShortfall += expectedRows - rowsRead;
+            Activity.Current?.AddEvent("cloudfetch.row_count_shortfall", [
+                new("expected_rows", expectedRows),
+                new("rows_read", rowsRead)
+            ]);
         }
 
         protected override void Dispose(bool disposing)
