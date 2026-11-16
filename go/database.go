@@ -88,6 +88,11 @@ type databaseImpl struct {
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
 
+	// Azure service principal options
+	azureClientID     string
+	azureClientSecret string
+	azureTenantID     string
+
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
@@ -360,6 +365,12 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return strings.Join(d.oauthScopes, " "), nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionAzureClientID:
+		return d.azureClientID, nil
+	case OptionAzureClientSecret:
+		return d.azureClientSecret, nil
+	case OptionAzureTenantID:
+		return d.azureTenantID, nil
 	case OptionOIDCClientID:
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
@@ -550,6 +561,12 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthScopes = scopes
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionAzureClientID:
+		d.azureClientID = value
+	case OptionAzureClientSecret:
+		d.azureClientSecret = value
+	case OptionAzureTenantID:
+		d.azureTenantID = value
 	case OptionOIDCClientID:
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:
