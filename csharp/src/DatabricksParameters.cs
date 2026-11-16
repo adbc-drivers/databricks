@@ -259,6 +259,15 @@ namespace AdbcDrivers.Databricks
         public const string CloudFetchSynchronousFallbackEnabled = "adbc.databricks.cloudfetch.synchronous_fallback_enabled";
 
         /// <summary>
+        /// Whether reading a CloudFetch result fails when the downloaded files decode to fewer rows than the
+        /// server declared (per file for Thrift, for the whole result for SEA). When false, the reader returns
+        /// the rows it decoded and reports the shortfall in telemetry and traces only.
+        /// More rows than declared are not an error: the driver trims them (for example, the last batch of a LIMIT query).
+        /// Default value is false if not specified.
+        /// </summary>
+        public const string CloudFetchFailOnRowCountMismatch = "adbc.databricks.cloudfetch.fail_on_row_count_mismatch";
+
+        /// <summary>
         /// Maximum bytes per fetch request when retrieving query results from servers.
         /// The value can be specified with unit suffixes: B (bytes), KB (kilobytes), MB (megabytes), GB (gigabytes).
         /// If no unit is specified, the value is treated as bytes.

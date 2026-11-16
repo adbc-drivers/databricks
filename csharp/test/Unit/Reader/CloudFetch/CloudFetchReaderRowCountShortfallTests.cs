@@ -31,8 +31,9 @@ using Xunit;
 
 namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 {
-    // ES-2356918: when files decode to fewer rows than the server declared, the reader returns what it
-    // has and records the shortfall, which statement telemetry reports as CloudFetchRowCountShortfall.
+    // When files decode to fewer rows than the server declared, the reader records the shortfall, which statement
+    // telemetry reports as CloudFetchRowCountShortfall. By default it returns what it has; with
+    // adbc.databricks.cloudfetch.fail_on_row_count_mismatch=true it throws instead.
     public class CloudFetchReaderRowCountShortfallTests
     {
         private static readonly Schema TestSchema =
@@ -58,6 +59,9 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 
         /// <summary>Thrift when <paramref name="totalExpectedRows"/> is 0 (per-file counts), SEA otherwise.</summary>
         internal static CloudFetchReader CreateReader(long totalExpectedRows, params (long Declared, int Actual)[] files)
+            => CreateReader(totalExpectedRows, failOnRowCountMismatch: false, files);
+
+        internal static CloudFetchReader CreateReader(long totalExpectedRows, bool failOnRowCountMismatch, params (long Declared, int Actual)[] files)
         {
             var queue = new Queue<IDownloadResult>();
             foreach (var (declared, actual) in files) queue.Enqueue(File(declared, actual));
@@ -69,7 +73,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 
             var statement = new Mock<IHiveServer2Statement>();
             statement.Setup(s => s.Trace).Returns(new ActivityTrace("TestActivitySource"));
-            return new CloudFetchReader(statement.Object, TestSchema, null, manager.Object, totalExpectedRows);
+            return new CloudFetchReader(statement.Object, TestSchema, null, manager.Object, totalExpectedRows, failOnRowCountMismatch);
         }
 
         internal static async Task<long> DrainAsync(IArrowArrayStream reader)
@@ -108,6 +112,67 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             using var sea = CreateReader(1_000, (1_000, 1_000));
             Assert.Null(await sea.ReadNextRecordBatchAsync(new CancellationToken(canceled: true)));
             Assert.Equal(0, sea.GetChunkMetrics().RowCountShortfall);
+        }
+
+        [Theory]
+        [InlineData(0, 875_733, 24_576, 851_157)] // Thrift: file short of its link RowCount
+        [InlineData(1_000, 1_000, 700, 300)]      // SEA: total short of the manifest
+        public async Task FailOnMismatch_Shortfall_Throws(long total, long declared, int actual, long expectedShortfall)
+        {
+            using var reader = CreateReader(total, failOnRowCountMismatch: true, (declared, actual));
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(() => DrainAsync(reader));
+            Assert.Equal(AdbcStatusCode.InvalidData, ex.Status);
+            Assert.Contains($"expected {declared}, read {actual}", ex.Message);
+            Assert.Contains(DatabricksParameters.CloudFetchFailOnRowCountMismatch, ex.Message);
+            // Telemetry still sees the shortfall, and it isn't counted again by a later read.
+            Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
+            if (total > 0) Assert.Null(await reader.ReadNextRecordBatchAsync());
+            Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
+        }
+
+        [Theory]
+        [InlineData(0, 100, 100, 50, 80, 150)]          // Thrift: exact match, and padding rows beyond RowCount (trimmed)
+        [InlineData(1_000, 500, 500, 500, 600, 1_000)]  // SEA: more rows than the manifest total (trimmed)
+        public async Task FailOnMismatch_ExactOrExcessRows_DoesNotThrow(
+            long total, long declared1, int actual1, long declared2, int actual2, long expectedRows)
+        {
+            using var reader = CreateReader(total, failOnRowCountMismatch: true, (declared1, actual1), (declared2, actual2));
+
+            Assert.Equal(expectedRows, await DrainAsync(reader));
+            Assert.Equal(0, reader.GetChunkMetrics().RowCountShortfall);
+        }
+
+        [Fact]
+        public async Task FailOnMismatch_EarlyStopOrCancel_DoesNotThrow()
+        {
+            using var thrift = CreateReader(0, failOnRowCountMismatch: true, (1_000, 1_000));
+            using (var first = await thrift.ReadNextRecordBatchAsync()) Assert.NotNull(first);
+
+            using var sea = CreateReader(1_000, failOnRowCountMismatch: true, (1_000, 1_000));
+            Assert.Null(await sea.ReadNextRecordBatchAsync(new CancellationToken(canceled: true)));
+            Assert.Equal(0, sea.GetChunkMetrics().RowCountShortfall);
+        }
+
+        [Theory]
+        [InlineData(null, false)]
+        [InlineData("false", false)]
+        [InlineData("true", true)]
+        [InlineData("True", true)]
+        public void Configuration_FailOnRowCountMismatch_ParsesFlag(string? value, bool expected)
+        {
+            var properties = new Dictionary<string, string>();
+            if (value != null) properties[DatabricksParameters.CloudFetchFailOnRowCountMismatch] = value;
+
+            Assert.Equal(expected, CloudFetchConfiguration.FromProperties(properties, TestSchema, isLz4Compressed: true).FailOnRowCountMismatch);
+        }
+
+        [Fact]
+        public void Configuration_FailOnRowCountMismatch_InvalidValue_Throws()
+        {
+            var properties = new Dictionary<string, string> { [DatabricksParameters.CloudFetchFailOnRowCountMismatch] = "yes" };
+
+            Assert.ThrowsAny<System.ArgumentException>(() => CloudFetchConfiguration.FromProperties(properties, TestSchema, isLz4Compressed: true));
         }
 
         [Fact]

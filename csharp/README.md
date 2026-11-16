@@ -267,7 +267,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*).
+On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*), and `adbc.databricks.cloudfetch.fail_on_row_count_mismatch`, which applies to both.
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
@@ -283,6 +283,7 @@ On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databric
 | `adbc.databricks.cloudfetch.timeout_minutes` | HTTP operation timeout (min) | `5` | `5` (via shared HttpClient timeout) |
 | `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | URL refresh buffer (s) | `60` | Not Supported |
 | `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Max URL refresh attempts | `3` | Not Supported |
+| `adbc.databricks.cloudfetch.fail_on_row_count_mismatch` | Fail the read when CloudFetch files decode to fewer rows than the server declared, instead of returning the partial result (the shortfall is reported in telemetry either way). More rows than declared are trimmed, not an error. | `false` | `false` |
 
 **Example Configuration:**
 ```csharp

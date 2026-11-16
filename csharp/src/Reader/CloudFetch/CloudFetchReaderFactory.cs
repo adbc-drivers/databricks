@@ -116,7 +116,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // For Thrift, use chunk-level row count limiting (pass 0 for totalExpectedRows)
             // because we don't know the total upfront - the fetcher accumulates as it goes
-            return new CloudFetchReader(statement, schema, response, downloadManager, totalExpectedRows: 0);
+            return new CloudFetchReader(statement, schema, response, downloadManager, totalExpectedRows: 0, failOnRowCountMismatch: config.FailOnRowCountMismatch);
         }
 
         /// <summary>
@@ -215,7 +215,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
             // For REST API (SEA), use global row count limiting from manifest.TotalRowCount.
             // The manifest contains the adjusted total row count that respects LIMIT queries.
-            return new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows: manifest.TotalRowCount);
+            return new CloudFetchReader(statement, schema, response: null, downloadManager, totalExpectedRows: manifest.TotalRowCount, failOnRowCountMismatch: config.FailOnRowCountMismatch);
         }
     }
 }

@@ -119,6 +119,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.cloudfetch.timeout_minutes` | Timeout in minutes for HTTP operations | `5` |
 | `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | Buffer time in seconds before URL expiration to trigger refresh | `60` |
 | `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Maximum number of URL refresh attempts | `3` |
+| `adbc.databricks.cloudfetch.fail_on_row_count_mismatch` | Whether reading a CloudFetch result fails when the downloaded files decode to fewer rows than the server declared (per file for Thrift, for the whole result for SEA). When `false`, the partial result is returned and the shortfall is reported in telemetry only. | `false` |
 
 ### Databricks-Specific Properties
 
