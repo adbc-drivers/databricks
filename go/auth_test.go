@@ -228,3 +228,72 @@ func TestOIDCBuildsConnectionOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, opts)
 }
+
+func TestAzureClientSecret(t *testing.T) {
+	ctx := context.Background()
+	full := databaseImpl{authType: "azure-client-secret", azureClientID: "app", azureClientSecret: "secret", azureTenantID: "tenant"}
+
+	t.Run("requires every option", func(t *testing.T) {
+		for option, clear := range map[string]func(*databaseImpl){
+			OptionAzureClientID:     func(d *databaseImpl) { d.azureClientID = "" },
+			OptionAzureClientSecret: func(d *databaseImpl) { d.azureClientSecret = "" },
+			OptionAzureTenantID:     func(d *databaseImpl) { d.azureTenantID = "" },
+		} {
+			db := full
+			clear(&db)
+			_, _, err := db.resolveLoginMethod()
+			require.ErrorContains(t, err, "when using auth type 'azure-client-secret'. Set this via '"+option+"'")
+		}
+		name, _, err := full.resolveLoginMethod()
+		require.NoError(t, err)
+		require.Equal(t, "azure-client-secret", name)
+	})
+
+	t.Run("builds an SDK config for Azure", func(t *testing.T) {
+		db := full
+		db.serverHostname = "adb-123.4.azuredatabricks.net"
+		cfg := db.sdkConfig(loginMethods["azure-client-secret"].sdk)
+		require.Equal(t, "https://adb-123.4.azuredatabricks.net", cfg.Host)
+		require.Equal(t, "app", cfg.AzureClientID)
+		require.Equal(t, "secret", cfg.AzureClientSecret)
+		require.Equal(t, "tenant", cfg.AzureTenantID)
+		require.Equal(t, "azure-client-secret", cfg.Credentials.Name())
+
+		// A custom host name is still treated as Azure.
+		db.serverHostname = "databricks.internal.example.com"
+		require.True(t, db.sdkConfig(loginMethods["azure-client-secret"].sdk).IsAzure())
+	})
+
+	t.Run("resolves the Entra ID endpoint whatever the port", func(t *testing.T) {
+		login := loginMethods["azure-client-secret"].sdk
+		for _, port := range []int{0, 443, 8443} {
+			db := full
+			db.serverHostname = "adb-123.4.azuredatabricks.net"
+			db.port = port
+			cfg := db.sdkConfig(login)
+			require.Equal(t, "https://login.microsoftonline.com/", cfg.DatabricksEnvironment.AzureActiveDirectoryEndpoint(), "port %d", port)
+		}
+	})
+
+	t.Run("options are stored and a bad auth type keeps them", func(t *testing.T) {
+		db := &databaseImpl{}
+		for key, value := range map[string]string{
+			OptionAuthType: "azure-client-secret", OptionAzureClientID: "app",
+			OptionAzureClientSecret: "secret", OptionAzureTenantID: "tenant",
+		} {
+			require.NoError(t, db.SetOption(ctx, key, value))
+			got, err := db.GetOption(ctx, key)
+			require.NoError(t, err)
+			require.Equal(t, value, got)
+		}
+		require.ErrorContains(t, db.SetOption(ctx, OptionAuthType, "azure"), "unknown auth type 'azure'")
+		got, _ := db.GetOption(ctx, OptionAuthType)
+		require.Equal(t, "azure-client-secret", got)
+	})
+
+	t.Run("Azure options alone do not select a method", func(t *testing.T) {
+		db := databaseImpl{azureClientID: "app", azureClientSecret: "secret", azureTenantID: "tenant"}
+		_, _, err := db.resolveLoginMethod()
+		require.ErrorContains(t, err, "access token or OAuth config is required")
+	})
+}

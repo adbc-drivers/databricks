@@ -69,6 +69,8 @@ const (
 	OptionValueAuthTypeOAuthM2M = "oauth-m2m"
 	OptionValueAuthTypeOIDC     = "oidc"
 
+	OptionValueAuthTypeAzureClientSecret = "azure-client-secret"
+
 	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
@@ -79,6 +81,11 @@ const (
 	// Settable on the database (defaults), the connection and a statement; each level
 	// overrides the one before it per tag.
 	OptionQueryTagPrefix = "databricks.query.query_tag."
+
+	// Azure service principal (Microsoft Entra ID) options, auth type azure-client-secret
+	OptionAzureClientID     = "databricks.azure.client_id"
+	OptionAzureClientSecret = "databricks.azure.client_secret"
+	OptionAzureTenantID     = "databricks.azure.tenant_id"
 
 	// OIDC token federation options (auth type oidc)
 	OptionOIDCClientID      = "databricks.oidc.client_id"

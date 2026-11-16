@@ -119,13 +119,14 @@ Examples:
 ### Authentication Options
 
 `databricks.auth_type`
-: **Values:** `pat`, `oauth-m2m`, `oidc`. **Default:** (empty, inferred from the options that are set)
+: **Values:** `pat`, `oauth-m2m`, `oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
 
   How to authenticate.
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
+  - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
@@ -143,6 +144,21 @@ Examples:
 : **Default:** (empty, the ID token is read from the environment)
 
   Path of the file holding the ID token. Used by `oidc`.
+
+`databricks.azure.client_id`
+: **Default:** (empty)
+
+  The application (client) ID of the Entra ID service principal. Required for `azure-client-secret`.
+
+`databricks.azure.client_secret`
+: **Default:** (empty)
+
+  The client secret of the Entra ID service principal. Required for `azure-client-secret`.
+
+`databricks.azure.tenant_id`
+: **Default:** (empty)
+
+  The Entra ID tenant ID. Required for `azure-client-secret`; the driver does not discover it.
 
 ### Query Options
 

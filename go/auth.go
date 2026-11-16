@@ -96,6 +96,44 @@ var loginMethods = map[string]loginMethod{
 			},
 		},
 	},
+	// Microsoft Entra ID service principal on Azure Databricks. The SDK only
+	// activates this credential when the tenant is set, so it is required.
+	OptionValueAuthTypeAzureClientSecret: {
+		required: []authField{
+			{OptionAzureClientID, "azure client ID", func(d *databaseImpl) string { return d.azureClientID }},
+			{OptionAzureClientSecret, "azure client secret", func(d *databaseImpl) string { return d.azureClientSecret }},
+			{OptionAzureTenantID, "azure tenant ID", func(d *databaseImpl) string { return d.azureTenantID }},
+		},
+		sdk: &sdkLogin{
+			cloud:       environment.CloudAzure,
+			credentials: func(*databaseImpl) sdkconfig.CredentialsStrategy { return sdkconfig.AzureClientSecretCredentials{} },
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				env := azureEnvironment(cfg.Host)
+				cfg.DatabricksEnvironment = &env
+				cfg.AzureClientID = d.azureClientID
+				cfg.AzureClientSecret = d.azureClientSecret
+				cfg.AzureTenantID = d.azureTenantID
+			},
+		},
+	},
+}
+
+// azureEnvironment returns the Azure environment of the workspace URL, which
+// holds the Entra ID endpoint. The SDK matches the host name against the DNS
+// zones with its port still attached, so a URL such as "https://host:8443"
+// matches none and the Entra ID endpoint would be empty. A host name in no
+// known zone, such as a private link name, is taken to be Azure public cloud.
+func azureEnvironment(workspaceURL string) environment.DatabricksEnvironment {
+	hostname := workspaceURL
+	if u, err := url.Parse(workspaceURL); err == nil {
+		hostname = u.Hostname()
+	}
+	for _, env := range environment.AllEnvironments() {
+		if env.Cloud == environment.CloudAzure && strings.HasSuffix(hostname, env.DnsZone) && !strings.HasPrefix(env.DnsZone, ".dev") && !strings.HasPrefix(env.DnsZone, ".staging") {
+			return env
+		}
+	}
+	return environment.GetEnvironmentForHostname("workspace.azuredatabricks.net")
 }
 
 // sdkHost returns the workspace URL for the SDK. The SQL client takes the port
