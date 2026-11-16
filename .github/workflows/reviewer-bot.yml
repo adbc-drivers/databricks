@@ -15,12 +15,12 @@
 # Reviewer-bot — reviews PRs in this repo and posts inline findings.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see the PR description):
-#   - secrets BOT_ENGINE_PAT, REVIEW_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
+#   - secrets REVIEW_BOT_APP_ID/PRIVATE_KEY (App also installed on the engine repo) (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - ENGINE_REF in the install step is pinned to an immutable commit SHA (never @main);
 #     bump it to adopt engine changes. claude-agent-sdk / @anthropic-ai/claude-code are
 #     unpinned to match the hub. The engine repo (databricks/databricks-bot-engine)
-#     is PRIVATE for now, so BOT_ENGINE_PAT is scoped to it; when it goes public, drop
-#     the PAT (anonymous install) but keep ENGINE_REF pinned to a tag/SHA (never @main)
+#     is PRIVATE for now: the install uses a per-run App token scoped to it; when it
+#     goes public, install anonymously but keep ENGINE_REF pinned to a tag/SHA (never @main)
 #
 # Self-contained (a cross-org `uses:` of the hub's internal composite action does
 # NOT work, so the run steps are inline). Posts findings under the review-bot App
@@ -89,9 +89,22 @@ jobs:
           python3.11 -m venv "$RUNNER_TEMP/bot-venv"
           echo "$RUNNER_TEMP/bot-venv/bin" >> "$GITHUB_PATH"
 
-      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+      # The engine repo is private. Mint a short-lived token, read-only and scoped to
+      # ONLY that repo, from the bot App (installed on databricks/databricks-bot-engine)
+      # instead of a stored PAT: nothing to expire or rotate.
+      - name: Mint engine-scoped install token
+        id: engine-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
+          owner: databricks
+          repositories: databricks-bot-engine
+          permission-contents: read
+
+      - name: Install bot engine (App-token git-install) + Claude SDK/CLI
         env:
-          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          ENGINE_PAT: ${{ steps.engine-token.outputs.token }}
           # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
           # install from the force-pushable `@main` ref in a secret-bearing job. Bump
           # ENGINE_REF to adopt engine changes (prefer a release tag once the engine

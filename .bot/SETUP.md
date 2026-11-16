@@ -36,7 +36,6 @@ For each App, generate a private key and store the App ID + key as secrets (belo
 |---|---|
 | `ENGINEER_BOT_APP_ID` / `ENGINEER_BOT_PRIVATE_KEY` | the engineer-bot App's id + private key |
 | `REVIEW_BOT_APP_ID` / `REVIEW_BOT_PRIVATE_KEY` | the reviewer-bot App's id + private key |
-| `BOT_ENGINE_PAT` | a **fine-grained PAT** with **Contents: Read-only** scoped to **just `eric-wang-1990/databricks-bot-engine`** (private for now). Set an expiry + rotation. **Drop it entirely once that repo is public** (the install goes anonymous). |
 | `DATABRICKS_HOST` / `DATABRICKS_TOKEN` | **already present** in adbc CI (the e2e/benchmark workflows use them). The bots reuse them — **no new model secrets needed**: the endpoint is built as `https://$DATABRICKS_HOST/serving-endpoints/databricks-claude-opus-4-8/invocations` and `DATABRICKS_TOKEN` authenticates it (Bearer). **`DATABRICKS_HOST` must be a *bare* hostname** (e.g. `adb-<id>.<n>.azuredatabricks.net`) with **no `https://` scheme and no trailing slash** — the workflows prepend `https://` themselves, so a stored scheme produces the malformed `https://https://…/invocations` and every bot run fails at model-call time. This matches the other adbc workflows that consume the secret raw (e.g. `rust-e2e.yml`). |
 
 **Model credential.** The bots reuse the `DATABRICKS_HOST` + `DATABRICKS_TOKEN` adbc
@@ -46,8 +45,12 @@ workflow runs at all, run the jobs on the protected **`peco-driver`** self-hoste
 runner (source creds from the runner env; change `runs-on:`) or use **OIDC** (the
 workflows already request `id-token: write`).
 
-`BOT_ENGINE_PAT` is interim — once `eric-wang-1990/databricks-bot-engine` is made
-public (or published to PyPI), drop it and switch the install lines to anonymous git / PyPI.
+**Engine install.** The engine repo `databricks/databricks-bot-engine` is private. No PAT
+is stored: each bot job mints a short-lived token from its own App (`ENGINEER_BOT_*` or
+`REVIEW_BOT_*`), read-only and scoped to only the engine repo, so both Apps must also be
+installed on `databricks/databricks-bot-engine` with Contents read. Once the engine is
+public (or on PyPI), drop that step and install anonymously. The old `BOT_ENGINE_PAT`
+secret is no longer read and can be deleted.
 
 ## 3. Two labels (`engineer-bot` and `review-bot`)
 
