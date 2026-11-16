@@ -22,7 +22,7 @@
 # Human-gated by design: it NEVER commits the canonical log directly.
 #
 # Setup mirrors engineer-bot.yaml (this repo's interim pattern): self-hosted
-# runner, python3.11 venv, PAT-installed engine pinned to ENGINE_REF. Opt-in is
+# runner, python3.11 venv, App-token-installed engine pinned to ENGINE_REF. Opt-in is
 # purely via the `retrospective:` block in .bot/config.yaml + this workflow;
 # absent that block the engine phase is a clean no-op.
 #

@@ -17,7 +17,8 @@
 # on, so it gets only the lessons tagged for those languages (plus the untagged,
 # shared ones). See retrospective.lesson_tags in .bot/config.yaml.
 #
-#   PR session:    changed file paths on stdin, one per line (csharp/, go/, rust/).
+#   PR session:    changed file paths on stdin, one per line: the driver directories
+#                  (csharp/, go/, rust/) and their language-named CI files.
 #   Issue session: ISSUE_TITLE and ISSUE_LABELS (comma-separated) in the environment.
 #
 # When no language can be told, every language is declared, so the session gets
@@ -40,11 +41,11 @@ if [ -n "${ISSUE_TITLE:-}${ISSUE_LABELS:-}" ]; then
     add rust
   fi
 else
-  while IFS= read -r path; do
+  while IFS= read -r path || [ -n "$path" ]; do
     case "$path" in
-      csharp/*) add csharp ;;
-      go/*) add go ;;
-      rust/*) add rust ;;
+      csharp/* | ci/scripts/csharp* | .github/workflows/csharp*) add csharp ;;
+      go/* | ci/scripts/go_* | .github/workflows/go_*) add go ;;
+      rust/* | ci/scripts/rust* | .github/workflows/rust*) add rust ;;
     esac
   done
 fi

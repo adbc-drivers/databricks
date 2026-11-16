@@ -27,7 +27,7 @@
 # identity; it never merges. It also reviews the bug-fix bot's OWN fix PRs, which
 # closes the reviewer -> engineer loop.
 #
-# When the engine is published publicly: drop the PAT (anonymous git / PyPI).
+# When the engine is published publicly: drop the App token (anonymous git / PyPI).
 name: Reviewer Bot
 
 on:
@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
-          # The dedicated engine repo (PRIVATE for now → install via the PAT). Drop the
+          # The dedicated engine repo (PRIVATE for now → install via the App token). Drop the
           # `x-access-token:${ENGINE_PAT}@` prefix once it's public; ENGINE_REF stays pinned.
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
           pip install claude-agent-sdk
@@ -138,8 +138,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files=""
-          # An older PR branch may not have the script yet: fall back to every language.
-          tags=$(printf '%s\n' "$files" | .github/scripts/lesson-tags.sh) || tags="lang=csharp,go,rust"
+          # The script comes from the PR checkout: run it with an empty environment (no
+          # token) and accept only a well-formed value. A missing script (an older
+          # branch), a failure or anything else falls back to every language.
+          tags=$(printf '%s\n' "$files" | env -i PATH="$PATH" .github/scripts/lesson-tags.sh) || tags=""
+          [[ $tags =~ ^lang=(csharp|go|rust)(,(csharp|go|rust))*$ ]] || tags="lang=csharp,go,rust"
           echo "lessons: $tags"
           echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
 

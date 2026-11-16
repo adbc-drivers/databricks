@@ -26,7 +26,7 @@
 #     the PR into the follow-up loop)
 #
 # Issue-triggered, self-contained bug-fix bot. A maintainer labels an issue
-# `engineer-bot`; this installs the engine (interim: PAT git-install of the internal
+# `engineer-bot`; this installs the engine (App-token git-install of the internal
 # hub) + the Claude SDK from public registries, runs the bug-fix flow against
 # THIS repo, and opens a fix PR. Self-contained on purpose: a cross-org `uses:`
 # of the hub's internal composite action does NOT work, so the run steps are
@@ -150,7 +150,7 @@ jobs:
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
-          # The dedicated engine repo (PRIVATE for now → install via the PAT). Once
+          # The dedicated engine repo (PRIVATE for now → install via the App token). Once
           # it's public, drop the `x-access-token:${ENGINE_PAT}@` prefix (anonymous);
           # ENGINE_REF stays pinned to a commit SHA / release tag for reproducibility.
           pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
@@ -216,7 +216,9 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
         run: |
-          tags=$(.github/scripts/lesson-tags.sh </dev/null) || tags="lang=csharp,go,rust"
+          tags=$(env -i PATH="$PATH" ISSUE_TITLE="$ISSUE_TITLE" ISSUE_LABELS="$ISSUE_LABELS" \
+            .github/scripts/lesson-tags.sh </dev/null) || tags=""
+          [[ $tags =~ ^lang=(csharp|go|rust)(,(csharp|go|rust))*$ ]] || tags="lang=csharp,go,rust"
           echo "lessons: $tags"
           echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
 

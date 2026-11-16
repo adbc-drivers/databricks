@@ -25,10 +25,10 @@
 #     bot's own fix PRs, or a maintainer applies it to a human PR)
 #
 # Self-contained (a cross-org `uses:` of the hub's internal composite action does
-# NOT work) — installs the engine via the PAT + the Claude SDK/CLI inline.
+# NOT work) — installs the engine with an App token + the Claude SDK/CLI inline.
 # Supply-chain pin: ENGINE_REF in the install step is pinned to an immutable commit SHA
 # (never @main); claude-agent-sdk / @anthropic-ai/claude-code are unpinned to match the hub.
-# When the engine repo goes public, drop the PAT (anonymous install) but keep ENGINE_REF pinned.
+# When the engine repo goes public, drop the App token (anonymous install) but keep ENGINE_REF pinned.
 name: Engineer Bot — Follow-up
 
 on:
@@ -249,8 +249,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files=""
-          # An older PR branch may not have the script yet: fall back to every language.
-          tags=$(printf '%s\n' "$files" | .github/scripts/lesson-tags.sh) || tags="lang=csharp,go,rust"
+          # The script comes from the PR checkout: run it with an empty environment (no
+          # token) and accept only a well-formed value. A missing script (an older
+          # branch), a failure or anything else falls back to every language.
+          tags=$(printf '%s\n' "$files" | env -i PATH="$PATH" .github/scripts/lesson-tags.sh) || tags=""
+          [[ $tags =~ ^lang=(csharp|go|rust)(,(csharp|go|rust))*$ ]] || tags="lang=csharp,go,rust"
           echo "lessons: $tags"
           echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
 
