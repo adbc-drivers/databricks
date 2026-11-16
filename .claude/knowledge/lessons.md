@@ -5,7 +5,7 @@
 ## SEA metadata
 - L-0001 (1×, #593): On SEA a match-all catalog `%`/`*` means all catalogs only when escape_pattern_wildcards is off; with escaping on, treat it literally (empty result), as Thrift does.
 - L-0002 (1×, #604): When putting a LIKE glob into a single-quoted SQL literal, double every backslash: the string parser strips one layer before LIKE sees the pattern.
-- L-0003 (1×, #622): Read metadata identifier columns (TABLE_CAT/SCHEM/NAME) from the server response to keep stored casing; fall back to input args only when the server omits them.
+- L-0003 (1×, #622): Read metadata identifier columns (TABLE_CAT, TABLE_SCHEM, TABLE_NAME) from the server response to keep stored casing; fall back to input args only when the server omits them.
 - L-0004 (1×, #609): For client-side metadata arg validation, use a public validating wrapper over a non-throwing internal core; check ShouldReturnEmptyPKFKResult first, in every sibling PK/FK method.
 - L-0005 (1×, #626): getTables: tableTypes=null means all types and [] means none; fix all four surfaces together (GetObjects and the gettables shim, on Thrift and SEA).
 - L-0006 (1×, #626): The vendored hiveserver2 base treats an empty tableTypes list as all types; on Thrift enforce empty-means-none with an unmatchable plain-ASCII sentinel type.
