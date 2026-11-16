@@ -82,15 +82,10 @@ author:
     issue_number: ISSUE_NUMBER
     issue_title:  ISSUE_TITLE
     issue_body:   ISSUE_BODY
-  # Learning log: .claude/knowledge/learning.md. Now that the daily retrospective
-  # is wired (see the `retrospective:` block below), it will GROW automatically, so
-  # we pin author.knowledge_log to it explicitly: this delivers the log to the
-  # author phase NEWEST-first and byte-capped (vs. the conventions glob, which
-  # delivers .claude/knowledge/**/*.md oldest-first) — the right ordering once the
-  # log outgrows the cap and recent lessons matter most. MUST match
-  # retrospective.log_path below (write half ↔ read half). Both bots still also
-  # auto-read the file via their conventions readers, so this is purely about
-  # ordering/capping, not enablement.
+  # Legacy learning-log key. In distill mode (the `retrospective:` block below) the
+  # engine ignores it for delivery: every bot session gets the matching lessons from
+  # retrospective.lessons_path, and the conventions readers skip the archive, the
+  # journal and the lessons file. Kept pointing at the frozen archive (log_path).
   knowledge_log: .claude/knowledge/learning.md
 
 # Follow-up phase (engineer-bot-followup.yml): NO config block. The engine reads
@@ -104,12 +99,14 @@ author:
 # test" instruction and forces a {outcome, reason, red_green_tests} result.
 flow: bug-fix
 
-# Daily-cron learning extraction (retrospective flow). Run by engineer-bot-learning.yml
+# Daily-cron learning (retrospective flow, distill mode). Run by engineer-bot-learning.yaml
 # via `python -m databricks_bot_engine.engineer_bot.retrospective`: over an adaptive
-# look-back window the engine ITSELF gathers merged PRs (diff + review comments) AND
-# recent engineer-bot author-run logs, and if the model finds durable learnings opens
-# ONE rolling PR appending a dated section to log_path. Human-gated — never commits the
-# canonical log directly. Omitting this block makes the retrospective a no-op.
+# look-back window the engine gathers merged PRs (diff, review history, commit
+# messages), engineer-bot author-run logs, mistakes, run struggles and open bot-PR
+# activity. Each run adds ONE new journal file and distills the journal into
+# lessons_path, in ONE rolling learning PR. Every bot session then gets only the
+# lessons that match its phase. Human-gated: never commits to main directly.
+# Omitting this block makes the retrospective a no-op.
 #
 # No `system_prompt` override: the engine ships the authoritative batch-aware base
 # (engineer_prompts.RETRO_SYSTEM_PROMPT). No `context_files` — the daily-cron engine
@@ -118,7 +115,29 @@ flow: bug-fix
 # `ai/bugfix-` fix-branch prefix); the rolling PR lands on the derived stable branch
 # `ai/learning-pr`.
 retrospective:
-  log_path: .claude/knowledge/learning.md   # MUST match author.knowledge_log above (the EXISTING log)
+  log_mode: distill
+  # Frozen archive of the old append-only log: never written, never injected. Its
+  # durable rules were distilled by hand into lessons_path when this was switched on.
+  log_path: .claude/knowledge/learning.md
+  # Daily journal files (YYYY-MM-DD.md, YYYY-MM-DD-N.md). The learning-PR guard only
+  # lets a learning PR ADD files here; existing files and log_path are frozen.
+  journal_dir: .claude/knowledge/journal
+  # The distilled lessons. Sessions get every lesson matching their phase and
+  # language; untagged lessons are shared by every language.
+  lessons_path: .claude/knowledge/lessons.md
+  # Lesson tag keys besides phase. The distiller may use only these, and the
+  # learning-PR guard rejects anything else. Each bot job declares its languages in
+  # LESSONS_TAGS from the PR's changed paths or the issue's labels and title
+  # (.github/scripts/lesson-tags.sh); an unclear session declares all three.
+  # Route by phase and language only, never by finer areas.
+  lesson_tags:
+    lang: [csharp, go, rust]
+  # Track C mistakes, plus run struggles and open bot-PR activity (Tracks D and E).
+  mistake_inputs: [closed_unmerged, human_commits, needs_human, run_struggles, open_pr_activity]
+  # Workflows the struggle tracks scan, besides the author workflow.
+  struggle_workflows: [engineer-bot-followup.yml]
+  # Off until the first distilled learning PR has been reviewed by a human.
+  auto_merge_learning_pr: false
   branch_prefix: ai/learning-pr-            # rolling PR lands on the derived stable branch `ai/learning-pr`
   pr_label: engineer-bot-learning
   author_workflow: engineer-bot.yaml        # Track B: which workflow's author runs to mine (NOTE: .yaml)

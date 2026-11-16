@@ -18,17 +18,17 @@
 # this workflow makes the engineer address them.
 #
 # ⚠️ DRAFT / NOT YET FUNCTIONAL. Requires (see .bot/SETUP.md):
-#   - secrets BOT_ENGINE_PAT, ENGINEER_BOT_APP_ID/PRIVATE_KEY (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
+#   - secrets ENGINEER_BOT_APP_ID/PRIVATE_KEY (App also installed on the engine repo) (DATABRICKS_HOST + DATABRICKS_TOKEN already exist in adbc CI)
 #   - the engineer-bot App's login must match `peco-engineer-bot` (the loop-guard
 #     below + .bot/config.yaml `bot_login_prefix`); rename both if your App differs
 #   - the `engineer-bot` label: PRs the bot may take over carry it (the bug-fix
 #     bot's own fix PRs, or a maintainer applies it to a human PR)
 #
 # Self-contained (a cross-org `uses:` of the hub's internal composite action does
-# NOT work) — installs the engine via the PAT + the Claude SDK/CLI inline.
+# NOT work) — installs the engine with an App token + the Claude SDK/CLI inline.
 # Supply-chain pin: ENGINE_REF in the install step is pinned to an immutable commit SHA
 # (never @main); claude-agent-sdk / @anthropic-ai/claude-code are unpinned to match the hub.
-# When the engine repo goes public, drop the PAT (anonymous install) but keep ENGINE_REF pinned.
+# When the engine repo goes public, drop the App token (anonymous install) but keep ENGINE_REF pinned.
 name: Engineer Bot — Follow-up
 
 on:
@@ -193,17 +193,31 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Install bot engine (interim PAT git-install) + Claude SDK/CLI
+      # The engine repo is private. Mint a short-lived token, read-only and scoped to
+      # ONLY that repo, from the bot App (installed on databricks/databricks-bot-engine)
+      # instead of a stored PAT: nothing to expire or rotate.
+      - name: Mint engine-scoped install token
+        id: engine-token
+        if: steps.filter.outputs.skip != 'true'
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547  # v1.12.0
+        with:
+          app-id: ${{ secrets.ENGINEER_BOT_APP_ID }}
+          private-key: ${{ secrets.ENGINEER_BOT_PRIVATE_KEY }}
+          owner: databricks
+          repositories: databricks-bot-engine
+          permission-contents: read
+
+      - name: Install bot engine (App-token git-install) + Claude SDK/CLI
         if: steps.filter.outputs.skip != 'true'
         env:
-          ENGINE_PAT: ${{ secrets.BOT_ENGINE_PAT }}
+          ENGINE_PAT: ${{ steps.engine-token.outputs.token }}
           # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
           # install from the force-pushable `@main` ref in a secret-bearing job. Bump
           # ENGINE_REF to adopt engine changes (prefer a release tag once the engine
           # repo cuts one). claude-agent-sdk / @anthropic-ai/claude-code are left
           # unpinned to match the hub (databricks-driver-test); pin them to exact
           # versions here if you want full reproducibility.
-          ENGINE_REF: d05dcb113332401b4aee8d6aa05c7107399ad44f
+          ENGINE_REF: 20ae0729b0d834e6832e8bdcf0c4472a6e6a83fb
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
@@ -224,6 +238,28 @@ jobs:
       # paths). TRIGGER_COMMENT_ID is the only comment-derived var — empty on the
       # labeled path, which is intentional (followup.py treats it as logging-only;
       # it always runs catch-up mode and re-scans the PR for unaddressed threads).
+      # Lessons are tagged by driver language (retrospective.lesson_tags): declare the
+      # languages this PR touches so the session gets only those lessons plus the
+      # shared ones. A PR touching no driver directory (or a failed lookup) gets all.
+      - name: Pick lesson languages
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files=""
+          # Run the BASE branch's copy of the script (fetched through the API), never the
+          # PR's, with an empty environment, and accept only a well-formed value. A base
+          # without the script, a failure or anything else falls back to every language.
+          script=$(gh api "repos/$REPO/contents/.github/scripts/lesson-tags.sh?ref=$BASE_SHA" \
+            --jq .content | base64 -d) || script=""
+          tags=$(printf '%s\n' "$files" | env -i PATH="$PATH" bash -c "$script") || tags=""
+          [[ $tags =~ ^lang=(csharp|go|rust)(,(csharp|go|rust))*$ ]] || tags="lang=csharp,go,rust"
+          echo "lessons: $tags"
+          echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
+
       - name: Run engineer-bot follow-up
         if: steps.filter.outputs.skip != 'true'
         env:
