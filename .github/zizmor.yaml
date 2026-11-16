@@ -20,7 +20,7 @@ rules:
       - engineer-bot-learning.yaml:120
       - engineer-bot.yaml:164
       - reviewer-bot-followup.yml:208
-      - reviewer-bot.yml:115
+      - reviewer-bot.yml:128
   artipacked:
     ignore:
       - benchmarks.yml:60
