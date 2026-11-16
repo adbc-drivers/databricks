@@ -94,3 +94,39 @@ func TestAuthTypeOption(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", got)
 }
+
+func TestOAuthScopesOption(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+
+	got, err := db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "", got)
+
+	// Commas and any whitespace, including a CRLF line ending, separate scopes.
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "sql, offline_access\r\n"))
+	require.Equal(t, []string{"sql", "offline_access"}, db.oauthScopes)
+	got, err = db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "sql offline_access", got)
+
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, ""))
+	require.Empty(t, db.oauthScopes)
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "  "))
+	require.Empty(t, db.oauthScopes)
+
+	// A bad value is rejected and leaves the existing setting alone.
+	require.NoError(t, db.SetOption(ctx, OptionOAuthScopes, "sql"))
+	err = db.SetOption(ctx, OptionOAuthScopes, `sql "quoted"`)
+	require.ErrorContains(t, err, "invalid OAuth scope")
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	// Only separators is rejected too, and leaves the setting alone.
+	err = db.SetOption(ctx, OptionOAuthScopes, ",,,")
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	got, err = db.GetOption(ctx, OptionOAuthScopes)
+	require.NoError(t, err)
+	require.Equal(t, "sql", got)
+}
