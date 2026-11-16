@@ -46,6 +46,18 @@ else
       go/*) add go ;;
       rust/*) add rust ;;
     esac
+    # Language-specific files that live outside the driver dirs (CI scripts,
+    # per-language workflows). Match distinctive tokens so e.g. a PR touching
+    # go/ plus ci/scripts/csharp_test.sh still gets csharp lessons too.
+    case "$path" in
+      *csharp*|*dotnet*) add csharp ;;
+    esac
+    case "$path" in
+      *rust*) add rust ;;
+    esac
+    case "$path" in
+      *.go|*/go.mod|*/go.sum|go.mod|go.sum|*/go_*|go_*|*/go-*|go-*) add go ;;
+    esac
   done
 fi
 
