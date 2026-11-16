@@ -2,7 +2,7 @@
 
 <!-- distilled-through: none -->
 
-## SEA metadata
+## SEA metadata [lang=csharp]
 - L-0001 (1×, #593): On SEA a match-all catalog `%`/`*` means all catalogs only when escape_pattern_wildcards is off; with escaping on, treat it literally (empty result), as Thrift does.
 - L-0002 (1×, #604): When putting a LIKE glob into a single-quoted SQL literal, double every backslash: the string parser strips one layer before LIKE sees the pattern.
 - L-0003 (1×, #622): Read metadata identifier columns (TABLE_CAT, TABLE_SCHEM, TABLE_NAME) from the server response to keep stored casing; fall back to input args only when the server omits them.
@@ -18,14 +18,14 @@
 - L-0013 (1×, #627): For unmodeled server types derive BASE_TYPE_NAME via the shared parser's stripped-base-name fallback (geometry(0) to GEOMETRY) so SEA and Thrift match; check Databricks aliases first.
 - L-0014 (1×, #760): With multi-catalog on, GetColumns on the SPARK catalog scans the whole metastore; scope E2E metadata tests to the per-run table (ApacheParameters.TableName).
 
-## Cross-protocol parity
+## Cross-protocol parity [lang=csharp]
 - L-0015 (3×, #628 #609 #604): Error parity is on AdbcStatusCode + SqlState, not the exception type: classify execute errors on base AdbcException (Thrift throws HiveServer2Exception, SEA DatabricksException).
 - L-0016 (1×, #604): On SEA, AdbcException.SqlState is often null: check SqlState first, then scan the message for "SQLSTATE: NNNNN".
 - L-0017 (1×, #636): A FAILED SEA response carries sql_state at the status level, beside `error` (which holds only error_code and message); mirror that shape in test fixtures.
 - L-0018 (1×, #767): CloudFetch reading differs by protocol (Thrift per-file limits, SEA manifest TotalRowCount): run large or boundary CloudFetch E2E on both the thrift and rest legs.
 - L-0019 (1×, #593): E2E runs default to Thrift; to reproduce a SEA-only bug, force `adbc.databricks.protocol=rest` on the connection.
 
-## SEA execution and results
+## SEA execution and results [lang=csharp]
 - L-0020 (1×, #635): On SEA, ExecuteStatementAsync can return PENDING/RUNNING without running the statement; poll to SUCCEEDED before relying on its side effect (direct-results E2E won't catch it).
 - L-0021 (1×, #635): The server ignores a per-statement catalog; scope a bare schema.table by issuing USE CATALOG on the session, on change, like the ODBC and JDBC drivers.
 - L-0022 (1×, #635): Session state (USE CATALOG, SET) is shared by every statement on a connection; never assume per-statement isolation, and expect an in-memory tracker to go stale.
@@ -36,14 +36,14 @@
 - L-0027 (1×, #693): JsonSerializer.Deserialize over bytes assumes UTF-8 and keeps a BOM, unlike the string and stream paths; use it only for raw UTF-8, or skip a leading BOM first.
 - L-0028 (1×, #678): AutomaticDecompression=None also drops Accept-Encoding; send `Accept-Encoding: identity` explicitly, and scope the change to the one client that needs it.
 
-## CloudFetch and streams
+## CloudFetch and streams [lang=csharp]
 - L-0029 (3×, #770 #764): With concatenated LZ4 frames (K4os) a 0 read before the input's end is a frame boundary: read while Position < Length, require a seekable stream, guard no-progress; recheck on upgrades.
 - L-0030 (3×, #770 #767 #764): .NET Framework CopyTo reads 81,920 bytes, .NET 8 131,072: test read-boundary code with explicit buffer sizes, and run CloudFetch on net472 (Power BI and the gateway use it).
 - L-0031 (1×, #764): A cancel while awaiting the next file can return null like end-of-results; gate row-shortfall and completeness checks on !cancellationToken.IsCancellationRequested.
 - L-0032 (1×, #623): Sequential CloudFetch fallback changes scheduling only, not straggler cancellation: never assert zero cancellations; wait for end-of-results and assert completeness, not a sleep.
 - L-0033 (1×, #681): UnobservedTaskException fires only for faulted tasks, not canceled ones; observe an abandoned prefetch task on the fault path that runs in production, not in an unused Dispose.
 
-## .NET tests
+## .NET tests [lang=csharp]
 - L-0034 (2×, #628 #614): Don't detect leaks with GC.GetTotalMemory deltas over large buffers (the LOH keeps a high-water mark); assert a WeakReference dies after dispose and a full GC, or compact the LOH.
 - L-0035 (1×, #614): Create and dispose a WeakReference-tracked object inside a returned [MethodImpl(NoInlining)] helper; the Debug JIT keeps locals rooted until the method returns.
 - L-0036 (1×, #628): Before a concurrent E2E burst, warm the session with one serial query (bounded retry); tolerate only the precise cold-start transient (BAD_REQUEST sparkSession is null), bounded.
@@ -58,7 +58,7 @@
 - L-0045 (1×, #509): When replacing a reflection serializer with a hand-written one, add a round-trip test against the reflection output and a Debug.Assert in the switch's default arm.
 - L-0046 (1×, #509): Utf8JsonWriter.WriteRawValue needs a valid JSON token; use WriteStringValue for quoted values such as times, and WriteRawValue only for raw numbers.
 
-## Connections, caches and resources
+## Connections, caches and resources [lang=csharp]
 - L-0047 (1×, #618): Cleanup RPCs in Dispose (e.g. CloseOperation) are best effort: record the error, never rethrow out of Dispose.
 - L-0048 (1×, #656): Key a per-connect fetch lock per host, not process-wide, so cold connects to different hosts don't queue; dedup same-host fetches with a post-lock double check.
 - L-0049 (1×, #656): A per-key lock map beside a cache must TryRemove its entry in the eviction callback (don't Dispose it: holders may still use it), or it grows forever.
@@ -75,11 +75,11 @@
 - L-0060 (1×, #701): Record statement telemetry success only after every post-processing step that can throw, or a later throw records both success and error.
 - L-0061 (1×, #760): When racing a non-cancelable task against Task.Delay, cancel the delay's CTS on success and observe the abandoned task's fault on timeout.
 
-## Result contract
-- L-0062 (1×, #700): A flag that changes an existing column's Arrow wire type is a breaking change: default it off (opt-in), like the sibling flags and the ODBC/JDBC drivers.
+## Result contract [lang=csharp]
+- L-0062 [all] (1×, #700): A flag that changes an existing column's Arrow wire type is a breaking change: default it off (opt-in), like the sibling flags and the ODBC/JDBC drivers.
 - L-0063 (1×, #699): Geospatial: ISO WKB for a fixed SRID, EWKB for ANY-SRID (a known geoarrow.wkb deviation; GDAL rejects it). GEOGRAPHY allows only SRID 4326 or ANY; GEOMETRY any nonnegative SRID.
 
-## Go driver
+## Go driver [lang=go]
 - L-0064 (1×, #686): arrow.Schema.Equal compares field names and metadata; to check per-row schema compatibility compare column count and types, and emit typed nulls.
 - L-0065 (1×, #686): Spark SQL backtick identifiers escape a backtick by doubling it, never with a backslash; scope backslash escaping in SQL scanners to string literals.
 - L-0066 (1×, #686): The Go driver ignores connector options on the URI/DSN path; apply connection fixes to both the option and the DSN key, and test that the DSN key takes effect.
@@ -96,6 +96,6 @@
 - L-0075 (1×, #723): In pixi.lock the digest in the PyPI URL path is BLAKE2b, not the sha256 field; regenerate with `pixi update <pkg>`, never copy it.
 - L-0076 (1×, #767): zizmor ignores are anchored by file:line; after changing a workflow's line count, regenerate the anchors and verify offline (actionlint doesn't check them).
 
-## Finding things in this repo [phase=author,followup]
+## Finding things in this repo [phase=author,followup; lang=csharp]
 - L-0077 (1×, log:2026-08-12): The csharp test project is csharp/test/AdbcDrivers.Databricks.Tests.csproj; glob csharp/test/*.csproj before running dotnet test.
 - L-0078 (1×, log:2026-09-17): ADBC base classes come from the Apache.Arrow.Adbc NuGet pinned in csharp/Directory.Packages.props; read them from apache/arrow-adbc at the matching tag, not locally.

@@ -208,6 +208,22 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           echo "$RUNNER_TEMP/npm-global/bin" >> "$GITHUB_PATH"
 
+      # Lessons are tagged by driver language (retrospective.lesson_tags): declare the
+      # languages this PR touches so the session gets only those lessons plus the
+      # shared ones. A PR touching no driver directory (or a failed lookup) gets all.
+      - name: Pick lesson languages
+        if: steps.filter.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename') || files=""
+          # An older PR branch may not have the script yet: fall back to every language.
+          tags=$(printf '%s\n' "$files" | .github/scripts/lesson-tags.sh) || tags="lang=csharp,go,rust"
+          echo "lessons: $tags"
+          echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
+
       - name: Run follow-up agent
         if: steps.filter.outputs.skip != 'true'
         env:

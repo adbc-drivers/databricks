@@ -122,9 +122,16 @@ retrospective:
   # Daily journal files (YYYY-MM-DD.md, YYYY-MM-DD-N.md). The learning-PR guard only
   # lets a learning PR ADD files here; existing files and log_path are frozen.
   journal_dir: .claude/knowledge/journal
-  # The distilled lessons. Sessions get every lesson matching their phase. No
-  # lesson_tags: lessons route by phase only (state the language in the rule text).
+  # The distilled lessons. Sessions get every lesson matching their phase and
+  # language; untagged lessons are shared by every language.
   lessons_path: .claude/knowledge/lessons.md
+  # Lesson tag keys besides phase. The distiller may use only these, and the
+  # learning-PR guard rejects anything else. Each bot job declares its languages in
+  # LESSONS_TAGS from the PR's changed paths or the issue's labels and title
+  # (.github/scripts/lesson-tags.sh); an unclear session declares all three.
+  # Route by phase and language only, never by finer areas.
+  lesson_tags:
+    lang: [csharp, go, rust]
   # Track C mistakes, plus run struggles and open bot-PR activity (Tracks D and E).
   mistake_inputs: [closed_unmerged, human_commits, needs_human, run_struggles, open_pr_activity]
   # Workflows the struggle tracks scan, besides the author workflow.

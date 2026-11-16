@@ -208,6 +208,18 @@ jobs:
           EOF
           echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> "$GITHUB_ENV"
 
+      # Lessons are tagged by driver language (retrospective.lesson_tags): declare the
+      # issue's language (labels `.NET`/`go`/`rust`, or the title) so the session gets
+      # only those lessons plus the shared ones. An issue with no clear language gets all.
+      - name: Pick lesson languages
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: |
+          tags=$(.github/scripts/lesson-tags.sh </dev/null) || tags="lang=csharp,go,rust"
+          echo "lessons: $tags"
+          echo "LESSONS_TAGS=$tags" >> "$GITHUB_ENV"
+
       - name: Run bug-fix author
         id: author
         env:
