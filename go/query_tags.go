@@ -151,11 +151,8 @@ func (s *statementImpl) setQueryTag(name, value string) error {
 	return nil
 }
 
-// tag returns the connection's tag for name. It is safe to call on a nil connection.
+// tag returns the connection's tag for name.
 func (c *connectionImpl) tag(name string) (string, bool) {
-	if c == nil {
-		return "", false
-	}
 	c.queryTagsMu.RLock()
 	defer c.queryTagsMu.RUnlock()
 	v, ok := c.queryTags[name]
@@ -165,33 +162,25 @@ func (c *connectionImpl) tag(name string) (string, bool) {
 // tagCount is the number of tags a statement would send if it also set name:
 // the connection's tags and the statement's overrides, counted by name.
 func (c *connectionImpl) tagCount(overrides map[string]string, name string) int {
-	n := len(overrides)
-	_, known := overrides[name]
-	if c != nil {
-		c.queryTagsMu.RLock()
-		defer c.queryTagsMu.RUnlock()
-		n = len(c.queryTags)
-		for k := range overrides {
-			if _, ok := c.queryTags[k]; !ok {
-				n++
-			}
-		}
-		if _, ok := c.queryTags[name]; ok {
-			known = true
+	c.queryTagsMu.RLock()
+	defer c.queryTagsMu.RUnlock()
+	n := len(c.queryTags)
+	for k := range overrides {
+		if _, ok := c.queryTags[k]; !ok {
+			n++
 		}
 	}
-	if !known {
-		n++
+	if _, known := c.queryTags[name]; !known {
+		if _, overridden := overrides[name]; !overridden {
+			n++
+		}
 	}
 	return n
 }
 
 // mergedTags is the connection's tags with overrides on top, as a new map, or nil
-// when there are none. It is safe to call on a nil connection.
+// when there are none.
 func (c *connectionImpl) mergedTags(overrides map[string]string) map[string]string {
-	if c == nil {
-		return mergeQueryTags(nil, overrides)
-	}
 	c.queryTagsMu.RLock()
 	defer c.queryTagsMu.RUnlock()
 	return mergeQueryTags(c.queryTags, overrides)
