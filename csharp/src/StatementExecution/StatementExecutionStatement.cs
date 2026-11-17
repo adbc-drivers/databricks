@@ -655,8 +655,31 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // No data rows (e.g. DDL): manifest may have columns_count=0.
                 // Fall back to an empty schema rather than throwing so DDL statements succeed.
                 Schema schema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
-                return new EmptyArrowArrayStream(schema);
+                return CreateEmptyResultStream(schema, response.Manifest?.TotalRowCount ?? 0, RowCountShortfall.IsFailEnabled(_properties));
             }
+        }
+
+        /// <summary>
+        /// Returns the stream for a response with no inline attachment and no external links. If the manifest
+        /// still declares rows, every one of them is missing: that is recorded as a shortfall, and fails the read
+        /// when adbc.databricks.fail_on_row_count_mismatch is enabled. Statements with no rows (e.g. DDL) declare 0.
+        /// </summary>
+        internal static IArrowArrayStream CreateEmptyResultStream(Schema schema, long declaredRowCount, bool failOnRowCountMismatch)
+        {
+            if (declaredRowCount > 0)
+            {
+                Activity.Current?.AddEvent(new ActivityEvent("inline_reader.row_count_shortfall",
+                    tags: new ActivityTagsCollection
+                    {
+                        { "expected_rows", declaredRowCount },
+                        { "rows_read", 0L }
+                    }));
+                if (failOnRowCountMismatch)
+                {
+                    throw RowCountShortfall.CreateException(declaredRowCount, 0);
+                }
+            }
+            return new EmptyArrowArrayStream(schema);
         }
 
         /// <summary>

@@ -217,6 +217,9 @@ namespace AdbcDrivers.Databricks.Reader
                         new("batch_index", this.index)
                     ]);
                     this.index++;
+                    // No data although the batch may declare rows: all of them are missing. Advanced first,
+                    // so a shortfall that throws isn't counted again on the next read.
+                    CheckBatchRowCount(activity);
                     return;
                 }
 

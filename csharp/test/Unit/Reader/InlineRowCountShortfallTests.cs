@@ -74,7 +74,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader
                 HasMoreRows = false,
                 Results = new TRowSet
                 {
-                    ArrowBatches = batches.Select(b => new TSparkArrowBatch { Batch = RecordBatchMessage(b.Actual), RowCount = b.Declared }).ToList()
+                    // Actual < 0 sends the batch with no payload.
+                    ArrowBatches = batches.Select(b => new TSparkArrowBatch { Batch = b.Actual < 0 ? new byte[0] : RecordBatchMessage(b.Actual), RowCount = b.Declared }).ToList()
                 }
             };
             return new DatabricksReader(statement.Object, TestSchema, new Mock<IResponse>().Object, initialResults,
@@ -85,6 +86,8 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader
         [InlineData(100, 100, 50, 30, 130, 20)] // second batch short of its RowCount
         [InlineData(100, 100, 50, 80, 150, 0)]  // excess rows beyond RowCount are trimmed, not a shortfall
         [InlineData(0, 40, 50, 50, 90, 0)]      // RowCount 0 means unknown: not checked
+        [InlineData(100, 100, 50, -1, 100, 50)] // batch declares rows but has no payload: all of them are missing
+        [InlineData(100, 100, 0, -1, 100, 0)]   // empty batch declaring no rows: nothing missing
         public async Task ThriftInline_FlagOff_RecordsShortfallWithoutThrowing(
             long declared1, int actual1, long declared2, int actual2, long expectedRows, long expectedShortfall)
         {
@@ -107,6 +110,17 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader
             Assert.Equal(20, reader.RowCountShortfall);
             Assert.Null(await reader.ReadNextRecordBatchAsync()); // not counted or thrown twice
             Assert.Equal(20, reader.RowCountShortfall);
+        }
+
+        [Fact]
+        public async Task ThriftInline_FlagOn_EmptyBatchWithDeclaredRows_Throws()
+        {
+            using var reader = CreateThriftInlineReader(true, (100, 100), (50, -1));
+
+            var ex = await Assert.ThrowsAsync<DatabricksException>(() => CloudFetchReaderRowCountShortfallTests.DrainAsync(reader));
+            Assert.Contains("expected 50, read 0", ex.Message);
+            Assert.Null(await reader.ReadNextRecordBatchAsync()); // not counted or thrown twice
+            Assert.Equal(50, reader.RowCountShortfall);
         }
 
         [Fact]
@@ -174,6 +188,25 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader
 
             Assert.Equal(100, await CloudFetchReaderRowCountShortfallTests.DrainAsync(reader));
             Assert.Equal(0, reader.RowCountShortfall);
+        }
+
+        [Fact]
+        public async Task SeaNoAttachment_DeclaredRows_ThrowsWhenEnabled()
+        {
+            // Manifest declares rows but the response has no attachment and no external links.
+            var ex = Assert.Throws<DatabricksException>(() => StatementExecutionStatement.CreateEmptyResultStream(TestSchema, 1_000, true));
+            Assert.Contains("expected 1000, read 0", ex.Message);
+
+            using var reportOnly = StatementExecutionStatement.CreateEmptyResultStream(TestSchema, 1_000, false);
+            Assert.Null(await reportOnly.ReadNextRecordBatchAsync());
+        }
+
+        [Fact]
+        public async Task SeaNoAttachment_NoDeclaredRows_DoesNotThrow()
+        {
+            // e.g. DDL: no rows declared.
+            using var stream = StatementExecutionStatement.CreateEmptyResultStream(TestSchema, 0, true);
+            Assert.Null(await stream.ReadNextRecordBatchAsync());
         }
 
         [Fact]
