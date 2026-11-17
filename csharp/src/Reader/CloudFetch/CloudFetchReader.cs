@@ -152,11 +152,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                         {
                             // This file's Arrow stream ended. Thrift (per-file limiting): check it against its link RowCount.
                             // SEA (global limiting) doesn't track per-file rows, so it is checked once at "no more files" below.
-                            long chunkExpectedRows = _currentChunkExpectedRows;
-                            long chunkRowsRead = _currentChunkRowsRead;
-                            // Clean up first, so a shortfall that throws doesn't leave this file open or count it twice.
+                            if (_totalExpectedRows <= 0) RecordRowShortfall(_currentChunkExpectedRows, _currentChunkRowsRead);
+                            // Clean up the current reader and download result
                             CleanupCurrentReaderAndDownloadResult();
-                            if (_totalExpectedRows <= 0) RecordRowShortfall(chunkExpectedRows, chunkRowsRead, "in one result file");
                         }
                     }
 
@@ -174,13 +172,15 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                     new("total_expected_rows", _totalExpectedRows),
                                     new("current_chunk_rows_read", _currentChunkRowsRead)
                                 ]);
+                                // A cancelled read also ends here (null file); that is not lost rows.
+                                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
+                                    RecordRowShortfall(_totalExpectedRows, _rowsRead);
                                 // Snapshot metrics before disposing the download manager
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
                                 this.downloadManager = null;
-                                // No more files. The SEA total is checked after the loop, outside this try, so a
-                                // shortfall isn't logged as a file-fetch error by the catch below.
-                                break;
+                                // No more files
+                                return null;
                             }
 
                             // Set up chunk-level row count tracking
@@ -232,12 +232,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     // If we get here, there are no more files
                     return null;
                 }
-
-                // The last file was just read. A cancelled read also ends there (null file); that is not lost rows.
-                // Checked after disposal, so a shortfall that throws leaves nothing to clean up.
-                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
-                    RecordRowShortfall(_totalExpectedRows, _rowsRead, "in total");
-                return null;
             });
         }
 
@@ -352,9 +346,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             return metrics;
         }
 
-        // Rows the server declared but the decoded files did not deliver. Always recorded for telemetry;
-        // fails the read only when adbc.databricks.fail_on_row_count_mismatch is enabled.
-        private void RecordRowShortfall(long expectedRows, long rowsRead, string scope)
+        // ES-2356918: rows the server declared but the decoded files did not deliver. Always recorded; fails the read
+        // only when adbc.databricks.fail_on_row_count_mismatch is enabled. The error is kept and rethrown by every
+        // later read, so neither a partial result nor a second count of the same shortfall can follow it.
+        private void RecordRowShortfall(long expectedRows, long rowsRead)
         {
             if (rowsRead >= expectedRows) return;
             _rowCountShortfall += expectedRows - rowsRead;
@@ -365,7 +360,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             if (_failOnRowCountMismatch)
             {
                 _rowCountMismatchError = new DatabricksException(
-                    $"CloudFetch result has fewer rows than the server declared ({scope}): expected {expectedRows}, read {rowsRead}. " +
+                    $"CloudFetch result has fewer rows than the server declared ({(_totalExpectedRows > 0 ? "in total" : "in one result file")}): " +
+                    $"expected {expectedRows}, read {rowsRead}. " +
                     $"Set {DatabricksParameters.FailOnRowCountMismatch}=false to return the partial result instead.",
                     AdbcStatusCode.InvalidData);
                 throw _rowCountMismatchError;

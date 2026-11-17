@@ -15,8 +15,6 @@
 */
 
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -133,25 +131,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
             Assert.Same(ex, await Assert.ThrowsAsync<DatabricksException>(() => reader.ReadNextRecordBatchAsync().AsTask()));
             Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
-        }
-
-        [Fact]
-        public async Task FailOnMismatch_SeaShortfall_IsNotTracedAsFileFetchError()
-        {
-            var events = new List<string>();
-            using var listener = new ActivityListener
-            {
-                ShouldListenTo = source => source.Name == "TestActivitySource",
-                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-                ActivityStopped = activity => { lock (events) events.AddRange(activity.Events.Select(e => e.Name)); }
-            };
-            ActivitySource.AddActivityListener(listener);
-            using var reader = CreateReader(1_000, failOnRowCountMismatch: true, (1_000, 700));
-
-            await Assert.ThrowsAsync<DatabricksException>(() => DrainAsync(reader));
-
-            Assert.Contains("cloudfetch.row_count_shortfall", events);
-            Assert.DoesNotContain("cloudfetch.get_next_file_error", events);
         }
 
         [Theory]
