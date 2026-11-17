@@ -37,13 +37,14 @@ type authField struct {
 	value  func(d *databaseImpl) string
 }
 
-// loginMethod is one way to authenticate: the options it requires and how it
-// configures the SQL driver. Adding a method means adding one
+// loginMethod is one way to authenticate: the options it requires and may
+// take, and how it configures the SQL driver. Adding a method means adding one
 // entry to loginMethods, keyed by its auth_type value. A method either builds
 // its own connection option (build) or is a credential of the Databricks SDK
 // (sdk).
 type loginMethod struct {
 	required []authField
+	optional []string
 	build    func(d *databaseImpl) dbsql.ConnOption
 	sdk      *sdkLogin
 }
@@ -72,6 +73,7 @@ var loginMethods = map[string]loginMethod{
 			{OptionOAuthClientID, "client ID", func(d *databaseImpl) string { return d.oauthClientID }},
 			{OptionOAuthClientSecret, "client secret", func(d *databaseImpl) string { return d.oauthClientSecret }},
 		},
+		optional: []string{OptionOAuthScopes},
 		build: func(d *databaseImpl) dbsql.ConnOption {
 			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
 		},
@@ -83,6 +85,7 @@ var loginMethods = map[string]loginMethod{
 		required: []authField{
 			{OptionOIDCClientID, "client ID", func(d *databaseImpl) string { return d.oidcClientID }},
 		},
+		optional: []string{OptionOIDCTokenFilepath},
 		sdk: &sdkLogin{
 			credentials: func(d *databaseImpl) sdkconfig.CredentialsStrategy {
 				if d.oidcTokenFilepath != "" {
