@@ -128,6 +128,15 @@ Examples:
 
   If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
 
+### Query Options
+
+`databricks.query.query_tag.<name>`
+: **Values:** a string, which may be empty. **Default:** (not set)
+
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. May be set at the database, connection or statement level, and a tag set at a more specific level overrides one of the same name set at a less specific level. Reading a tag that is not set returns `NOT_FOUND`.
+
+  Names and values may be at most 128 characters, counted in UTF-16 code units. Names must not be empty or contain `,` `:` `-` `/` `=` or `.`. At most 20 tags are allowed. A tag that breaks these limits is rejected with `INVALID_ARGUMENT`. Names starting with `@@` are reserved by Databricks and passed through unchanged.
+
 ## Feature & Type Support
 
 {{ features|safe }}
