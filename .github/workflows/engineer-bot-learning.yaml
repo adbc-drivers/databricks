@@ -108,7 +108,7 @@ jobs:
           ENGINE_PAT: ${{ steps.engine-token.outputs.token }}
           # SUPPLY-CHAIN PIN: immutable commit SHA — never @main in a secret-bearing
           # job. Bump to adopt engine changes; keep in lockstep with the other bots.
-          ENGINE_REF: 20ae0729b0d834e6832e8bdcf0c4472a6e6a83fb
+          ENGINE_REF: b160874d6e03886c2846ee4d590b2184641ad37b  # ahead of the other bots on purpose: retrospective.pr_title needs it
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
