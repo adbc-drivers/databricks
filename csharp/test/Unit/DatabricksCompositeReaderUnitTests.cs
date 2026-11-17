@@ -461,9 +461,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         }
 
         // ES-2356918: a `using` reader is often disposed before its statement; the CloudFetch metrics
-        // (including the row-count shortfall) must still be available to statement telemetry.
+        // (including the row-count shortfall) and the CloudFetch result format must still be available
+        // to statement telemetry, or the statement is reported as INLINE_ARROW.
         [Fact]
-        public async Task GetChunkMetrics_AfterDispose_ReturnsSnapshot()
+        public async Task GetChunkMetricsAndIsCloudFetchActive_AfterDispose_StillReportCloudFetch()
         {
             var mockClient = CreateMockClient();
             mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
@@ -482,6 +483,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             reader.Dispose();
 
             Assert.Equal(875_733 - 24_576, reader.GetChunkMetrics()?.RowCountShortfall);
+            Assert.True(reader.IsCloudFetchActive);
         }
 
         public void Dispose()

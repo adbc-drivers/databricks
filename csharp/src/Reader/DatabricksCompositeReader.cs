@@ -51,6 +51,7 @@ namespace AdbcDrivers.Databricks.Reader
 
         private BaseDatabricksReader? _activeReader;
         private ChunkMetrics? _chunkMetricsSnapshot;
+        private bool _cloudFetchReaderDisposed;
         private readonly IHiveServer2Statement _statement;
         private readonly Schema _schema;
         private readonly IResponse _response;
@@ -316,6 +317,7 @@ namespace AdbcDrivers.Databricks.Reader
                                 if (_activeReader is CloudFetchReader cloudFetchReader)
                                 {
                                     _chunkMetricsSnapshot = cloudFetchReader.GetChunkMetrics();
+                                    _cloudFetchReaderDisposed = true;
                                 }
                                 _activeReader.Dispose();
                                 _activeReader = null;
@@ -404,8 +406,9 @@ namespace AdbcDrivers.Databricks.Reader
         /// Reflects the server's actual choice for this result set (presence of result links in the
         /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
         /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
-        /// active reader has not been initialized yet.
+        /// active reader has not been initialized yet. Stays <c>true</c> after <see cref="Dispose"/>,
+        /// because statement telemetry is often built after a <c>using</c> reader is disposed.
         /// </summary>
-        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
+        public bool IsCloudFetchActive => _activeReader is CloudFetchReader || _cloudFetchReaderDisposed;
     }
 }
