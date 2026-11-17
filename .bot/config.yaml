@@ -140,6 +140,10 @@ retrospective:
   auto_merge_learning_pr: false
   branch_prefix: ai/learning-pr-            # rolling PR lands on the derived stable branch `ai/learning-pr`
   pr_label: engineer-bot-learning
+  # The learning PR's title and commit subject. The PR-title check (adbc-drivers/dev
+  # title_check.py) only accepts Conventional Commits types, so the engine default
+  # `learn: ...` fails it.
+  pr_title: "docs: retrospective learnings"
   author_workflow: engineer-bot.yaml        # Track B: which workflow's author runs to mine (NOTE: .yaml)
 
 # ─── Reviewer bots (review / review-followup) — NOT configured here ──────────
