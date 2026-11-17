@@ -87,6 +87,10 @@ type databaseImpl struct {
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
+
+	// OIDC token federation options
+	oidcClientID      string
+	oidcTokenFilepath string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -104,7 +108,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	_, login, err := d.resolveLoginMethod()
+	loginName, login, err := d.resolveLoginMethod()
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +117,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
 		dbsql.WithArrowNativeDecimal(true),
-		login.build(d),
+		login.connOption(loginName, d),
 	}
 
 	// Validate and set custom port
@@ -143,39 +147,7 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
 	}
 
-	// TLS/SSL handling
-	// Configure a custom transport with proper timeout settings when custom
-	// TLS config is needed. These settings match the defaults from
-	// databricks-sql-go's PooledTransport to ensure reliable connections
-	// for large result set downloads.
-	if d.sslCertPool != nil || d.sslInsecure {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-
-		if d.sslCertPool != nil {
-			tlsConfig.RootCAs = d.sslCertPool
-		}
-
-		if d.sslInsecure {
-			tlsConfig.InsecureSkipVerify = true
-		}
-
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSClientConfig:       tlsConfig,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       180 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			MaxIdleConnsPerHost:   10,
-			MaxConnsPerHost:       100,
-		}
+	if transport := d.customTransport(); transport != nil {
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
 
@@ -184,6 +156,44 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 	}
 
 	return opts, nil
+}
+
+// customTransport returns the HTTP transport for the TLS settings (a custom
+// root certificate or skipping verification), or nil when there are none. It
+// has timeout settings that match the defaults from databricks-sql-go's
+// PooledTransport to ensure reliable connections for large result set
+// downloads. The SQL client and the SDK's OIDC login both use it.
+func (d *databaseImpl) customTransport() *http.Transport {
+	if d.sslCertPool == nil && !d.sslInsecure {
+		return nil
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if d.sslCertPool != nil {
+		tlsConfig.RootCAs = d.sslCertPool
+	}
+
+	if d.sslInsecure {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSClientConfig:       tlsConfig,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       180 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		MaxConnsPerHost:       100,
+	}
 }
 
 func (d *databaseImpl) resolveConnectionDSN() (string, error) {
@@ -350,6 +360,10 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return strings.Join(d.oauthScopes, " "), nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionOIDCClientID:
+		return d.oidcClientID, nil
+	case OptionOIDCTokenFilepath:
+		return d.oidcTokenFilepath, nil
 	default:
 		if name, ok := queryTagName(key); ok {
 			if v, ok := d.queryTags[name]; ok {
@@ -536,6 +550,10 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oauthScopes = scopes
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionOIDCClientID:
+		d.oidcClientID = value
+	case OptionOIDCTokenFilepath:
+		d.oidcTokenFilepath = value
 	default:
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)
