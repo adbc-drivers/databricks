@@ -118,6 +118,8 @@ Examples:
 
 ### Authentication Options
 
+The auth types, the options each one uses and the options it requires are also listed in machine-readable form in [`go/auth_contract.json`](https://github.com/adbc-drivers/databricks/blob/main/go/auth_contract.json).
+
 `databricks.auth_type`
 : **Values:** `pat`, `oauth-m2m`, `oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
 
