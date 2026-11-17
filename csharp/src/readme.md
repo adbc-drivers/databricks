@@ -119,7 +119,6 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.cloudfetch.timeout_minutes` | Timeout in minutes for HTTP operations | `5` |
 | `adbc.databricks.cloudfetch.url_expiration_buffer_seconds` | Buffer time in seconds before URL expiration to trigger refresh | `60` |
 | `adbc.databricks.cloudfetch.max_url_refresh_attempts` | Maximum number of URL refresh attempts | `3` |
-| `adbc.databricks.cloudfetch.fail_on_row_count_mismatch` | Whether reading a CloudFetch result fails when the downloaded files decode to fewer rows than the server declared (per file for Thrift, for the whole result for SEA). When `false`, the partial result is returned and the shortfall is reported in telemetry only. | `false` |
 
 ### Databricks-Specific Properties
 
@@ -138,6 +137,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
 | `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
 | `adbc.apache.connection.polltime_ms` | The time in milliseconds between each poll for query execution status. Databricks default is 100ms (Apache default: 500ms) | `100` |
+| `adbc.databricks.fail_on_row_count_mismatch` | Whether reading a result fails when it decodes to fewer rows than the server declared. When `false`, the partial result is returned and the shortfall is reported in telemetry only. Currently checked for CloudFetch results only (per file for Thrift, for the whole result for SEA). | `false` |
 
 Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
 `adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is

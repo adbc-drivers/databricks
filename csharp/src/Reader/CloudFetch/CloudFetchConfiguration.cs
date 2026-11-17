@@ -120,7 +120,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
 
         /// <summary>
         /// Whether a row-count shortfall (fewer decoded rows than the server declared) fails the read
-        /// instead of being reported only. See <see cref="DatabricksParameters.CloudFetchFailOnRowCountMismatch"/>.
+        /// instead of being reported only. See <see cref="DatabricksParameters.FailOnRowCountMismatch"/>.
         /// </summary>
         public bool FailOnRowCountMismatch { get; set; }
 
@@ -166,7 +166,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
                 UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds),
                 StragglerMitigationConfig = CloudFetchStragglerMitigationConfig.Parse(properties),
-                FailOnRowCountMismatch = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.CloudFetchFailOnRowCountMismatch, false)
+                FailOnRowCountMismatch = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.FailOnRowCountMismatch, false)
             };
 
             return config;

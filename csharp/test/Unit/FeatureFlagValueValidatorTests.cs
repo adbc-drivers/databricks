@@ -64,11 +64,11 @@ namespace AdbcDrivers.Databricks.Tests.Unit
         [InlineData("null", false)]
         [InlineData("", false)]
         [InlineData("yes", false)]
-        public void CloudFetchFailOnRowCountMismatch_IsValidatedAsBoolean(string value, bool expected)
+        public void FailOnRowCountMismatch_IsValidatedAsBoolean(string value, bool expected)
         {
             // A malformed server-side flag value must be dropped, or the strict boolean getter in
             // CloudFetchConfiguration.FromProperties throws and breaks every CloudFetch read.
-            Assert.Equal(expected, FeatureFlagValueValidator.IsAcceptable(DatabricksParameters.CloudFetchFailOnRowCountMismatch, value));
+            Assert.Equal(expected, FeatureFlagValueValidator.IsAcceptable(DatabricksParameters.FailOnRowCountMismatch, value));
         }
 
         [Theory]

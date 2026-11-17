@@ -33,7 +33,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
 {
     // When files decode to fewer rows than the server declared, the reader records the shortfall, which statement
     // telemetry reports as CloudFetchRowCountShortfall. By default it returns what it has; with
-    // adbc.databricks.cloudfetch.fail_on_row_count_mismatch=true it throws instead.
+    // adbc.databricks.fail_on_row_count_mismatch=true it throws instead.
     public class CloudFetchReaderRowCountShortfallTests
     {
         private static readonly Schema TestSchema =
@@ -124,7 +124,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             var ex = await Assert.ThrowsAsync<DatabricksException>(() => DrainAsync(reader));
             Assert.Equal(AdbcStatusCode.InvalidData, ex.Status);
             Assert.Contains($"expected {declared}, read {actual}", ex.Message);
-            Assert.Contains(DatabricksParameters.CloudFetchFailOnRowCountMismatch, ex.Message);
+            Assert.Contains(DatabricksParameters.FailOnRowCountMismatch, ex.Message);
             // Telemetry still sees the shortfall, and it isn't counted again by a later read.
             Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
             if (total > 0) Assert.Null(await reader.ReadNextRecordBatchAsync());
@@ -162,7 +162,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
         public void Configuration_FailOnRowCountMismatch_ParsesFlag(string? value, bool expected)
         {
             var properties = new Dictionary<string, string>();
-            if (value != null) properties[DatabricksParameters.CloudFetchFailOnRowCountMismatch] = value;
+            if (value != null) properties[DatabricksParameters.FailOnRowCountMismatch] = value;
 
             Assert.Equal(expected, CloudFetchConfiguration.FromProperties(properties, TestSchema, isLz4Compressed: true).FailOnRowCountMismatch);
         }
@@ -170,7 +170,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
         [Fact]
         public void Configuration_FailOnRowCountMismatch_InvalidValue_Throws()
         {
-            var properties = new Dictionary<string, string> { [DatabricksParameters.CloudFetchFailOnRowCountMismatch] = "yes" };
+            var properties = new Dictionary<string, string> { [DatabricksParameters.FailOnRowCountMismatch] = "yes" };
 
             Assert.ThrowsAny<System.ArgumentException>(() => CloudFetchConfiguration.FromProperties(properties, TestSchema, isLz4Compressed: true));
         }

@@ -346,7 +346,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         // Rows the server declared but the decoded files did not deliver. Always recorded for telemetry;
-        // fails the read only when adbc.databricks.cloudfetch.fail_on_row_count_mismatch is enabled.
+        // fails the read only when adbc.databricks.fail_on_row_count_mismatch is enabled.
         private void RecordRowShortfall(long expectedRows, long rowsRead)
         {
             if (rowsRead >= expectedRows) return;
@@ -359,7 +359,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             {
                 throw new DatabricksException(
                     $"CloudFetch result has fewer rows than the server declared: expected {expectedRows}, read {rowsRead}. " +
-                    $"Set {DatabricksParameters.CloudFetchFailOnRowCountMismatch}=false to return the partial result instead.",
+                    $"Set {DatabricksParameters.FailOnRowCountMismatch}=false to return the partial result instead.",
                     AdbcStatusCode.InvalidData);
             }
         }
