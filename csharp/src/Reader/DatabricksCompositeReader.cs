@@ -204,8 +204,7 @@ namespace AdbcDrivers.Databricks.Reader
         /// <returns>A new DatabricksReader instance.</returns>
         protected virtual BaseDatabricksReader CreateDatabricksReader(TFetchResultsResp initialResults)
         {
-            return new DatabricksReader(_statement, _schema, _response, initialResults, _isLz4Compressed,
-                RowCountShortfall.IsFailEnabled(_statement.Connection?.Properties));
+            return new DatabricksReader(_statement, _schema, _response, initialResults, _isLz4Compressed);
         }
 
         public override async ValueTask<RecordBatch?> ReadNextRecordBatchAsync(CancellationToken cancellationToken = default)
@@ -314,7 +313,10 @@ namespace AdbcDrivers.Databricks.Reader
                                     new("reader_type", _activeReader.GetType().Name)
                                 ]);
                                 // Keep metrics for statement telemetry: a `using` reader is often disposed first.
-                                _chunkMetricsSnapshot = GetActiveReaderMetrics();
+                                if (_activeReader is CloudFetchReader cloudFetchReader)
+                                {
+                                    _chunkMetricsSnapshot = cloudFetchReader.GetChunkMetrics();
+                                }
                                 _activeReader.Dispose();
                                 _activeReader = null;
                             }
@@ -374,23 +376,20 @@ namespace AdbcDrivers.Databricks.Reader
         }
 
         /// <summary>
-        /// Gets the metrics of the active reader. For CloudFetch these are the aggregated chunk metrics; for inline
-        /// results only <see cref="ChunkMetrics.RowCountShortfall"/> is set (no chunks are reported).
+        /// Gets the aggregated chunk metrics from the active CloudFetchReader, if available.
+        /// Returns null if the active reader is not a CloudFetchReader (e.g., using inline results).
         /// </summary>
-        /// <returns>The metrics, or null if no reader was created.</returns>
+        /// <returns>A ChunkMetrics object if using CloudFetch, null otherwise.</returns>
         public ChunkMetrics? GetChunkMetrics()
         {
-            // Reader already disposed or not initialized yet: use the snapshot taken at dispose (if any)
-            return GetActiveReaderMetrics() ?? _chunkMetricsSnapshot;
-        }
+            if (_activeReader is CloudFetchReader cloudFetchReader)
+            {
+                return cloudFetchReader.GetChunkMetrics();
+            }
 
-        private ChunkMetrics? GetActiveReaderMetrics() => _activeReader switch
-        {
-            CloudFetchReader cloudFetchReader => cloudFetchReader.GetChunkMetrics(),
-            // Inline results have no chunks; only the row-count shortfall is reported.
-            DatabricksReader inlineReader => new ChunkMetrics { RowCountShortfall = inlineReader.RowCountShortfall },
-            _ => null
-        };
+            // Reader already disposed, or not using CloudFetch / not initialized yet
+            return _chunkMetricsSnapshot;
+        }
 
         /// <summary>
         /// Gets the server-reported LZ4 compression state for this result set

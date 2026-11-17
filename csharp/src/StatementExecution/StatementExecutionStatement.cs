@@ -22,7 +22,6 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks;
-using AdbcDrivers.Databricks.Reader;
 using AdbcDrivers.Databricks.Reader.CloudFetch;
 using AdbcDrivers.Databricks.StatementExecution.MetadataCommands;
 using AdbcDrivers.Databricks.Result;
@@ -646,40 +645,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 // keeping inline consistent with CloudFetch (which also uses the manifest schema).
                 int totalChunks = response.Manifest?.Chunks?.Count ?? 1;
                 return new InlineArrowStreamReader(_client, _currentStatementId!, response.Result.Attachment,
-                    isLz4Compressed, totalChunks, _recyclableMemoryStreamManager, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest),
-                    declaredRowCount: response.Manifest?.TotalRowCount ?? 0,
-                    failOnRowCountMismatch: RowCountShortfall.IsFailEnabled(_properties));
+                    isLz4Compressed, totalChunks, _recyclableMemoryStreamManager, _lz4BufferPool, cancellationToken, GetSchemaFromManifest(response.Manifest));
             }
             else
             {
                 // No data rows (e.g. DDL): manifest may have columns_count=0.
                 // Fall back to an empty schema rather than throwing so DDL statements succeed.
                 Schema schema = TryGetSchemaFromManifest(response.Manifest) ?? new Schema.Builder().Build();
-                return CreateEmptyResultStream(schema, response.Manifest?.TotalRowCount ?? 0, RowCountShortfall.IsFailEnabled(_properties));
+                return new EmptyArrowArrayStream(schema);
             }
-        }
-
-        /// <summary>
-        /// Returns the stream for a response with no inline attachment and no external links. If the manifest
-        /// still declares rows, every one of them is missing: that is recorded as a shortfall, and fails the read
-        /// when adbc.databricks.fail_on_row_count_mismatch is enabled. Statements with no rows (e.g. DDL) declare 0.
-        /// </summary>
-        internal static IArrowArrayStream CreateEmptyResultStream(Schema schema, long declaredRowCount, bool failOnRowCountMismatch)
-        {
-            if (declaredRowCount > 0)
-            {
-                Activity.Current?.AddEvent(new ActivityEvent("inline_reader.row_count_shortfall",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "expected_rows", declaredRowCount },
-                        { "rows_read", 0L }
-                    }));
-                if (failOnRowCountMismatch)
-                {
-                    throw RowCountShortfall.CreateException(declaredRowCount, 0);
-                }
-            }
-            return new EmptyArrowArrayStream(schema);
         }
 
         /// <summary>
@@ -1007,20 +981,12 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// all chunks and concatenating them into a single Arrow stream.
         /// Supports LZ4_FRAME compressed data.
         /// </summary>
-        internal class InlineArrowStreamReader : IArrowArrayStream
+        private class InlineArrowStreamReader : IArrowArrayStream
         {
             private readonly ArrowStreamReader _streamReader;
             private readonly System.IO.Stream _dataStream;
             private readonly Schema _schema;
-            // Manifest total_row_count (0 = unknown, not checked), compared with the rows read when the stream ends.
-            private readonly long _declaredRowCount;
-            private readonly bool _failOnRowCountMismatch;
-            private long _rowsRead;
-            private bool _rowCountChecked;
             private bool _disposed;
-
-            /// <summary>Rows the manifest declared that the decoded stream did not deliver.</summary>
-            internal long RowCountShortfall { get; private set; }
 
             public InlineArrowStreamReader(
                 IStatementExecutionClient client,
@@ -1031,12 +997,8 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 Microsoft.IO.RecyclableMemoryStreamManager memoryStreamManager,
                 System.Buffers.ArrayPool<byte> bufferPool,
                 CancellationToken cancellationToken,
-                Schema manifestSchema,
-                long declaredRowCount = 0,
-                bool failOnRowCountMismatch = false)
+                Schema manifestSchema)
             {
-                _declaredRowCount = declaredRowCount;
-                _failOnRowCountMismatch = failOnRowCountMismatch;
                 if (firstChunkData == null || firstChunkData.Length == 0)
                 {
                     throw new ArgumentException("First chunk data cannot be null or empty", nameof(firstChunkData));
@@ -1081,36 +1043,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                     throw new ObjectDisposedException(nameof(InlineArrowStreamReader));
                 }
 
-                RecordBatch? batch = await _streamReader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
-                if (batch != null)
-                {
-                    _rowsRead += batch.Length;
-                    return batch;
-                }
-                CheckRowCount();
-                return null;
-            }
-
-            // Compares the rows read with the manifest total once, when the stream ends. Always recorded in
-            // traces; fails the read only when adbc.databricks.fail_on_row_count_mismatch is enabled.
-            // More rows than declared (for example the last batch of a LIMIT query) are not an error.
-            private void CheckRowCount()
-            {
-                if (_rowCountChecked) return;
-                _rowCountChecked = true;
-                if (_declaredRowCount <= 0 || _rowsRead >= _declaredRowCount) return;
-
-                RowCountShortfall = _declaredRowCount - _rowsRead;
-                Activity.Current?.AddEvent(new ActivityEvent("inline_reader.row_count_shortfall",
-                    tags: new ActivityTagsCollection
-                    {
-                        { "expected_rows", _declaredRowCount },
-                        { "rows_read", _rowsRead }
-                    }));
-                if (_failOnRowCountMismatch)
-                {
-                    throw Reader.RowCountShortfall.CreateException(_declaredRowCount, _rowsRead);
-                }
+                return await _streamReader.ReadNextRecordBatchAsync(cancellationToken).ConfigureAwait(false);
             }
 
             public void Dispose()

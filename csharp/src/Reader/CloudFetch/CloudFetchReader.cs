@@ -27,6 +27,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -359,7 +360,10 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ]);
             if (_failOnRowCountMismatch)
             {
-                throw RowCountShortfall.CreateException(expectedRows, rowsRead);
+                throw new DatabricksException(
+                    $"CloudFetch result has fewer rows than the server declared: expected {expectedRows}, read {rowsRead}. " +
+                    $"Set {DatabricksParameters.FailOnRowCountMismatch}=false to return the partial result instead.",
+                    AdbcStatusCode.InvalidData);
             }
         }
 

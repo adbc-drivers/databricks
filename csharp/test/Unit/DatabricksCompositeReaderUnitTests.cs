@@ -484,30 +484,6 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             Assert.Equal(875_733 - 24_576, reader.GetChunkMetrics()?.RowCountShortfall);
         }
 
-        // Inline (non-CloudFetch) results report their row-count shortfall to statement telemetry too,
-        // including after the reader has been disposed.
-        [Fact]
-        public async Task GetChunkMetrics_InlineReader_AfterDispose_ReturnsShortfall()
-        {
-            var mockClient = CreateMockClient();
-            mockClient.Setup(c => c.FetchResults(It.IsAny<TFetchResultsReq>(), It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new TFetchResultsResp { HasMoreRows = false, Results = new TRowSet { ArrowBatches = new List<TSparkArrowBatch>() } });
-            var reader = new TestableDatabricksCompositeReader(
-                CreateMockStatement(mockClient).Object, _testSchema, CreateMockResponse().Object, false, _httpClient)
-            {
-                MockReader = AdbcDrivers.Databricks.Tests.Unit.Reader.InlineRowCountShortfallTests.CreateThriftInlineReader(false, (100, 100), (50, 30))
-            };
-
-            Assert.Equal(130, await CloudFetchReaderRowCountShortfallTests.DrainAsync(reader));
-            Assert.True(reader.DatabricksReaderCreated);
-            Assert.Equal(20, reader.GetChunkMetrics()?.RowCountShortfall);
-            reader.Dispose();
-
-            var metrics = reader.GetChunkMetrics();
-            Assert.Equal(20, metrics?.RowCountShortfall);
-            Assert.Equal(0, metrics?.TotalChunksIterated); // inline: no chunk details are reported
-        }
-
         public void Dispose()
         {
             _httpClient?.Dispose();
