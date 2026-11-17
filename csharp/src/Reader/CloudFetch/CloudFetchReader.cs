@@ -56,8 +56,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         // than the limit in the last batch but reports adjusted rowCount in metadata.
         private readonly long _totalExpectedRows;
         private readonly bool _failOnRowCountMismatch;
-        // Set when a shortfall failed the read; every later read rethrows it, so a caller that catches
-        // the error and keeps reading can't mistake the partial result for a clean end.
+        // Set when a shortfall failed the read. A later read reaches the same check again and rethrows it,
+        // instead of counting the same shortfall twice.
         private DatabricksException? _rowCountMismatchError;
         private long _rowsRead;
         private long _currentChunkExpectedRows;
@@ -107,7 +107,6 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             return await this.TraceActivityAsync(async _ =>
             {
                 ThrowIfDisposed();
-                if (_rowCountMismatchError != null) throw _rowCountMismatchError;
 
                 while (true)
                 {
@@ -347,10 +346,11 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         }
 
         // ES-2356918: rows the server declared but the decoded files did not deliver. Always recorded; fails the read
-        // only when adbc.databricks.fail_on_row_count_mismatch is enabled. The error is kept and rethrown by every
-        // later read, so neither a partial result nor a second count of the same shortfall can follow it.
+        // only when adbc.databricks.fail_on_row_count_mismatch is enabled.
         private void RecordRowShortfall(long expectedRows, long rowsRead)
         {
+            // A read after the failure ends up here again: rethrow the same error rather than count the shortfall twice.
+            if (_rowCountMismatchError != null) throw _rowCountMismatchError;
             if (rowsRead >= expectedRows) return;
             _rowCountShortfall += expectedRows - rowsRead;
             Activity.Current?.AddEvent("cloudfetch.row_count_shortfall", [
