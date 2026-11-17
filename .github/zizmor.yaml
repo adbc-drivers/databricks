@@ -16,11 +16,11 @@
 rules:
   adhoc-packages:
     ignore:
-      - engineer-bot-followup.yml:219
-      - engineer-bot-learning.yaml:108
-      - engineer-bot.yaml:152
-      - reviewer-bot-followup.yml:194
-      - reviewer-bot.yml:115
+      - engineer-bot-followup.yml:233
+      - engineer-bot-learning.yaml:120
+      - engineer-bot.yaml:164
+      - reviewer-bot-followup.yml:208
+      - reviewer-bot.yml:128
   artipacked:
     ignore:
       - benchmarks.yml:60
