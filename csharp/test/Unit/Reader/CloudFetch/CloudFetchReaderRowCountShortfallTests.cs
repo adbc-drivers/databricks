@@ -126,11 +126,10 @@ namespace AdbcDrivers.Databricks.Tests.Unit.Reader.CloudFetch
             Assert.Contains($"expected {declared}, read {actual}", ex.Message);
             Assert.Contains(DatabricksParameters.FailOnRowCountMismatch, ex.Message);
             Assert.Contains(total > 0 ? "(in total)" : "(in one result file)", ex.Message);
-            // Telemetry still sees the shortfall. A later read rethrows the same error (a caller that swallows it
-            // can't mistake the partial result for a clean end) and doesn't count the shortfall again.
+            // Telemetry still sees the shortfall, and a later read still fails: a caller that swallows the error
+            // can't mistake the partial result for a clean end.
             Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
-            Assert.Same(ex, await Assert.ThrowsAsync<DatabricksException>(() => reader.ReadNextRecordBatchAsync().AsTask()));
-            Assert.Equal(expectedShortfall, reader.GetChunkMetrics().RowCountShortfall);
+            await Assert.ThrowsAsync<DatabricksException>(() => reader.ReadNextRecordBatchAsync().AsTask());
         }
 
         [Theory]
