@@ -137,7 +137,7 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 | `adbc.databricks.driver_config_take_precedence` | Whether driver configuration overrides passed-in properties during configuration merging | `false` |
 | `adbc.apache.statement.batch_size` | Sets the maximum number of rows to retrieve in a single batch request | `2000000` |
 | `adbc.apache.connection.polltime_ms` | The time in milliseconds between each poll for query execution status. Databricks default is 100ms (Apache default: 500ms) | `100` |
-| `adbc.databricks.fail_on_row_count_mismatch` | Whether reading a result fails when it decodes to fewer rows than the server declared. When `false`, the partial result is returned and the shortfall is reported in telemetry only. Currently checked for CloudFetch results only (per file for Thrift, for the whole result for SEA). | `false` |
+| `adbc.databricks.fail_on_row_count_mismatch` | Whether reading a result fails when it decodes to fewer rows than the server declared. When `false`, the partial result is returned and the shortfall is reported in telemetry only. Checked for CloudFetch results (per file for Thrift, for the whole result for SEA) and inline results (per Arrow batch for Thrift, for the whole result for SEA). | `false` |
 
 Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
 `adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is

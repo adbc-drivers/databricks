@@ -46,11 +46,19 @@ namespace AdbcDrivers.Databricks.Reader
         // When trimArrowBatchesToLimit=false (server default), the server may return more data
         // than the limit in the last batch but reports adjusted rowCount in metadata.
         private long _currentBatchExpectedRows;
+        // Rows returned from the current batch, checked against _currentBatchExpectedRows when the batch is exhausted.
+        private long _currentBatchRowsRead;
+        private long _rowCountShortfall;
+        private readonly bool _failOnRowCountMismatch;
 
-        public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed)
+        /// <summary>Rows the server declared (per-batch RowCount) that the decoded batches did not deliver.</summary>
+        internal long RowCountShortfall => _rowCountShortfall;
+
+        public DatabricksReader(IHiveServer2Statement statement, Schema schema, IResponse response, TFetchResultsResp? initialResults, bool isLz4Compressed, bool failOnRowCountMismatch = false)
             : base(statement, schema, response, isLz4Compressed) // IHiveServer2Statement implements IActivityTracer
         {
             _statement = statement;
+            _failOnRowCountMismatch = failOnRowCountMismatch;
 
             // If we have direct results, initialize the batches from them
             if (statement.TryGetDirectResults(this.response!, out TSparkDirectResults? directResults))
@@ -82,13 +90,16 @@ namespace AdbcDrivers.Databricks.Reader
                             next = ApplyRowCountLimit(next, activity);
                             if (next != null)
                             {
+                                _currentBatchRowsRead += next.Length;
                                 activity?.AddEvent(SemanticConventions.Messaging.Batch.Response, [new(SemanticConventions.Db.Response.ReturnedRows, next.Length)]);
                                 return next;
                             }
                             // If next is null after limiting, continue to next batch
                             continue;
                         }
+                        // This batch is exhausted. Clear it first, so a shortfall that throws isn't counted twice.
                         this.reader = null;
+                        CheckBatchRowCount(activity);
                     }
 
                     if (this.batches != null && this.index < this.batches.Count)
@@ -165,6 +176,30 @@ namespace AdbcDrivers.Databricks.Reader
             return trimmedBatch;
         }
 
+        /// <summary>
+        /// Compares the rows returned from the batch that just ended with its declared RowCount.
+        /// Always recorded for telemetry; fails the read only when adbc.databricks.fail_on_row_count_mismatch is enabled.
+        /// More rows than declared are trimmed by <see cref="ApplyRowCountLimit"/>, so only a shortfall is checked.
+        /// </summary>
+        private void CheckBatchRowCount(System.Diagnostics.Activity? activity)
+        {
+            long expectedRows = _currentBatchExpectedRows;
+            long rowsRead = _currentBatchRowsRead;
+            _currentBatchExpectedRows = 0;
+            _currentBatchRowsRead = 0;
+            if (expectedRows <= 0 || rowsRead >= expectedRows) return;
+
+            _rowCountShortfall += expectedRows - rowsRead;
+            activity?.AddEvent("databricks_reader.row_count_shortfall", [
+                new("expected_rows", expectedRows),
+                new("rows_read", rowsRead)
+            ]);
+            if (_failOnRowCountMismatch)
+            {
+                throw Reader.RowCountShortfall.CreateException(expectedRows, rowsRead);
+            }
+        }
+
         private void ProcessFetchedBatches()
         {
             this.TraceActivity(activity =>
@@ -173,6 +208,7 @@ namespace AdbcDrivers.Databricks.Reader
 
                 // Store the expected row count from metadata for row count limiting
                 _currentBatchExpectedRows = batch.RowCount;
+                _currentBatchRowsRead = 0;
 
                 // Ensure batch data exists
                 if (batch.Batch == null || batch.Batch.Length == 0)

@@ -166,7 +166,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 MaxUrlRefreshAttempts = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchMaxUrlRefreshAttempts, DefaultMaxUrlRefreshAttempts),
                 UrlExpirationBufferSeconds = PropertyHelper.GetPositiveIntPropertyWithValidation(properties, DatabricksParameters.CloudFetchUrlExpirationBufferSeconds, DefaultUrlExpirationBufferSeconds),
                 StragglerMitigationConfig = CloudFetchStragglerMitigationConfig.Parse(properties),
-                FailOnRowCountMismatch = PropertyHelper.GetBooleanPropertyWithValidation(properties, DatabricksParameters.FailOnRowCountMismatch, false)
+                FailOnRowCountMismatch = RowCountShortfall.IsFailEnabled(properties)
             };
 
             return config;

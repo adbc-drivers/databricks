@@ -235,7 +235,7 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | Not Supported |
 | `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
-| `adbc.databricks.fail_on_row_count_mismatch` | Fail the read when a result decodes to fewer rows than the server declared, instead of returning the partial result (the shortfall is reported in telemetry either way). Currently checked for CloudFetch results only. More rows than declared are trimmed, not an error. | `false` | `false` |
+| `adbc.databricks.fail_on_row_count_mismatch` | Fail the read when a result decodes to fewer rows than the server declared, instead of returning the partial result (the shortfall is reported in telemetry either way). Checked for CloudFetch and inline results. More rows than declared are not an error. | `false` | `false` |
 
 Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
 `adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is

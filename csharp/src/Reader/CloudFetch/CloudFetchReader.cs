@@ -27,7 +27,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
-using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -174,12 +173,9 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                                 _cachedChunkMetrics = this.downloadManager.GetChunkMetrics();
                                 this.downloadManager.Dispose();
                                 this.downloadManager = null;
-                                // A cancelled read also ends here (null file); that is not lost rows.
-                                // Checked after disposal, so a shortfall that throws leaves nothing to clean up.
-                                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
-                                    RecordRowShortfall(_totalExpectedRows, _rowsRead);
-                                // No more files
-                                return null;
+                                // No more files. The SEA total is checked after the loop, outside this try, so a
+                                // shortfall isn't logged as a file-fetch error by the catch below.
+                                break;
                             }
 
                             // Set up chunk-level row count tracking
@@ -231,6 +227,12 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                     // If we get here, there are no more files
                     return null;
                 }
+
+                // The last file was just read. A cancelled read also ends there (null file); that is not lost rows.
+                // Checked after disposal, so a shortfall that throws leaves nothing to clean up.
+                if (_totalExpectedRows > 0 && !cancellationToken.IsCancellationRequested)
+                    RecordRowShortfall(_totalExpectedRows, _rowsRead);
+                return null;
             });
         }
 
@@ -357,10 +359,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             ]);
             if (_failOnRowCountMismatch)
             {
-                throw new DatabricksException(
-                    $"CloudFetch result has fewer rows than the server declared: expected {expectedRows}, read {rowsRead}. " +
-                    $"Set {DatabricksParameters.FailOnRowCountMismatch}=false to return the partial result instead.",
-                    AdbcStatusCode.InvalidData);
+                throw RowCountShortfall.CreateException(expectedRows, rowsRead);
             }
         }
 
