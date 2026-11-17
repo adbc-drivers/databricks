@@ -261,7 +261,8 @@ namespace AdbcDrivers.Databricks
         /// <summary>
         /// Whether reading a result fails when it decodes to fewer rows than the server declared, instead of
         /// returning the partial result. When false, the rows that were decoded are returned and the shortfall is
-        /// reported in telemetry and traces only. Currently checked for CloudFetch results (per file for Thrift,
+        /// recorded only: in traces, and on Thrift also in statement telemetry (SEA sends no statement telemetry).
+        /// Currently checked for CloudFetch results (per file for Thrift,
         /// for the whole result for SEA); inline results are not checked yet.
         /// More rows than declared are not an error: the driver trims them (for example, the last batch of a LIMIT query).
         /// Default value is false if not specified.
