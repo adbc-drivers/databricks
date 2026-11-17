@@ -263,7 +263,8 @@ namespace AdbcDrivers.Databricks
         /// returning the partial result. When false, the rows that were decoded are returned and the shortfall is
         /// reported in telemetry and traces only. Checked for CloudFetch results (per file for Thrift, for the whole
         /// result for SEA) and inline results (per Arrow batch for Thrift, for the whole result for SEA).
-        /// More rows than declared are not an error: the driver trims them (for example, the last batch of a LIMIT query).
+        /// More rows than declared are not an error (for example, the last batch of a LIMIT query). CloudFetch and Thrift
+        /// inline results trim them to the declared count; SEA inline results return them as is.
         /// Default value is false if not specified.
         /// </summary>
         [FeatureFlagType(FeatureFlagValueKind.Boolean)]
