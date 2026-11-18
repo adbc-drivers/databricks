@@ -51,7 +51,9 @@ class CheckDependenciesTests(unittest.TestCase):
         self.assertEqual(guard.check_dependencies(data), [])
 
     def test_higher_version_passes(self):
-        self.assertEqual(guard.check_dependencies(_lockfile(("netstandard2.0", "5.0.0"))), [])
+        self.assertEqual(
+            guard.check_dependencies(_lockfile(("netstandard2.0", "5.0.0"))), []
+        )
 
     def test_vulnerable_version_flagged(self):
         errors = guard.check_dependencies(_lockfile(("netstandard2.0", "4.3.0")))
@@ -65,7 +67,9 @@ class CheckDependenciesTests(unittest.TestCase):
         self.assertIn("net472", errors[0])
 
     def test_missing_package_flagged(self):
-        errors = guard.check_dependencies({"version": 1, "dependencies": {"net8.0": {}}})
+        errors = guard.check_dependencies(
+            {"version": 1, "dependencies": {"net8.0": {}}}
+        )
         self.assertEqual(len(errors), 1)
         self.assertIn("not found", errors[0])
 
