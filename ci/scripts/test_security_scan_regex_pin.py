@@ -98,8 +98,7 @@ class DiscoverLockfilesTests(unittest.TestCase):
                 "csharp/test/packages.lock.json",
                 "csharp/Benchmarks/packages.lock.json",
                 "csharp/tools/MetadataComparator/packages.lock.json",
-                "csharp/hiveserver2/csharp/src/"
-                "AdbcDrivers.HiveServer2/packages.lock.json",
+                "csharp/hiveserver2/csharp/src/AdbcDrivers.HiveServer2/packages.lock.json",
             ]
             for rel in present:
                 full = os.path.join(root, rel)
@@ -112,12 +111,9 @@ class DiscoverLockfilesTests(unittest.TestCase):
         self.assertIn("csharp/src/packages.lock.json", found)
         self.assertIn("csharp/test/packages.lock.json", found)
         self.assertIn("csharp/Benchmarks/packages.lock.json", found)
-        self.assertIn(
-            "csharp/tools/MetadataComparator/packages.lock.json", found
-        )
+        self.assertIn("csharp/tools/MetadataComparator/packages.lock.json", found)
         self.assertNotIn(
-            "csharp/hiveserver2/csharp/src/"
-            "AdbcDrivers.HiveServer2/packages.lock.json",
+            "csharp/hiveserver2/csharp/src/AdbcDrivers.HiveServer2/packages.lock.json",
             found,
         )
 

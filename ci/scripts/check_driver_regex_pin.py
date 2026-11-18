@@ -125,9 +125,7 @@ def main():
             exit_code = 1
             continue
 
-        errors = check_dependencies(
-            data, require_present=(lockfile == DRIVER_LOCKFILE)
-        )
+        errors = check_dependencies(data, require_present=(lockfile == DRIVER_LOCKFILE))
         if errors:
             for error in errors:
                 print(f"::error::{lockfile}: {error}")
