@@ -14,6 +14,8 @@
 
 """Tests for the driver System.Text.RegularExpressions pin guard."""
 
+import os
+import tempfile
 import unittest
 
 import check_driver_regex_pin as guard
@@ -72,6 +74,52 @@ class CheckDependenciesTests(unittest.TestCase):
         )
         self.assertEqual(len(errors), 1)
         self.assertIn("not found", errors[0])
+
+    def test_missing_package_allowed_when_not_required(self):
+        # Non-driver lockfiles may legitimately not resolve the package at all.
+        errors = guard.check_dependencies(
+            {"version": 1, "dependencies": {"net8.0": {}}}, require_present=False
+        )
+        self.assertEqual(errors, [])
+
+    def test_vulnerable_version_flagged_even_when_not_required(self):
+        errors = guard.check_dependencies(
+            _lockfile(("net472", "4.3.0")), require_present=False
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("4.3.0", errors[0])
+
+
+class DiscoverLockfilesTests(unittest.TestCase):
+    def test_includes_all_csharp_lockfiles_but_excludes_submodule(self):
+        with tempfile.TemporaryDirectory() as root:
+            present = [
+                "csharp/src/packages.lock.json",
+                "csharp/test/packages.lock.json",
+                "csharp/Benchmarks/packages.lock.json",
+                "csharp/tools/MetadataComparator/packages.lock.json",
+                "csharp/hiveserver2/csharp/src/"
+                "AdbcDrivers.HiveServer2/packages.lock.json",
+            ]
+            for rel in present:
+                full = os.path.join(root, rel)
+                os.makedirs(os.path.dirname(full), exist_ok=True)
+                with open(full, "w", encoding="utf-8") as handle:
+                    handle.write("{}")
+
+            found = guard.discover_lockfiles(root=root)
+
+        self.assertIn("csharp/src/packages.lock.json", found)
+        self.assertIn("csharp/test/packages.lock.json", found)
+        self.assertIn("csharp/Benchmarks/packages.lock.json", found)
+        self.assertIn(
+            "csharp/tools/MetadataComparator/packages.lock.json", found
+        )
+        self.assertNotIn(
+            "csharp/hiveserver2/csharp/src/"
+            "AdbcDrivers.HiveServer2/packages.lock.json",
+            found,
+        )
 
 
 if __name__ == "__main__":

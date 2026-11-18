@@ -12,21 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Guard the driver's own System.Text.RegularExpressions pin.
+"""Guard the C# System.Text.RegularExpressions pins.
 
 GHSA-cmhx-cq75-c4mj (CVE-2019-0820) is ignored globally in osv-scanner.toml for
 the submodule lockfile this repo cannot change. Because the OSV ignore applies to
-the advisory ID across every scanned lockfile, a regression of the driver's own
-resolved version back to the vulnerable 4.3.0 would pass the scan silently. This
-check re-asserts, independently of OSV, that the driver lockfile keeps the fix.
+the advisory ID across *every* scanned lockfile, a regression back to the
+vulnerable 4.3.0 in any generated C# lockfile -- the driver, tests, benchmarks or
+tools -- would pass the scan silently. This check re-asserts, independently of
+OSV, that every generated C# lockfile keeps the fix, excluding only the exempt
+arrow-adbc submodule lockfile where 4.3.0 legitimately remains (the case the OSV
+ignore actually covers).
 """
 
+import glob
 import json
+import os
 import sys
 
 PACKAGE = "System.Text.RegularExpressions"
 MINIMUM = (4, 3, 1)
-LOCKFILE = "csharp/src/packages.lock.json"
+
+# The driver's own lockfile must carry the direct pin; absence here means the pin
+# was removed and must be flagged.
+DRIVER_LOCKFILE = "csharp/src/packages.lock.json"
+
+# Every generated C# lockfile is scanned by OSV under the same global advisory
+# ignore, so the pin must hold in all of them.
+LOCKFILE_GLOB = "csharp/**/packages.lock.json"
+
+# The arrow-adbc submodule lockfile is the one this repo cannot change and the one
+# the OSV ignore exists for; skip it so its legitimate 4.3.0 is not flagged.
+SUBMODULE_PREFIX = "csharp/hiveserver2/"
 
 
 def parse_version(value):
@@ -40,11 +56,14 @@ def parse_version(value):
     return tuple(parts)
 
 
-def check_dependencies(data, package=PACKAGE, minimum=MINIMUM):
+def check_dependencies(data, package=PACKAGE, minimum=MINIMUM, require_present=True):
     """Return a list of error strings for a parsed packages.lock.json document.
 
-    Flags any framework whose resolved version is below ``minimum`` and, if the
-    package is absent everywhere, flags that the pin may have been removed.
+    Flags any framework whose resolved version is below ``minimum``. When
+    ``require_present`` is set, also flags the package being absent everywhere --
+    used for the driver lockfile, whose direct pin must stay present. Other
+    lockfiles may legitimately not resolve the package at all, so absence there
+    is not an error.
     """
     errors = []
     found = False
@@ -63,7 +82,7 @@ def check_dependencies(data, package=PACKAGE, minimum=MINIMUM):
                     f"{framework}: {package} resolves {resolved}; "
                     f"CVE-2019-0820 requires >= {minimum_text}."
                 )
-    if not found:
+    if require_present and not found:
         errors.append(
             f"{package} not found in any framework; the direct pin may have been "
             "removed, re-exposing CVE-2019-0820 via the transitive 4.3.0."
@@ -71,22 +90,51 @@ def check_dependencies(data, package=PACKAGE, minimum=MINIMUM):
     return errors
 
 
+def discover_lockfiles(root="."):
+    """Return the generated C# lockfiles to check, excluding the submodule one.
+
+    Globs ``csharp/**/packages.lock.json`` relative to ``root`` and drops the
+    arrow-adbc submodule lockfile, which this repo cannot change.
+    """
+    lockfiles = []
+    for path in glob.glob(os.path.join(root, LOCKFILE_GLOB), recursive=True):
+        normalized = os.path.relpath(path, root).replace(os.sep, "/")
+        if normalized.startswith(SUBMODULE_PREFIX):
+            continue
+        lockfiles.append(normalized)
+    return sorted(lockfiles)
+
+
 def main():
-    try:
-        with open(LOCKFILE, encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError) as exc:
-        print(f"::error::Cannot read {LOCKFILE}: {exc}")
+    lockfiles = discover_lockfiles()
+    if DRIVER_LOCKFILE not in lockfiles:
+        print(
+            f"::error::Required lockfile not found: {DRIVER_LOCKFILE}. "
+            "Run 'dotnet restore --use-lock-file' before this check."
+        )
         return 1
 
-    errors = check_dependencies(data)
-    if errors:
-        for error in errors:
-            print(f"::error::{LOCKFILE}: {error}")
-        return 1
+    minimum_text = ".".join(str(part) for part in MINIMUM)
+    exit_code = 0
+    for lockfile in lockfiles:
+        try:
+            with open(lockfile, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError) as exc:
+            print(f"::error::Cannot read {lockfile}: {exc}")
+            exit_code = 1
+            continue
 
-    print(f"{LOCKFILE}: {PACKAGE} is pinned at or above {'.'.join(map(str, MINIMUM))}.")
-    return 0
+        errors = check_dependencies(
+            data, require_present=(lockfile == DRIVER_LOCKFILE)
+        )
+        if errors:
+            for error in errors:
+                print(f"::error::{lockfile}: {error}")
+            exit_code = 1
+        else:
+            print(f"{lockfile}: {PACKAGE} is pinned at or above {minimum_text}.")
+    return exit_code
 
 
 if __name__ == "__main__":
