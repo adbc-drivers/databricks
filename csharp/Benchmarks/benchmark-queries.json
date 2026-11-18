@@ -1,5 +1,13 @@
 [
   {
+    "name": "store_sales_sf10",
+    "description": "Store sales SF10 - 28.8M rows, 23 columns (large scale for JDBC comparison)",
+    "query": "select * from main.tpcds_sf10_delta.store_sales",
+    "expected_rows": 28800501,
+    "columns": 23,
+    "category": "large-wide"
+  },
+  {
     "name": "catalog_sales",
     "description": "Catalog sales - 1.4M rows, 34 columns (current default)",
     "query": "select * from main.tpcds_sf1_delta.catalog_sales",
