@@ -465,8 +465,14 @@ jobs:
 
       - name: Generate coverage
         working-directory: rust
+        # Build the cdylib before the tests: tests/ffi_round_trip.rs loads libdatabricks_adbc at
+        # runtime, and on Rust 1.100 the instrumented test build alone does not produce it.
         run: |
-          cargo llvm-cov --all-features \
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov clean --workspace
+          cargo build --all-features
+          cargo test --all-features
+          cargo llvm-cov report \
             --ignore-filename-regex "tests/" \
             --lcov --output-path lcov.info
 
