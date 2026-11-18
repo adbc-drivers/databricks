@@ -122,24 +122,23 @@ namespace AdbcDrivers.Databricks.Reader
 
         private BaseDatabricksReader DetermineReader(TFetchResultsResp initialResults, Activity? activity = null)
         {
-            bool useCloudFetch = ShouldUseCloudFetch(initialResults);
-            _useCloudFetch = useCloudFetch;
+            _useCloudFetch = ShouldUseCloudFetch(initialResults);
             activity?.AddEvent("composite_reader.determine_reader", [
-                new("use_cloudfetch", useCloudFetch),
+                new("use_cloudfetch", _useCloudFetch),
                 new("has_result_links", initialResults.__isset.results && initialResults.Results.__isset.resultLinks),
                 new("result_links_count", initialResults.Results?.ResultLinks?.Count ?? 0)
             ]);
 
             // Add telemetry tag for result format
-            activity?.SetTag(StatementExecutionEvent.ResultFormat, useCloudFetch ? "cloudfetch" : "inline");
+            activity?.SetTag(StatementExecutionEvent.ResultFormat, _useCloudFetch ? "cloudfetch" : "inline");
 
             // Add telemetry tag for chunk count if using CloudFetch
-            if (useCloudFetch && initialResults.Results?.ResultLinks != null)
+            if (_useCloudFetch && initialResults.Results?.ResultLinks != null)
             {
                 activity?.SetTag(StatementExecutionEvent.ResultChunkCount, initialResults.Results.ResultLinks.Count);
             }
 
-            if (useCloudFetch)
+            if (_useCloudFetch)
             {
                 return CreateCloudFetchReader(initialResults);
             }
