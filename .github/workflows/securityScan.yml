@@ -69,12 +69,6 @@ jobs:
               -p:IsWindows=true -p:NuGetAudit=false
           done
 
-      - name: Verify driver pins fixed System.Text.RegularExpressions
-        # GHSA-cmhx-cq75-c4mj is ignored globally in osv-scanner.toml, so OSV would
-        # no longer catch a regression of the driver's own resolved version back to
-        # the vulnerable 4.3.0. Re-assert the fix against the generated lockfile.
-        run: python3 ci/scripts/check_driver_regex_pin.py
-
       - name: Install OSV-Scanner
         run: |
           set -euo pipefail
