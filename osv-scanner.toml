@@ -14,3 +14,17 @@
 
 # Add [[IgnoredVulns]] entries only after triage, with id, reason, and ignoreUntil.
 # Each advisory ID is ignored across all packages; check aliases when suppressing.
+
+[[IgnoredVulns]]
+# Alias: CVE-2019-0820.
+id = "GHSA-cmhx-cq75-c4mj"
+ignoreUntil = 2027-02-18T00:00:00Z
+reason = """System.Text.RegularExpressions 4.3.0 remains only in the arrow-adbc submodule's \
+Apache.Arrow.Adbc.Client lockfile (netstandard2.0, via System.Data.Common 4.3.0), which this repo \
+cannot change. The driver pins 4.3.1 directly. Remove once the submodule picks up a fixed version."""
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-18T00:00:00Z
+reason = """chrono is marked unmaintained, with no fixed release. It is a direct dependency and is \
+also required by arrow-array and oauth2, so it cannot be dropped without replacing it upstream."""
