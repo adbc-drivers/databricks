@@ -20,8 +20,9 @@ the advisory ID across *every* scanned lockfile, a regression back to the
 vulnerable 4.3.0 in any generated C# lockfile -- the driver, tests, benchmarks or
 tools -- would pass the scan silently. This check re-asserts, independently of
 OSV, that every generated C# lockfile keeps the fix, excluding only the exempt
-arrow-adbc submodule lockfile where 4.3.0 legitimately remains (the case the OSV
-ignore actually covers).
+arrow-adbc submodule's Apache.Arrow.Adbc.Client lockfile where 4.3.0 legitimately
+remains (the case the OSV ignore actually covers). The HiveServer2 project's own
+lockfile is checked like the rest, so a regression there is not missed.
 """
 
 import glob
@@ -40,9 +41,12 @@ DRIVER_LOCKFILE = "csharp/src/packages.lock.json"
 # ignore, so the pin must hold in all of them.
 LOCKFILE_GLOB = "csharp/**/packages.lock.json"
 
-# The arrow-adbc submodule lockfile is the one this repo cannot change and the one
-# the OSV ignore exists for; skip it so its legitimate 4.3.0 is not flagged.
-SUBMODULE_PREFIX = "csharp/hiveserver2/"
+# The arrow-adbc submodule's Apache.Arrow.Adbc.Client lockfile is the one this repo
+# cannot change and the one the OSV ignore exists for; skip only that nested
+# submodule tree so its legitimate 4.3.0 is not flagged. The HiveServer2 project's
+# own lockfile lives at csharp/hiveserver2/csharp/src/... (outside this prefix) and
+# is still checked -- a 4.3.0 regression there must not pass silently.
+SUBMODULE_PREFIX = "csharp/hiveserver2/csharp/arrow-adbc/"
 
 
 def parse_version(value):
@@ -93,8 +97,9 @@ def check_dependencies(data, package=PACKAGE, minimum=MINIMUM, require_present=T
 def discover_lockfiles(root="."):
     """Return the generated C# lockfiles to check, excluding the submodule one.
 
-    Globs ``csharp/**/packages.lock.json`` relative to ``root`` and drops the
-    arrow-adbc submodule lockfile, which this repo cannot change.
+    Globs ``csharp/**/packages.lock.json`` relative to ``root`` and drops only the
+    nested arrow-adbc submodule tree (its Apache.Arrow.Adbc.Client lockfile), which
+    this repo cannot change. The HiveServer2 project's own lockfile is kept.
     """
     lockfiles = []
     for path in glob.glob(os.path.join(root, LOCKFILE_GLOB), recursive=True):

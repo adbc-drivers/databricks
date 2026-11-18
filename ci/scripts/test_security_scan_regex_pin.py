@@ -99,6 +99,7 @@ class DiscoverLockfilesTests(unittest.TestCase):
                 "csharp/Benchmarks/packages.lock.json",
                 "csharp/tools/MetadataComparator/packages.lock.json",
                 "csharp/hiveserver2/csharp/src/AdbcDrivers.HiveServer2/packages.lock.json",
+                "csharp/hiveserver2/csharp/arrow-adbc/csharp/src/Client/packages.lock.json",
             ]
             for rel in present:
                 full = os.path.join(root, rel)
@@ -112,8 +113,15 @@ class DiscoverLockfilesTests(unittest.TestCase):
         self.assertIn("csharp/test/packages.lock.json", found)
         self.assertIn("csharp/Benchmarks/packages.lock.json", found)
         self.assertIn("csharp/tools/MetadataComparator/packages.lock.json", found)
-        self.assertNotIn(
+        # The HiveServer2 project's own lockfile is scanned under the same global
+        # OSV ignore, so it must be checked -- not exempted with the submodule.
+        self.assertIn(
             "csharp/hiveserver2/csharp/src/AdbcDrivers.HiveServer2/packages.lock.json",
+            found,
+        )
+        # Only the nested arrow-adbc submodule's Client lockfile is exempt.
+        self.assertNotIn(
+            "csharp/hiveserver2/csharp/arrow-adbc/csharp/src/Client/packages.lock.json",
             found,
         )
 
