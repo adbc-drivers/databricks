@@ -273,12 +273,6 @@ namespace AdbcDrivers.Databricks
 
         public override QueryResult ExecuteQuery()
         {
-            // Reset per-execution telemetry state. _lastQueryResult is only ever set on a
-            // successful ExecuteQuery/ExecuteQueryAsync, so on a reused statement (e.g. a
-            // CloudFetch SELECT followed by an UPDATE or a failed SELECT) a stale value would
-            // make EmitTelemetry read the prior query's (now disposed) composite reader and
-            // report its ResultFormat/chunk metrics for this execution (PECO-2978).
-            _lastQueryResult = null;
             EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
@@ -310,8 +304,6 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
-            // Reset per-execution telemetry state (see ExecuteQuery for rationale).
-            _lastQueryResult = null;
             await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
@@ -360,8 +352,6 @@ namespace AdbcDrivers.Databricks
 
         public override UpdateResult ExecuteUpdate()
         {
-            // Reset per-execution telemetry state (see ExecuteQuery for rationale).
-            _lastQueryResult = null;
             EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
@@ -385,8 +375,6 @@ namespace AdbcDrivers.Databricks
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
-            // Reset per-execution telemetry state (see ExecuteQuery for rationale).
-            _lastQueryResult = null;
             await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
