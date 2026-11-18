@@ -31,56 +31,56 @@ also required by arrow-array and oauth2, so it cannot be dropped without replaci
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0463"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0473"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0474"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0475"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0476"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0477"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0478"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0479"
-ignoreUntil = 2027-02-18T00:00:00Z
+ignoreUntil = 2027-01-18T00:00:00Z
 reason = """rust-openssl advisory. Every openssl crate release with the fix (0.10.78+, 0.10.80 for all of \
 them) needs openssl-sys 0.9.112+, which dropped OpenSSL 1.0.2, and the Linux release build image links \
 OpenSSL 1.0.2. Remove once that image (or the TLS backend) changes and openssl can move to 0.10.80+."""
