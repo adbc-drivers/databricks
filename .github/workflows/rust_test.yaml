@@ -470,8 +470,8 @@ jobs:
         run: |
           source <(cargo llvm-cov show-env --export-prefix)
           cargo llvm-cov clean --workspace
-          cargo build --all-features
-          cargo test --all-features
+          cargo build --locked --all-features
+          cargo test --locked --all-features
           cargo llvm-cov report \
             --ignore-filename-regex "tests/" \
             --lcov --output-path lcov.info
