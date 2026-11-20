@@ -16,6 +16,11 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <!-- System.Data.Common 4.3.0 (from Apache.Arrow.Scalars) pulls in System.Text.RegularExpressions 4.3.0,
+         which has CVE-2019-0820 (GHSA-cmhx-cq75-c4mj). Reference the fixed version directly. -->
+    <PackageReference Include="System.Text.RegularExpressions" />
+  </ItemGroup>
   <ItemGroup>
     <Protobuf Include="Telemetry\Proto\sql_driver_telemetry.proto" GrpcServices="None" />
   </ItemGroup>
