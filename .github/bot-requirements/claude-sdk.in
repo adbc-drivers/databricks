@@ -1,0 +1,7 @@
+# Claude Agent SDK closure, installed by the reviewer/engineer bot workflows.
+# Bump deliberately (the runtime that holds the model token changes with it),
+# then regenerate:  bash .github/scripts/gen-locks.sh
+#
+# SDK 0.2.167 bundles Claude Code 2.1.300 (Opus 5.5 requires >=2.1.280).
+# Bump only to mirrored versions and regenerate claude-sdk.lock together.
+claude-agent-sdk==0.2.167

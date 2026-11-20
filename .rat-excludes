@@ -49,3 +49,8 @@ rust/ci/proxy/htpasswd
 # rationale as the prompt files above: a license header would pollute the model's
 # instructions. Data/log content, not source.
 .claude/knowledge/**
+# Vendored copies of the bot engine's hash-locked SDK and CLI manifests (from the pinned
+# engine commit, byte for byte). They carry no license header, so they are excluded here.
+.github/bot-requirements/**
+.github/claude-cli/package.json
+.github/claude-cli/package-lock.json
