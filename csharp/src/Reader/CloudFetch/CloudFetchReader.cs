@@ -27,6 +27,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Telemetry.TagDefinitions;
 using Apache.Arrow;
+using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tracing;
 using Apache.Arrow.Ipc;
 using Apache.Hive.Service.Rpc.Thrift;
@@ -54,6 +55,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         // When trimArrowBatchesToLimit=false (server default), the server may return more data
         // than the limit in the last batch but reports adjusted rowCount in metadata.
         private readonly long _totalExpectedRows;
+        private readonly bool _failOnRowCountMismatch;
         private long _rowsRead;
         private long _currentChunkExpectedRows;
         private long _rowCountShortfall;
@@ -73,12 +75,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         /// <param name="response">The query response (nullable for REST API, which doesn't use IResponse).</param>
         /// <param name="downloadManager">The download manager (already initialized and started).</param>
         /// <param name="totalExpectedRows">Total expected rows for global limiting (SEA). Pass 0 to use per-chunk limiting (Thrift).</param>
+        /// <param name="failOnRowCountMismatch">Throw when files decode to fewer rows than declared, instead of only reporting it.</param>
         public CloudFetchReader(
             ITracingStatement statement,
             Schema schema,
             IResponse? response,
             ICloudFetchDownloadManager downloadManager,
-            long totalExpectedRows = 0)
+            long totalExpectedRows = 0,
+            bool failOnRowCountMismatch = false)
             : base(statement, schema, response, isLz4Compressed: false) // isLz4Compressed handled by download manager
         {
             this.downloadManager = downloadManager ?? throw new ArgumentNullException(nameof(downloadManager));
@@ -87,6 +91,7 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 throw new ArgumentOutOfRangeException(nameof(totalExpectedRows), totalExpectedRows, "Total expected rows cannot be negative.");
             }
             _totalExpectedRows = totalExpectedRows;
+            _failOnRowCountMismatch = failOnRowCountMismatch;
         }
 
         /// <summary>
@@ -337,7 +342,8 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             return metrics;
         }
 
-        // ES-2356918: rows the server declared but the decoded files did not deliver. Report-only.
+        // ES-2356918: rows the server declared but the decoded files did not deliver. Always recorded; fails the read
+        // only when adbc.databricks.fail_on_row_count_mismatch is enabled.
         private void RecordRowShortfall(long expectedRows, long rowsRead)
         {
             if (rowsRead >= expectedRows) return;
@@ -346,6 +352,14 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 new("expected_rows", expectedRows),
                 new("rows_read", rowsRead)
             ]);
+            if (_failOnRowCountMismatch)
+            {
+                throw new DatabricksException(
+                    $"CloudFetch result has fewer rows than the server declared ({(_totalExpectedRows > 0 ? "in total" : "in one result file")}): " +
+                    $"expected {expectedRows}, read {rowsRead}. " +
+                    $"Set {DatabricksParameters.FailOnRowCountMismatch}=false to return the partial result instead.",
+                    AdbcStatusCode.InvalidData);
+            }
         }
 
         protected override void Dispose(bool disposing)
