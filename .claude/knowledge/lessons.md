@@ -1,6 +1,6 @@
 # Lessons
 
-<!-- distilled-through: 2026-11-17 -->
+<!-- distilled-through: 2026-11-18 -->
 
 ## SEA metadata [lang=csharp]
 - L-0001 (1×, #593): On SEA a match-all catalog `%`/`*` means all catalogs only when escape_pattern_wildcards is off; with escaping on, treat it literally (empty result), as Thrift does.
@@ -74,6 +74,7 @@
 - L-0059 (1×, #706): A cancellation guard before error telemetry swallows every shutdown error; swallow only the expected exception and still emit an event for the rest.
 - L-0060 (1×, #701): Record statement telemetry success only after every post-processing step that can throw, or a later throw records both success and error.
 - L-0061 (1×, #760): When racing a non-cancelable task against Task.Delay, cancel the delay's CTS on success and observe the abandoned task's fault on timeout.
+- L-0083 (1×, #783): Record result-format/metrics flags into a field at reader-selection time so they survive Dispose; statement telemetry is often emitted after a `using` reader is disposed, so never derive such flags from live reader object identity.
 
 ## Result contract [lang=csharp]
 - L-0062 [all] (1×, #700): A flag that changes an existing column's Arrow wire type is a breaking change: default it off (opt-in), like the sibling flags and the ODBC/JDBC drivers.
@@ -98,6 +99,7 @@
 - L-0075 (1×, #723): In pixi.lock the digest in the PyPI URL path is BLAKE2b, not the sha256 field; regenerate with `pixi update <pkg>`, never copy it.
 - L-0076 (1×, #767): zizmor ignores are anchored by file:line; after changing a workflow's line count, regenerate the anchors and verify offline (actionlint doesn't check them).
 - L-0081 (1×, #772): Anchor language/path classifier globs to directory/filename boundaries (`csharp/*`, `ci/scripts/rust*`), never bare `*lang*`, or unrelated paths like trust.md get mis-tagged.
+- L-0084 (1×, #781): When adding a config key consumed by a pinned external engine, bump that workflow's engine pin to a commit that reads the key and document any intentional divergence from sibling pins, or the key is silently ignored.
 
 ## Finding things in this repo [phase=author,followup; lang=csharp]
 - L-0077 (1×, log:2026-08-12): The csharp test project is csharp/test/AdbcDrivers.Databricks.Tests.csproj; glob csharp/test/*.csproj before running dotnet test.
