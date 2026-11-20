@@ -27,7 +27,7 @@
 # Self-contained (a cross-org `uses:` of the hub's internal composite action does
 # NOT work) — installs the engine with an App token + the Claude SDK/CLI inline.
 # Supply-chain pin: ENGINE_REF in the install step is pinned to an immutable commit SHA
-# (never @main); claude-agent-sdk / @anthropic-ai/claude-code are unpinned to match the hub.
+# (never @main); claude-agent-sdk / @anthropic-ai/claude-code come from the locks at that commit.
 # When the engine repo goes public, drop the App token (anonymous install) but keep ENGINE_REF pinned.
 name: Engineer Bot — Follow-up
 
@@ -213,22 +213,38 @@ jobs:
           ENGINE_PAT: ${{ steps.engine-token.outputs.token }}
           # SUPPLY-CHAIN PIN: the engine is pinned to an immutable commit SHA — never
           # install from the force-pushable `@main` ref in a secret-bearing job. Bump
-          # ENGINE_REF to adopt engine changes together with the SDK/CLI locks in
-          # .github/bot-requirements/ and .github/claude-cli/ (copied from the same engine commit).
+          # ENGINE_REF to adopt engine changes; the SDK/CLI locks come from the same commit.
           ENGINE_REF: fcf69265d182cc884aa732b2fbd7d559556897ce
         run: |
           set -euo pipefail
           : "${ENGINE_REF:?pin the engine to a tag/SHA before activation (refusing @main)}"
           python -m pip install --upgrade pip
-          # Drop the `x-access-token:${ENGINE_PAT}@` prefix once the engine repo is public; ENGINE_REF stays pinned.
-          pip install "databricks-bot-engine @ git+https://x-access-token:${ENGINE_PAT}@github.com/databricks/databricks-bot-engine@${ENGINE_REF}"
-          # Claude Agent SDK, hash-locked to the engine's requirements/claude-sdk.lock.
-          pip install --require-hashes -r .github/bot-requirements/claude-sdk.lock
-          # Claude Code CLI, pinned by the engine's package-lock.json. Installed under
+          # Fetch the engine source at the pinned commit and install everything from
+          # that commit's own locks, not from the PR checkout, so a PR can't change what
+          # gets installed next to the engine token. The token travels in git's
+          # environment (not argv or a config file) and is unset before any package
+          # install script runs. Once the engine repo is public, drop the auth header;
+          # ENGINE_REF stays pinned.
+          eng="$RUNNER_TEMP/engine-src"
+          rm -rf "$eng" && git init -q "$eng"
+          auth=$(printf 'x-access-token:%s' "$ENGINE_PAT" | base64 -w0)
+          echo "::add-mask::$auth"
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth" \
+            git -C "$eng" fetch -q --depth 1 https://github.com/databricks/databricks-bot-engine "$ENGINE_REF"
+          git -C "$eng" checkout -q FETCH_HEAD
+          unset ENGINE_PAT auth
+          # Build tools, runtime deps and the Claude Agent SDK, all hash-locked by the
+          # engine; then the engine itself with no further resolution.
+          pip install --require-hashes --only-binary :all: -r "$eng/requirements/build.lock"
+          pip install --require-hashes --only-binary :all: \
+            -r "$eng/requirements/runtime.lock" -r "$eng/requirements/claude-sdk.lock"
+          pip install --no-deps --no-build-isolation "$eng"
+          # Claude Code CLI, pinned by the engine's package-lock.json, installed under
           # RUNNER_TEMP (runner-owned) so no node_modules lands in the checkout.
           cli_dir="$RUNNER_TEMP/claude-cli"
           mkdir -p "$cli_dir"
-          cp .github/claude-cli/package.json .github/claude-cli/package-lock.json "$cli_dir/"
+          cp "$eng/.github/claude-cli/package.json" "$eng/.github/claude-cli/package-lock.json" "$cli_dir/"
           npm ci --prefix "$cli_dir"
           echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"
 
