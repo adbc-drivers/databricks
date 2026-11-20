@@ -290,22 +290,39 @@ namespace AdbcDrivers.Databricks
         {
             if (properties == null) return null;
 
-            if (properties.TryGetValue(SparkParameters.Path, out string? path) && !string.IsNullOrEmpty(path))
+            properties.TryGetValue(SparkParameters.Path, out string? path);
+            bool hasPath = !string.IsNullOrEmpty(path);
+
+            Uri? parsedUri = null;
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
             {
-                string? orgId = ParseOrgIdFromPathOrUriQuery(path);
+                Uri.TryCreate(uri, UriKind.Absolute, out parsedUri);
+            }
+
+            // Both sources agree in practice; they can differ only when Path and Uri are
+            // supplied together and disagree. The ?o= query parameter is authoritative, so
+            // check it on BOTH sources before falling back to either path segment.
+            if (hasPath)
+            {
+                string? orgId = ParseOrgIdFromPathQuery(path!);
                 if (orgId != null) return orgId;
             }
 
-            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri)
-                && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri))
+            if (parsedUri != null && !string.IsNullOrEmpty(parsedUri.Query))
             {
-                if (!string.IsNullOrEmpty(parsedUri.Query))
-                {
-                    string? orgId = ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
-                    if (orgId != null) return orgId;
-                }
+                string? orgId = ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
+                if (orgId != null) return orgId;
+            }
 
-                // Fall back to /sql/protocolv1/o/<wsid>/<cluster> in the URI path.
+            // Fall back to /sql/protocolv1/o/<wsid>/<cluster>, again Path before Uri.
+            if (hasPath)
+            {
+                string? orgId = ParseOrgIdFromPathSegment(path!);
+                if (orgId != null) return orgId;
+            }
+
+            if (parsedUri != null)
+            {
                 Match uriPathMatch = s_clusterPathOrgIdPattern.Match(parsedUri.AbsolutePath);
                 if (uriPathMatch.Success) return uriPathMatch.Groups[1].Value;
             }
@@ -313,16 +330,17 @@ namespace AdbcDrivers.Databricks
             return null;
         }
 
-        // ?o= in the query string wins; otherwise look for the cluster path segment.
-        private static string? ParseOrgIdFromPathOrUriQuery(string path)
+        // Extracts ?o= from the query portion of a raw http path string, if present.
+        private static string? ParseOrgIdFromPathQuery(string path)
         {
             int q = path.IndexOf('?');
-            if (q >= 0)
-            {
-                string? orgId = ParseOrgIdFromQueryString(path.Substring(q + 1));
-                if (orgId != null) return orgId;
-            }
+            return q >= 0 ? ParseOrgIdFromQueryString(path.Substring(q + 1)) : null;
+        }
 
+        // Extracts the workspace ID from the cluster path segment of a raw http path string.
+        private static string? ParseOrgIdFromPathSegment(string path)
+        {
+            int q = path.IndexOf('?');
             string pathOnly = q >= 0 ? path.Substring(0, q) : path;
             Match match = s_clusterPathOrgIdPattern.Match(pathOnly);
             return match.Success ? match.Groups[1].Value : null;

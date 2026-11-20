@@ -90,5 +90,20 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.Equal("6051921418418893", PropertyHelper.ParseOrgIdFromProperties(props));
         }
+
+        [Fact]
+        public void ParseOrgIdFromProperties_PathClusterSegmentAndUriQueryParam_UriQueryWins()
+        {
+            // When Path and Uri are both set and disagree, the ?o= query parameter is
+            // authoritative over a path segment regardless of which source carries it:
+            // Uri's ?o= must win over Path's cluster segment.
+            var props = new Dictionary<string, string>
+            {
+                { SparkParameters.Path, "sql/protocolv1/o/111/0528-220959-uzmcn1qt" },
+                { AdbcOptions.Uri, "https://host.databricks.com/sql/1.0/warehouses/abc123?o=222" },
+            };
+
+            Assert.Equal("222", PropertyHelper.ParseOrgIdFromProperties(props));
+        }
     }
 }
