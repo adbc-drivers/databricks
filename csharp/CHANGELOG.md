@@ -18,7 +18,136 @@
 
 All notable changes to the C# Databricks ADBC driver are documented in this file.
 
-## [1.1.4] - Unreleased
+## [Unreleased]
+
+### Added
+
+- Add opt-in GeoArrow WKB results for `GEOMETRY` and `GEOGRAPHY`, including
+  nested values; WKT/EWKT strings remain the default for backward compatibility.
+
+## [1.1.11] - 2026-10-06
+
+### Fixed
+
+- Validate SEA query timeout values (#689)
+
+### Changed
+
+- Revert the AOT/trim-safe `net10.0` change from 1.1.9 (#509) (#672)
+- Bump hiveserver2 submodule for the NU1902 SourceLink fix (#675)
+
+### Performance
+
+- Pipeline SEA `GetResultChunk` link fetches to keep CloudFetch downloads fed (#681)
+- Read SEA result responses as UTF-8 bytes instead of a string (#693)
+- Skip gzip on the SEA inline response body (#678)
+
+## [1.1.10] - 2026-09-09
+
+### Added
+
+- Transparently fall back to the Statement Execution API (SEA) when a Reyden/Lakehouse-RT warehouse rejects a Thrift `OpenSession` with SQLSTATE `KP001` (#670)
+
+## [1.1.9] - 2026-09-04
+
+### Added
+
+- Make the driver AOT/trim-safe under `net10.0` (#509)
+- Apply server feature flags synchronously on connect (#656)
+
+### Fixed
+
+- Don't filter `GetCrossReference` by the seeded default catalog (#660)
+- Align `GetCrossReference` Thrift and SEA paths on parent identifiers (#645)
+- Default empty/null `TABLE_TYPE` to `TABLE` in `GetTables` (#654)
+
+### Changed
+
+- Update hiveserver2 submodule to downgrade ApacheThrift (#649)
+
+## [1.1.8] - 2026-08-11
+
+### Added
+
+- New opt-in connection parameter `adbc.databricks.scope_current_catalog` for
+  native-query catalog scoping (default off) (#635)
+- Validate exact-match arguments for SEA `GetPrimaryKeys` / `GetCrossReference` (#609)
+
+### Fixed
+
+- Align SEA metadata error behavior with the Thrift path (#604)
+- `escape_pattern_wildcards` not honored for the catalog dimension on the SEA path,
+  where a match-all `%` diverged from Thrift (#593, #594)
+- Empty `tableTypes` filter now matches no rows rather than all rows (JDBC parity) (#626)
+- Return a row for `GEOMETRY`/`GEOGRAPHY` columns in `GetColumns` (#568, #627)
+- Read `SqlState` from `status.sql_state` on failed SEA statements (#636)
+- Derive SEA `GetPrimaryKeys` row identifiers from the server response rather than the
+  input case (#622)
+- Make `CloseOperation` best-effort in `DatabricksCompositeReader.Dispose` (#618)
+- Conformance fix for DATATYPE-042 (#640, #644)
+
+## [1.1.7] - 2026-07-08
+
+### Changed
+
+- **`adbc.databricks.rest.result_compression` is now ignored** (deprecated). Result
+  compression on the REST/SEA path is derived solely from the LZ4 capability flag
+  `adbc.databricks.cloudfetch.lz4.enabled` (default `true`), so a single flag drives
+  LZ4 across both the Thrift/CloudFetch and REST paths. Arrow-format queries now request
+  `LZ4_FRAME` by default. To opt out of LZ4 compression, set
+  `adbc.databricks.cloudfetch.lz4.enabled=false`; explicit `result_compression=none`
+  (or `gzip`) values are no longer honored.
+
+### Fixed
+
+- Fix `*`/`%` wildcard semantics and `TABLE_CAT` identifier echo divergence between the
+  Thrift and REST/SEA metadata paths (#536, #525)
+- Derive SEA `wait_timeout` from the direct-results setting and treat a `CLOSED` statement
+  state as success (#566)
+
+## [1.1.6] - 2026-07-02
+
+### Added
+
+- Add `enable_fast_metadata_query` flag for DESC TABLE EXTENDED (#456)
+
+### Fixed
+
+- Apply cached feature flags on connect (warm cache) (#563)
+- Correct getTables types filter for empty array `[]` and lowercase case-sensitivity differences between protocols (#546)
+- Emit `http.response.status_code` on DownloadFile (#496)
+
+### Changed
+
+- Bump hiveserver2 submodule for empty table-types GetTables fix (#559)
+
+## [1.1.5] - 2026-06-11
+
+### Added
+
+- Emit telemetry for session/cancel/close operations (PECO-2991) (#437)
+- Support `ADBC_DATABRICKS_CONFIG_FILE` environment variable (#454)
+- Honor `adbc.spark.connect_timeout_ms` on SEA path (PECO-3059) (#466)
+- Honor `adbc.databricks.apply_ssp_with_queries` on SEA path (PECO-3062) (#468)
+- Enable feature flag cache by default (#500)
+
+### Fixed
+
+- Fix concurrent Dispose deadlock (#385)
+- Honor `EnableComplexDatatypeSupport` on SEA path (PECO-3047) (#457)
+- Emit valid JSON for Thrift MAP values containing quotes (#458)
+- Consolidate SEA polling interval onto `polltime_ms` (PECO-3064) (#470)
+- Bracket `close_operation` event for measurable latency (#492)
+- Tag `download_slot_acquired` with `wait_duration_ms` (#495)
+- Correct `enable_complex_datatype_support` telemetry and map more connection params (#517)
+
+### Changed
+
+- Reduce allocations and copies in result transfer (#474)
+- Unify user-agent on `UserAgentHelper` with capital-ADBC prefix (#503)
+- Make `ConnectionTelemetry.Create` protocol-agnostic (PECO-3022) (#460)
+
+## [1.1.4] - 2026-05-08
 
 ### Changed
 

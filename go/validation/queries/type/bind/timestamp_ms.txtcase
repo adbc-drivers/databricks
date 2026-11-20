@@ -1,4 +1,4 @@
-// Copyright (c) 2025 ADBC Drivers Contributors
+// Copyright (c) 2026 ADBC Drivers Contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,13 +19,16 @@ sql-type-name = "TIMESTAMP_NTZ"
 
 // part: setup_query
 
-CREATE TABLE test_timestamp (
-    idx INTEGER,
-    res TIMESTAMP_NTZ
-);
+CREATE TABLE test_timestamp (idx INT, res TIMESTAMP_NTZ);
 
-INSERT INTO test_timestamp (idx, res) VALUES (1, TIMESTAMP_NTZ '2023-05-15 13:45:30');
-INSERT INTO test_timestamp (idx, res) VALUES (2, TIMESTAMP_NTZ '2000-01-01 00:00:00');
-INSERT INTO test_timestamp (idx, res) VALUES (3, TIMESTAMP_NTZ '1969-07-20 20:17:40');
-INSERT INTO test_timestamp (idx, res) VALUES (4, TIMESTAMP_NTZ '9999-12-31 23:59:59');
-INSERT INTO test_timestamp (idx, res) VALUES (5, NULL);
+// part: expected_schema
+
+{"format": "+s", "children": [{"name": "res", "format": "tsu:", "flags": ["nullable"]}]}
+
+// part: expected
+
+{"res": null}
+{"res": -62135596800000000}
+{"res": 946684800123000}
+{"res": 1684158330123000}
+{"res": 253402300799999000}

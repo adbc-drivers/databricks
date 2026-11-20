@@ -15,6 +15,7 @@
  */
 
 using AdbcDrivers.Databricks.StatementExecution;
+using AdbcDrivers.HiveServer2.Hive2;
 using Xunit;
 using static AdbcDrivers.HiveServer2.Hive2.HiveServer2Connection;
 
@@ -75,6 +76,13 @@ namespace AdbcDrivers.Databricks.Tests
         [InlineData("STRING", "STRING")]
         [InlineData("BOOLEAN", "BOOLEAN")]
         [InlineData("DOUBLE", "DOUBLE")]
+        // Unmodeled types (geospatial, and any future server type) fall back to the shared
+        // parser's stripped base name — the (SRID) suffix is removed, matching the Thrift path
+        // (SparkConnection.SetPrecisionScaleAndTypeName) so both protocols agree on BASE_TYPE_NAME.
+        [InlineData("GEOMETRY(0)", "GEOMETRY")]
+        [InlineData("GEOGRAPHY(4326)", "GEOGRAPHY")]
+        [InlineData("GEOMETRY", "GEOMETRY")]
+        [InlineData("VARIANT", "VARIANT")]
         [InlineData("", "")]
         public void GetBaseTypeName_ReturnsCorrectName(string typeName, string expectedBase)
         {
@@ -193,6 +201,21 @@ namespace AdbcDrivers.Databricks.Tests
         public void GetDataTypeCode_HandlesTrimAndCase(string typeName, short expectedCode)
         {
             Assert.Equal(expectedCode, ColumnMetadataHelper.GetDataTypeCode(typeName));
+        }
+
+        [Theory]
+        [InlineData("DECIMAL(10,2)", 10, 2)]
+        [InlineData("DOUBLE", 8, 15)]
+        [InlineData("VARCHAR(42)", 42, 0)]
+        [InlineData("BINARY", 0, 0)]
+        public void PopulateTableInfo_PreservesComputedPrecisionAndScale(string typeName, int size, int digits)
+        {
+            var tableInfo = new TableInfo("TABLE");
+
+            ColumnMetadataHelper.PopulateTableInfoFromTypeName(tableInfo, "a", typeName, 0);
+
+            Assert.Equal(size, Assert.Single(tableInfo.Precision));
+            Assert.Equal((short)digits, Assert.Single(tableInfo.Scale));
         }
 
     }

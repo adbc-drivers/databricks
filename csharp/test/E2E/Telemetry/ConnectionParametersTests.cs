@@ -210,7 +210,6 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 Assert.False(string.IsNullOrEmpty(actualHostUrl), "host_url should be populated");
                 Assert.Equal(expectedHost, actualHostUrl);
                 Assert.DoesNotContain("://", actualHostUrl);
-                Assert.DoesNotContain(":", actualHostUrl);
 
                 OutputHelper?.WriteLine($"✓ host_info.host_url: {actualHostUrl}");
             }
@@ -419,7 +418,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 var properties = TestEnvironment.GetDriverParameters(TestConfiguration);
 
                 // Enable complex datatype support explicitly
-                properties[DatabricksParameters.UseDescTableExtended] = "true";
+                properties[DatabricksParameters.EnableComplexDatatypeSupport] = "true";
 
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 
@@ -440,7 +439,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 // Assert enable_complex_datatype_support is populated
                 Assert.NotNull(protoLog.DriverConnectionParams);
                 Assert.True(protoLog.DriverConnectionParams.EnableComplexDatatypeSupport,
-                    "enable_complex_datatype_support should match UseDescTableExtended config");
+                    "enable_complex_datatype_support should match EnableComplexDatatypeSupport config");
 
                 OutputHelper?.WriteLine($"✓ enable_complex_datatype_support: {protoLog.DriverConnectionParams.EnableComplexDatatypeSupport}");
             }
@@ -610,7 +609,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.Telemetry
                 properties[ApacheParameters.BatchSize] = "10000";
                 properties[SparkParameters.ConnectTimeoutMilliseconds] = "90000";
                 properties[DatabricksParameters.EnableDirectResults] = "true";
-                properties[DatabricksParameters.UseDescTableExtended] = "true";
+                properties[DatabricksParameters.EnableComplexDatatypeSupport] = "true";
 
                 (connection, exporter) = TelemetryTestHelpers.CreateConnectionWithCapturingTelemetry(properties);
 

@@ -44,12 +44,27 @@ concurrency:
 jobs:
   run-e2e-tests:
     name: "E2E Tests (${{ matrix.protocol }})"
-    runs-on: ubuntu-latest
+    # Run on Windows against .NET Framework 4.7.2, the runtime Power BI Desktop and the
+    # on-premises data gateway load the driver in. .NET Framework's Stream.CopyTo reads
+    # 81,920 bytes at a time while .NET 8 rents a 131,072-byte buffer, so CloudFetch/LZ4
+    # behavior differs between the two (ES-2356918 only reproduced on .NET Framework).
+    runs-on: windows-2022
+    # Pin an explicit cap (vs GitHub's 360-min default) so a slow/hung large CloudFetch
+    # scan — e.g. the 10M/100M-row TPC-DS cases in CloudFetchE2ETest — fails fast in the
+    # merge queue instead of blocking it for hours. 180 matches benchmarks.yml. It is a
+    # fail-fast ceiling for a genuine hang, not a target: a healthy net472 run takes
+    # well under an hour per protocol leg (about 35-37 min measured),
+    # so revisit this cap if a healthy run starts approaching it.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         protocol: ${{ inputs.protocol == 'thrift' && fromJson('["thrift"]') || inputs.protocol == 'rest' && fromJson('["rest"]') || fromJson('["thrift","rest"]') }}
+    defaults:
+      run:
+        shell: bash
     env:
+      E2E_TARGET_FRAMEWORK: net472
       DATABRICKS_SERVER_HOSTNAME: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_HTTP_PATH: ${{ secrets.TEST_PECO_WAREHOUSE_HTTP_PATH }}
       DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
@@ -88,6 +103,12 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Set up Python
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
       - name: Generate OAuth access token
         if: steps.gate.outputs.run == 'true'
         id: oauth
@@ -98,7 +119,7 @@ jobs:
             -d "client_id=${{ env.DATABRICKS_TEST_CLIENT_ID }}" \
             -d "client_secret=${{ env.DATABRICKS_TEST_CLIENT_SECRET }}" \
             -d "scope=sql")
-          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+          OAUTH_TOKEN=$(echo "$OAUTH_RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
           if [ -z "$OAUTH_TOKEN" ]; then
             echo "ERROR: Failed to generate OAuth token"
             exit 1
@@ -143,7 +164,7 @@ jobs:
             -H "Authorization: Bearer $OAUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          STATUS=$(echo "$RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
           if [ "$STATUS" != "SUCCEEDED" ]; then
             echo "ERROR: CREATE SCHEMA failed (status=$STATUS)"
             echo "Response: $RESPONSE"
@@ -166,7 +187,7 @@ jobs:
           WAREHOUSE_ID: ${{ steps.schema.outputs.WAREHOUSE_ID }}
           DATABRICKS_SERVER_HOSTNAME: ${{ env.DATABRICKS_SERVER_HOSTNAME }}
         run: |
-          python3 - <<'PYEOF'
+          python - <<'PYEOF'
           import json, os, re, sys, urllib.request
 
           with open("csharp/test/Resources/Databricks.sql") as f:
@@ -241,7 +262,7 @@ jobs:
             }
           }
           EOF
-          echo "DATABRICKS_TEST_CONFIG_FILE=$HOME/.databricks/connection.json" >> $GITHUB_ENV
+          echo "DATABRICKS_TEST_CONFIG_FILE=$(cygpath -w "$HOME/.databricks/connection.json")" >> $GITHUB_ENV
 
       - name: Build
         if: steps.gate.outputs.run == 'true'
@@ -253,7 +274,8 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         shell: bash
         run: |
-          export DATABRICKS_TEST_CONFIG_FILE="$HOME/.databricks/connection.json"
+          export DATABRICKS_TEST_CONFIG_FILE="$(cygpath -w "$HOME/.databricks/connection.json")"
+          export TEST_FRAMEWORK="$E2E_TARGET_FRAMEWORK"
           ./ci/scripts/csharp_test_databricks_e2e.sh "${{ github.workspace }}"
 
       # Always run, even on test failure or job cancellation, so we don't
@@ -271,7 +293,7 @@ jobs:
             -H "Authorization: Bearer $OAUTH_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          STATUS=$(echo "$RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
+          STATUS=$(echo "$RESPONSE" | python -c "import sys, json; print(json.load(sys.stdin).get('status', {}).get('state', ''))")
           if [ "$STATUS" != "SUCCEEDED" ]; then
             # Don't fail the job on cleanup error — leaked schemas can be
             # garbage-collected later. But surface the failure.

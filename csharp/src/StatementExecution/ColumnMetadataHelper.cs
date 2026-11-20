@@ -91,14 +91,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
 
         internal static string GetBaseTypeName(string typeName)
         {
-            if (SqlTypeNameParser<SqlTypeNameParserResult>.TryParse(typeName, out SqlTypeNameParserResult? result))
-            {
-                return result!.BaseTypeName;
-            }
+            // Databricks-specific aliases the shared parser does not model. Checked first
+            // because these names (BYTE/SHORT/LONG) are not parseable, so Parse below would
+            // otherwise strip-fall-back to the alias itself instead of its canonical base.
             string upper = typeName.Trim().ToUpperInvariant();
             if (s_aliasToBaseType.TryGetValue(upper, out string? canonical))
                 return canonical;
-            return upper;
+            // Parse returns the matched parser's base name for a recognized type, or a
+            // stripped, upper-cased fallback for a type the registry does not model
+            // (e.g. "geometry(0)" -> "GEOMETRY"), matching SparkConnection's Thrift path so
+            // both metadata paths report an identical BASE_TYPE_NAME. Parse never throws for
+            // the generic result type.
+            return SqlTypeNameParser<SqlTypeNameParserResult>.Parse(typeName).BaseTypeName;
         }
 
         /// <summary>
@@ -180,6 +184,24 @@ namespace AdbcDrivers.Databricks.StatementExecution
             };
         }
 
+        internal static (long ColumnSize, long DecimalDigits) NormalizePrecisionAndScale(
+            string? typeName, long? columnSize, long? decimalDigits)
+        {
+            if (typeName != null)
+            {
+                string baseName = GetBaseTypeName(typeName);
+                if (baseName is "DECIMAL" or "NUMERIC")
+                {
+                    columnSize = GetColumnSizeDefault(typeName);
+                    decimalDigits = GetDecimalDigitsDefault(typeName);
+                }
+                else if (s_charBaseTypes.Contains(baseName))
+                    columnSize = GetColumnSizeDefault(typeName);
+            }
+            // Thrift defaults null sizes and digits to zero before type-specific overrides.
+            return (columnSize ?? 0, decimalDigits ?? 0);
+        }
+
         internal static int? GetBufferLength(string typeName)
         {
             string baseName = GetBaseTypeName(typeName);
@@ -238,19 +260,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
             int ordinalPosition,
             bool isNullable = true,
             string? comment = null,
-            string? columnDefault = null)
+            string? columnDefault = null,
+            bool isAutoIncrement = false)
         {
             tableInfo.ColumnName.Add(columnName);
             tableInfo.TypeName.Add(typeName);
             tableInfo.ColType.Add(GetDataTypeCode(typeName));
             tableInfo.BaseTypeName.Add(GetBaseTypeName(typeName));
-            tableInfo.Precision.Add(GetColumnSizeDefault(typeName));
-            int? scale = GetDecimalDigitsDefault(typeName);
-            tableInfo.Scale.Add(scale.HasValue ? (short)scale.Value : null);
+            var precisionAndScale = NormalizePrecisionAndScale(
+                typeName, GetColumnSizeDefault(typeName), GetDecimalDigitsDefault(typeName));
+            tableInfo.Precision.Add(checked((int)precisionAndScale.ColumnSize));
+            tableInfo.Scale.Add((short)precisionAndScale.DecimalDigits);
             tableInfo.OrdinalPosition.Add(ordinalPosition);
             tableInfo.Nullable.Add(isNullable ? (short)1 : (short)0);
             tableInfo.IsNullable.Add(isNullable ? "YES" : "NO");
-            tableInfo.IsAutoIncrement.Add(false);
+            tableInfo.IsAutoIncrement.Add(isAutoIncrement);
             tableInfo.ColumnDefault.Add(columnDefault ?? "");
         }
 

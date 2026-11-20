@@ -199,7 +199,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
             }
 
             // Delete session
-            await client.DeleteSessionAsync(createResponse.SessionId, GetWarehouseId(), CancellationToken.None);
+            await client.DeleteSessionAsync(CancellationToken.None);
         }
 
         [Fact]
@@ -639,7 +639,7 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
 
                     try
                     {
-                        await client.DeleteSessionAsync(sessionId, GetWarehouseId(), CancellationToken.None);
+                        await client.DeleteSessionAsync(CancellationToken.None);
                     }
                     catch
                     {

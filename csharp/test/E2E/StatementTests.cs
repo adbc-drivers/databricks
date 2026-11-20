@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow;
 using Apache.Arrow.Adbc;
@@ -37,7 +38,7 @@ using Xunit.Abstractions;
 
 namespace AdbcDrivers.Databricks.Tests
 {
-    // TODO: PECO-3011 - CanSetOptionBatchSize/PollTime/QueryTimeout inherited from base class not validated in SEA's StatementExecutionStatement
+    // TODO: PECO-3011 - CanSetOptionBatchSize/PollTime inherited from base class not validated in SEA's StatementExecutionStatement
     public class StatementTests : StatementTests<DatabricksTestConfiguration, DatabricksTestEnvironment>
     {
         public StatementTests(ITestOutputHelper? outputHelper)
@@ -50,13 +51,6 @@ namespace AdbcDrivers.Databricks.Tests
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce poll time validation");
             base.ValidateCanSetOptionPollTime(value, throws);
-        }
-
-        // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate query timeout option
-        protected override void ValidateCanSetOptionQueryTimeout(string value, bool throws = false)
-        {
-            Skip.If(TestConfiguration.Protocol == "rest", "SEA does not enforce query timeout validation");
-            base.ValidateCanSetOptionQueryTimeout(value, throws);
         }
 
         // TODO: PECO-3011 - SEA StatementExecutionStatement does not validate batch size option
@@ -481,9 +475,9 @@ namespace AdbcDrivers.Databricks.Tests
 
         // TODO: PECO-3008 - CanGetColumnsExtended fails for SEA; investigate catalog/schema metadata path in StatementExecutionConnection
         [SkippableTheory]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true, new[] { "PK_IS_NULLABLE:NO" })]
-        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false, new[] { "PK_IS_NULLABLE:YES" })]
-        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended, string[]? extraPlaceholdsInResult = null)
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", true)]
+        [InlineData("all_column_types", "Resources/create_table_all_types.sql", "Resources/result_get_column_extended_all_types.json", false)]
+        public async Task CanGetColumnsExtended(string tableName, string createTableSqlLocation, string resultLocation, bool useDescTableExtended)
         {
             Skip.If(TestConfiguration.Protocol == "rest", "SEA CanGetColumnsExtended returns different BUFFER_LENGTH values (PECO-3008)");
             var connectionParams = new Dictionary<string, string> { ["adbc.databricks.use_desc_table_extended"] = $"{useDescTableExtended}" };
@@ -614,21 +608,6 @@ namespace AdbcDrivers.Databricks.Tests
                 .Replace("{TABLE_NAME}", tableName)
                 .Replace("{REF_TABLE_NAME}", refTableName);
 
-            // Apply extra placeholder replacements if provided
-            if (extraPlaceholdsInResult != null)
-            {
-                foreach (var placeholderReplacement in extraPlaceholdsInResult)
-                {
-                    var parts = placeholderReplacement.Split(':');
-                    if (parts.Length == 2)
-                    {
-                        var placeholder = parts[0];
-                        var replacement = parts[1];
-                        resultString = resultString.Replace("{" + placeholder + "}", replacement);
-                    }
-                }
-            }
-
             var expectedResult = JsonSerializer.Deserialize<List<Dictionary<string, object?>>>(resultString);
 
             // For debug
@@ -686,6 +665,250 @@ namespace AdbcDrivers.Databricks.Tests
                 actualBatchLength += batch.Length;
             }
             Assert.Equal(0, actualBatchLength);
+        }
+
+        // Issue #568: GetColumns on a table with a GEOMETRY/GEOGRAPHY column previously threw
+        // NotSupportedException on the Thrift path (SqlTypeNameParser had no entry for the geo
+        // types and no catch-all). The root-cause fix lives in the hiveserver2 submodule's
+        // SqlTypeNameParser.Parse (stripped-base-name fallback); this test guards that GetColumns
+        // returns a row for the geo column and reports the stripped BASE_TYPE_NAME (e.g.
+        // "geometry(0)" -> "GEOMETRY"), consistent on whatever protocol the run is configured with.
+        [SkippableTheory]
+        [InlineData("GEOMETRY", "geom_col")]
+        [InlineData("GEOGRAPHY", "geog_col")]
+        public async Task CanGetColumnsOnGeospatialColumn(string geoType, string columnName)
+        {
+            string? catalogName = TestConfiguration.Metadata.Catalog;
+            string? schemaName = TestConfiguration.Metadata.Schema;
+            string tableName = Guid.NewGuid().ToString("N");
+            string fullTableName = string.Format(
+                "{0}{1}{2}",
+                string.IsNullOrEmpty(catalogName) ? string.Empty : DelimitIdentifier(catalogName) + ".",
+                string.IsNullOrEmpty(schemaName) ? string.Empty : DelimitIdentifier(schemaName) + ".",
+                DelimitIdentifier(tableName));
+            using TemporaryTable temporaryTable = await TemporaryTable.NewTemporaryTableAsync(
+                Statement,
+                fullTableName,
+                $"CREATE TABLE IF NOT EXISTS {fullTableName} (id INT, {columnName} {geoType}(4326));",
+                OutputHelper);
+
+            var statement = Connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, catalogName);
+            statement.SetOption(ApacheParameters.SchemaName, schemaName);
+            statement.SetOption(ApacheParameters.TableName, tableName);
+            statement.SqlQuery = "GetColumns";
+
+            // Prior to the fix this throws NotSupportedException while parsing the geo type name.
+            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            Assert.NotNull(queryResult.Stream);
+
+            int columnNameIndex = -1;
+            int baseTypeNameIndex = -1;
+            for (int i = 0; i < queryResult.Stream!.Schema.FieldsList.Count; i++)
+            {
+                string name = queryResult.Stream.Schema.FieldsList[i].Name;
+                if (name.Equals("COLUMN_NAME", StringComparison.OrdinalIgnoreCase)) columnNameIndex = i;
+                else if (name.Equals("BASE_TYPE_NAME", StringComparison.OrdinalIgnoreCase)) baseTypeNameIndex = i;
+            }
+            Assert.True(columnNameIndex >= 0, "COLUMN_NAME column not found in GetColumns result");
+            Assert.True(baseTypeNameIndex >= 0, "BASE_TYPE_NAME column not found in GetColumns result");
+
+            bool foundGeoColumn = false;
+            string? geoBaseTypeName = null;
+            while (queryResult.Stream != null)
+            {
+                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                if (batch == null)
+                {
+                    break;
+                }
+                var columnNames = (StringArray)batch.Column(columnNameIndex);
+                var baseTypeNames = (StringArray)batch.Column(baseTypeNameIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (string.Equals(columnNames.GetString(i), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foundGeoColumn = true;
+                        geoBaseTypeName = baseTypeNames.GetString(i);
+                    }
+                }
+            }
+
+            Assert.True(foundGeoColumn, $"GetColumns should return a row for the {geoType} column '{columnName}'");
+            // BASE_TYPE_NAME is the stripped base name (no (SRID) suffix), matching how the
+            // recognized types report it and the JDBC reference driver's stripBaseTypeName.
+            Assert.Equal(geoType, geoBaseTypeName);
+        }
+
+        // String mode preserves legacy server-rendered text and locally renders Reyden's native
+        // struct<srid,wkb> values to the same WKT / EWKT representation.
+        [SkippableTheory]
+        [InlineData("st_geomfromtext('POINT(30 10)', 4326)", "GEOMETRY(4326)")]
+        [InlineData("to_geography('POINT(30 10)')", "GEOGRAPHY(ANY)")]
+        public async Task GeospatialDataColumnReportsStringEwkt(string geoExpr, string expectedSqlName)
+        {
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableGeospatialSupport] = "false",
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            // Schema: the geo column is declared Utf8, carrying the server's SQL type name in the
+            // Spark:DataType:SqlName field metadata (the same signal #627 strips for BASE_TYPE_NAME).
+            Field field = Assert.Single(reader!.Schema.FieldsList);
+            Assert.Equal("geo_col", field.Name);
+            Assert.Equal(ArrowTypeId.String, field.DataType.TypeId);
+            Assert.True(
+                field.Metadata != null &&
+                field.Metadata.TryGetValue("Spark:DataType:SqlName", out string? sqlName) &&
+                sqlName == expectedSqlName,
+                $"expected Spark:DataType:SqlName={expectedSqlName}");
+
+            // Data: the batch array agrees with the declared Utf8 schema, and the value round-trips
+            // as the server's EWKT text (SRID-prefixed WKT).
+            int totalRows = 0;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                StringArray geoValues = Assert.IsType<StringArray>(batch.Column(0));
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    Assert.Equal("SRID=4326;POINT(30 10)", geoValues.GetString(i));
+                }
+                totalRows += batch.Length;
+            }
+            Assert.Equal(1, totalRows);
+        }
+
+        // Reyden's native payload and legacy UTF-8 EWKT are both exposed as GeoArrow WKB.
+        [SkippableTheory]
+        [InlineData(
+            "st_geomfromtext('POINT(30 10)', 4326)",
+            "GEOMETRY(4326)",
+            "{\"crs\":\"4326\",\"crs_type\":\"srid\"}",
+            false)]
+        [InlineData(
+            "to_geography('POINT(30 10)')",
+            "GEOGRAPHY(ANY)",
+            "{\"edges\":\"spherical\"}",
+            true)]
+        public async Task GeospatialDataColumnReportsGeoArrow(
+            string geoExpr,
+            string expectedSqlName,
+            string expectedExtensionMetadata,
+            bool expectEmbeddedSrid)
+        {
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableGeospatialSupport] = "true",
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = $"SELECT {geoExpr} AS geo_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+            Field field = Assert.Single(reader!.Schema.FieldsList);
+            Assert.IsType<BinaryType>(field.DataType);
+            Assert.Equal("geoarrow.wkb", field.Metadata["ARROW:extension:name"]);
+            Assert.Equal(
+                expectedExtensionMetadata,
+                field.Metadata["ARROW:extension:metadata"]);
+            Assert.Equal(expectedSqlName, field.Metadata["Spark:DataType:SqlName"]);
+
+            RecordBatch? batch = await reader.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            BinaryArray values = Assert.IsType<BinaryArray>(batch!.Column(0));
+            byte[] expectedWkb = GeospatialWkb.ToWkb(
+                "POINT(30 10)",
+                4326,
+                out int srid);
+            Assert.Equal(4326, srid);
+            if (expectEmbeddedSrid)
+            {
+                expectedWkb = GeospatialWkb.ToEwkb(expectedWkb, srid);
+            }
+            Assert.Equal(expectedWkb, values.GetBytes(0).ToArray());
+            string wkt = GeospatialWkb.ToWkt(values.GetBytes(0));
+            Assert.Equal("POINT(30 10)", wkt);
+            Assert.Null(await reader.ReadNextRecordBatchAsync());
+        }
+
+        [SkippableTheory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task NestedGeospatialDataUsesConfiguredRepresentation(
+            bool enableGeospatialSupport)
+        {
+            var connectionParams = new Dictionary<string, string>
+            {
+                [DatabricksParameters.EnableComplexDatatypeSupport] = "true",
+                [DatabricksParameters.EnableGeospatialSupport] =
+                    enableGeospatialSupport.ToString().ToLowerInvariant(),
+            };
+            using AdbcConnection connection = NewConnection(TestConfiguration, connectionParams);
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery =
+                "SELECT named_struct(" +
+                "'geom', st_geomfromtext('POINT(30 10)', 4326), " +
+                "'geog', to_geography('POINT(30 10)')) AS nested_col";
+
+            QueryResult result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+            StructType outerType = Assert.IsType<StructType>(
+                Assert.Single(reader!.Schema.FieldsList).DataType);
+
+            using RecordBatch? batch = await reader.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            StructArray outer = Assert.IsType<StructArray>(batch.Column(0));
+            Assert.Equal(1, outer.Length);
+
+            if (enableGeospatialSupport)
+            {
+                Assert.All(outerType.Fields, field => Assert.IsType<BinaryType>(field.DataType));
+                Assert.Equal(
+                    "geoarrow.wkb",
+                    outerType.Fields[0].Metadata["ARROW:extension:name"]);
+                Assert.Equal(
+                    "{\"crs\":\"4326\",\"crs_type\":\"srid\"}",
+                    outerType.Fields[0].Metadata["ARROW:extension:metadata"]);
+                Assert.Equal(
+                    "geoarrow.wkb",
+                    outerType.Fields[1].Metadata["ARROW:extension:name"]);
+                Assert.Equal(
+                    "{\"edges\":\"spherical\"}",
+                    outerType.Fields[1].Metadata["ARROW:extension:metadata"]);
+
+                for (int i = 0; i < 2; i++)
+                {
+                    BinaryArray geo = Assert.IsType<BinaryArray>(outer.Fields[i]);
+                    Assert.Equal(
+                        "POINT(30 10)",
+                        GeospatialWkb.ToWkt(geo.GetBytes(0)));
+                }
+            }
+            else
+            {
+                Assert.All(outerType.Fields, field => Assert.IsType<StringType>(field.DataType));
+                Assert.Equal(
+                    "SRID=4326;POINT(30 10)",
+                    Assert.IsType<StringArray>(outer.Fields[0]).GetString(0));
+                Assert.Equal(
+                    "SRID=4326;POINT(30 10)",
+                    Assert.IsType<StringArray>(outer.Fields[1]).GetString(0));
+            }
+
+            Assert.Null(await reader.ReadNextRecordBatchAsync());
         }
 
         [SkippableFact]
@@ -1027,7 +1250,20 @@ namespace AdbcDrivers.Databricks.Tests
             await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
             await TestMetadataQuery(connection, "GetSchemas", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
             await TestMetadataQuery(connection, "GetTables", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
-            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas);
+            // With multi-catalog on, SPARK GetColumns is metastore-wide (all catalogs, all tables in "default")
+            // and grows with the workspace. Scope it to the configured per-run table so the call stays small.
+            // The schema comparison below still uses the column schema, which is unaffected by the filter.
+            string? scopedSchema = null;
+            string? scopedTable = null;
+            if (shouldAllowMultipleCatalogs &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Catalog) &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Schema) &&
+                !string.IsNullOrEmpty(TestConfiguration.Metadata?.Table))
+            {
+                scopedSchema = TestConfiguration.Metadata.Schema;
+                scopedTable = TestConfiguration.Metadata.Table;
+            }
+            await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "SPARK", sparkSchemas, scopedSchema, scopedTable);
 
             // Then run with non-SPARK catalog and compare schemas
             await TestMetadataQuery(connection, "GetCatalogs", shouldAllowMultipleCatalogs, "main", sparkSchemas);
@@ -1036,7 +1272,37 @@ namespace AdbcDrivers.Databricks.Tests
             await TestMetadataQuery(connection, "GetColumns", shouldAllowMultipleCatalogs, "main", sparkSchemas);
         }
 
-        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas)
+        // Upper bound for a single metadata RPC or batch read in these tests. A hung server call
+        // should fail one test within minutes rather than consuming the whole OAuth token lifetime.
+        private static readonly TimeSpan MetadataCallTimeout = TimeSpan.FromMinutes(5);
+
+        private static async Task<T> WithMetadataTimeout<T>(ValueTask<T> operation, string description)
+        {
+            // The underlying metadata APIs (ExecuteQueryAsync on this Thrift path) do not accept a
+            // CancellationToken, so a hung server call cannot be torn down from here. We still cancel
+            // the delay timer on the success path (otherwise one live 5-minute timer would linger per
+            // RPC/batch read) and observe the abandoned task's fault on timeout so it cannot surface
+            // later as an unobserved task exception.
+            Task<T> task = operation.AsTask();
+            using var delayCts = new CancellationTokenSource();
+            Task completed = await Task.WhenAny(task, Task.Delay(MetadataCallTimeout, delayCts.Token));
+            if (completed != task)
+            {
+                _ = task.ContinueWith(
+                    t => { _ = t.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                throw new TimeoutException(
+                    $"{description} did not complete within {MetadataCallTimeout.TotalMinutes} minutes; the metadata call appears hung.");
+            }
+            delayCts.Cancel();
+            return await task;
+        }
+
+        // scopedSchemaName / scopedTableName narrow a metastore-wide SPARK GetColumns call (see the
+        // EnableMultipleCatalogSupportAffectsMetadataQueries test). Both are null for every other call.
+        private async Task TestMetadataQuery(AdbcConnection connection, string queryType, bool shouldAllowMultipleCatalogs, string catalogName, Dictionary<string, Schema> sparkSchemas, string? scopedSchemaName = null, string? scopedTableName = null)
         {
             OutputHelper?.WriteLine($"Testing {queryType} with EnableMultipleCatalogSupport={shouldAllowMultipleCatalogs}, CatalogName={catalogName}");
 
@@ -1044,10 +1310,14 @@ namespace AdbcDrivers.Databricks.Tests
             statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
             statement.SetOption(ApacheParameters.CatalogName, catalogName);
             // Use default as schema name, it is the default schema name
-            statement.SetOption(ApacheParameters.SchemaName, "default");
+            statement.SetOption(ApacheParameters.SchemaName, scopedSchemaName ?? "default");
+            if (scopedTableName != null)
+            {
+                statement.SetOption(ApacheParameters.TableName, scopedTableName);
+            }
             statement.SqlQuery = queryType;
 
-            QueryResult queryResult = await statement.ExecuteQueryAsync();
+            QueryResult queryResult = await WithMetadataTimeout(statement.ExecuteQueryAsync(), $"{queryType} (CatalogName={catalogName})");
             Assert.NotNull(queryResult.Stream);
 
             // Store SPARK catalog schema for comparison
@@ -1092,7 +1362,7 @@ namespace AdbcDrivers.Databricks.Tests
 
             while (queryResult.Stream != null)
             {
-                RecordBatch? batch = await queryResult.Stream.ReadNextRecordBatchAsync();
+                RecordBatch? batch = await WithMetadataTimeout(queryResult.Stream.ReadNextRecordBatchAsync(), $"Reading {queryType} batch (CatalogName={catalogName})");
                 if (batch == null) break;
 
                 rowCount += batch.Length;
@@ -1163,10 +1433,26 @@ namespace AdbcDrivers.Databricks.Tests
                 // When EnableMultipleCatalogSupport is true
                 if (catalogName.Equals("SPARK", StringComparison.OrdinalIgnoreCase))
                 {
-                    // When catalog is SPARK, we may have results from multiple catalogs
-                    Assert.True(foundCatalogs.Count > 1,
-                        $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
-                    OutputHelper?.WriteLine($"Found results from multiple catalogs: {string.Join(", ", foundCatalogs)}");
+                    if (scopedTableName != null)
+                    {
+                        // Scoped GetColumns: SPARK means all catalogs on the server, and that scan grows with the
+                        // workspace (it is server-side, not driver behavior). With a table filter the result
+                        // is small, so assert the configured catalog is present rather than >1 catalog.
+                        Assert.True(rowCount >= 1,
+                            $"{queryType} should return columns for {scopedSchemaName}.{scopedTableName} when EnableMultipleCatalogSupport is true and catalog is SPARK");
+                        // foundCatalogs holds the server's catalog casing, which may differ from the
+                        // configured value, so match case-insensitively rather than with the default
+                        // ordinal comparer. The scoping guard above guarantees Catalog is non-empty here.
+                        Assert.Contains(foundCatalogs,
+                            c => c.Equals(TestConfiguration.Metadata.Catalog, StringComparison.OrdinalIgnoreCase));
+                    }
+                    else
+                    {
+                        // When catalog is SPARK, we may have results from multiple catalogs
+                        Assert.True(foundCatalogs.Count > 1,
+                            $"{queryType} should return results from multiple catalogs when EnableMultipleCatalogSupport is true and catalog is SPARK");
+                    }
+                    OutputHelper?.WriteLine($"Found results from catalogs: {string.Join(", ", foundCatalogs)}");
                 }
                 else
                 {

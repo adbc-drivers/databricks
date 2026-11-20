@@ -16,6 +16,7 @@
 */
 
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -40,13 +41,11 @@ namespace AdbcDrivers.Databricks.StatementExecution
         Task<CreateSessionResponse> CreateSessionAsync(CreateSessionRequest request, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Deletes an existing SQL session.
+        /// Deletes the SQL session created by this client.
         /// </summary>
-        /// <param name="sessionId">The session ID to delete.</param>
-        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken);
+        Task DeleteSessionAsync(CancellationToken cancellationToken);
 
         /// <summary>
         /// Executes a SQL statement.
@@ -97,9 +96,18 @@ namespace AdbcDrivers.Databricks.StatementExecution
     {
         private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
+        private readonly object _sessionVersionLock = new object();
+        private long? _sessionVersionId;
+        private string? _sessionUrl;
+        private bool _isRealtimeSession;
 
         private const string SessionsEndpoint = "/api/2.0/sql/sessions";
         private const string StatementsEndpoint = "/api/2.0/sql/statements";
+        private const string RealtimeSessionHeader = "x-databricks-rt-session";
+
+        private string StatementCollectionUrl => _isRealtimeSession
+            ? $"{_sessionUrl}/statements"
+            : $"{_baseUrl}{StatementsEndpoint}";
 
         // JSON serialization options - ignore null values when writing
         private static readonly JsonSerializerOptions s_jsonOptions = new JsonSerializerOptions
@@ -146,7 +154,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(request));
             }
 
-            var url = $"{_baseUrl}{SessionsEndpoint}";
+            if (string.IsNullOrWhiteSpace(request.WarehouseId))
+            {
+                throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(request));
+            }
+
+            var warehouseId = Uri.EscapeDataString(request.WarehouseId);
+            var url = $"{_baseUrl}/api/2.0/sql/warehouses/{warehouseId}/sessions";
             var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
@@ -162,35 +176,32 @@ namespace AdbcDrivers.Databricks.StatementExecution
             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             var sessionResponse = JsonSerializer.Deserialize<CreateSessionResponse>(responseContent, s_jsonOptions);
 
-            if (sessionResponse == null)
+            if (sessionResponse == null || string.IsNullOrWhiteSpace(sessionResponse.SessionId))
             {
-                throw new DatabricksException("Failed to deserialize CreateSessionResponse");
+                throw new DatabricksException("CreateSessionResponse did not contain a session ID");
             }
+
+            UpdateSessionVersion(sessionResponse.SessionVersion);
+            bool realtimeSession = response.Headers.TryGetValues(RealtimeSessionHeader, out var values)
+                && string.Equals(values.FirstOrDefault()?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+            var sessionId = Uri.EscapeDataString(sessionResponse.SessionId);
+            _sessionUrl = realtimeSession
+                ? $"{url}/{sessionId}"
+                : $"{_baseUrl}{SessionsEndpoint}/{sessionId}?warehouse_id={warehouseId}";
+            _isRealtimeSession = realtimeSession;
 
             return sessionResponse;
         }
 
         /// <summary>
-        /// Deletes an existing SQL session.
+        /// Deletes the SQL session created by this client.
         /// </summary>
-        /// <param name="sessionId">The session ID to delete.</param>
-        /// <param name="warehouseId">The warehouse ID (required by Databricks API).</param>
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>A task representing the asynchronous operation.</returns>
-        public async Task DeleteSessionAsync(string sessionId, string warehouseId, CancellationToken cancellationToken)
+        public async Task DeleteSessionAsync(CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(sessionId))
-            {
-                throw new ArgumentException("Session ID cannot be null or whitespace.", nameof(sessionId));
-            }
-
-            if (string.IsNullOrWhiteSpace(warehouseId))
-            {
-                throw new ArgumentException("Warehouse ID cannot be null or whitespace.", nameof(warehouseId));
-            }
-
-            // Databricks requires warehouse_id as query parameter even for DELETE
-            var url = $"{_baseUrl}{SessionsEndpoint}/{sessionId}?warehouse_id={Uri.EscapeDataString(warehouseId)}";
+            var url = _sessionUrl
+                ?? throw new InvalidOperationException("A session must be created before it can be deleted.");
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -213,8 +224,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentNullException(nameof(request));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}";
-            var jsonContent = JsonSerializer.Serialize(request, s_jsonOptions);
+            var url = StatementCollectionUrl;
+            var body = request.WithSessionVersion(GetSessionVersion());
+            if (_isRealtimeSession)
+            {
+                body = body.WithoutRoutingIds();
+            }
+            var jsonContent = JsonSerializer.Serialize(body, s_jsonOptions);
             var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
@@ -227,27 +243,69 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 httpRequest.Headers.TryAddWithoutValidation("x-databricks-sea-can-run-fully-sync", "true");
             }
 
+            if (request.IsMetadata && request.MetadataOperation is MetadataOperation operation)
+            {
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-metadata-operation-type", operation switch
+                {
+                    MetadataOperation.GetCatalogs => "GetCatalogs",
+                    MetadataOperation.GetSchemas => "GetSchemas",
+                    MetadataOperation.GetTables => "GetTables",
+                    MetadataOperation.GetColumns => "GetColumns",
+                    MetadataOperation.GetPrimaryKeys => "GetPrimaryKeys",
+                    MetadataOperation.GetCrossReference => "GetCrossReference",
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
+                });
+                httpRequest.Headers.TryAddWithoutValidation("x-databricks-require-thrift-native-metadata", "true");
+            }
+
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var executeResponse = JsonSerializer.Deserialize<ExecuteStatementResponse>(responseBytes, s_jsonOptions);
 
             if (executeResponse == null)
             {
                 throw new DatabricksException("Failed to deserialize ExecuteStatementResponse");
             }
 
-            // Check for FAILED state and throw exception (like JDBC driver does)
+            UpdateSessionVersion(executeResponse.Status?.SessionVersion);
+
+            // Check for FAILED state and throw exception (like JDBC driver does).
+            // SEA throws its own DatabricksException — the natural type for the REST/SEA
+            // path. Cross-protocol parity is enforced by the comparator on Status +
+            // SqlState (the ADBC contract consumers branch on), NOT on the concrete
+            // AdbcException subclass, so a semantically-honest DatabricksException here
+            // is equivalent to the Thrift path's HiveServer2Exception. (The shared E2E
+            // base TestVarcharExceptionData in the hiveserver2 submodule asserts the
+            // exact HiveServer2Exception type; the SEA variant is skipped for that
+            // reason — see StringValueTests + PECO-3014 — since the submodule base
+            // cannot be relaxed from here.)
+            // This fires for ANY execution (metadata or not) whose initial response is
+            // immediately FAILED — it is not gated on request.IsMetadata. A regular
+            // query that fails synchronously (e.g. a VARCHAR-limit violation) surfaces
+            // this exception; the FAILED check in StatementExecutionStatement (which
+            // throws AdbcException) only applies on the async polling path via
+            // GetStatementAsync, when the initial response was PENDING/RUNNING.
             if (executeResponse.Status?.State == "FAILED")
             {
+                var error = executeResponse.Status.Error;
                 var errorMessage = $"Statement execution failed. State: {executeResponse.Status.State}";
-                if (executeResponse.Status.Error != null)
+                if (error != null)
                 {
-                    errorMessage += $". Error Code: {executeResponse.Status.Error.ErrorCode}, Message: {executeResponse.Status.Error.Message}";
+                    errorMessage += $". Error Code: {error.ErrorCode}, Message: {error.Message}";
                 }
-                throw new DatabricksException(errorMessage);
+                var ex = new DatabricksException(errorMessage, AdbcStatusCode.InternalError);
+                // The SEA response carries sql_state at the status level (sibling of error),
+                // not inside error; fall back to error.SqlState only if the status-level one is
+                // absent (defensive against future response shapes).
+                var sqlState = executeResponse.Status.SqlState ?? error?.SqlState;
+                if (sqlState != null)
+                    ex.SetSqlState(sqlState);
+                if (error?.ErrorCode != null && int.TryParse(error.ErrorCode, out int nativeError))
+                    ex.SetNativeError(nativeError);
+                throw ex;
             }
 
             return executeResponse;
@@ -268,22 +326,51 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var getResponse = JsonSerializer.Deserialize<GetStatementResponse>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var getResponse = JsonSerializer.Deserialize<GetStatementResponse>(responseBytes, s_jsonOptions);
 
             if (getResponse == null)
             {
                 throw new DatabricksException("Failed to deserialize GetStatementResponse");
             }
 
+            UpdateSessionVersion(getResponse.Status?.SessionVersion);
+
             return getResponse;
+        }
+
+        private SessionVersion? GetSessionVersion()
+        {
+            lock (_sessionVersionLock)
+            {
+                return _sessionVersionId.HasValue
+                    ? new SessionVersion { VersionId = _sessionVersionId.Value }
+                    : null;
+            }
+        }
+
+        private void UpdateSessionVersion(SessionVersion? version)
+        {
+            var versionId = version?.VersionId;
+            if (!versionId.HasValue)
+            {
+                return;
+            }
+
+            lock (_sessionVersionLock)
+            {
+                if (!_sessionVersionId.HasValue || versionId.Value > _sessionVersionId.Value)
+                {
+                    _sessionVersionId = versionId.Value;
+                }
+            }
         }
 
         /// <summary>
@@ -308,15 +395,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Chunk index must be non-negative.", nameof(chunkIndex));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/result/chunks/{chunkIndex}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}/result/chunks/{chunkIndex}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Get, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
 
             await EnsureSuccessStatusCodeAsync(response).ConfigureAwait(false);
 
-            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var resultData = JsonSerializer.Deserialize<ResultData>(responseContent, s_jsonOptions);
+            var responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var resultData = JsonSerializer.Deserialize<ResultData>(responseBytes, s_jsonOptions);
 
             if (resultData == null)
             {
@@ -339,7 +426,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
                 throw new ArgumentException("Statement ID cannot be null or whitespace.", nameof(statementId));
             }
 
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}/cancel";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}/cancel";
             var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
@@ -362,7 +449,7 @@ namespace AdbcDrivers.Databricks.StatementExecution
             }
 
             // Databricks uses DELETE on /statements/{statement_id}, not POST to /close
-            var url = $"{_baseUrl}{StatementsEndpoint}/{statementId}";
+            var url = $"{StatementCollectionUrl}/{Uri.EscapeDataString(statementId)}";
             var httpRequest = new HttpRequestMessage(HttpMethod.Delete, url);
 
             var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);

@@ -149,5 +149,53 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var s = Assert.IsType<StructType>(t);
             Assert.IsType<StringType>(s.Fields[0].DataType);
         }
+
+        [Theory]
+        [InlineData("GEOMETRY", "geometry", "0")]
+        [InlineData("GEOMETRY(3857)", "geometry", "3857")]
+        [InlineData("GEOMETRY(ANY)", "geometry", "-1")]
+        [InlineData("GEOGRAPHY", "geography", "4326")]
+        [InlineData("GEOGRAPHY(4326)", "geography", "4326")]
+        public void GeospatialType_ReturnsTaggedInternalStruct(
+            string sqlType,
+            string familyKey,
+            string expectedSrid)
+        {
+            StructType type = Assert.IsType<StructType>(
+                ArrowTypeParser.MapToArrowType(
+                    sqlType,
+                    enableComplexDatatypeSupport: true));
+
+            Assert.Equal("true", type.Fields[1].Metadata[familyKey]);
+            Assert.Equal(expectedSrid, type.Fields[1].Metadata["srid"]);
+        }
+
+        [Theory]
+        [InlineData("GEOMETRY(foo)")]
+        [InlineData("GEOGRAPHY()")]
+        [InlineData("GEOMETRY(-1)")]
+        [InlineData("GEOGRAPHY(-2)")]
+        [InlineData("GEOMETRY(2147483648)")]
+        [InlineData("GEOGRAPHY(4326) trailing")]
+        public void MalformedGeospatialType_FallsBackToString(string sqlType)
+        {
+            Assert.IsType<StringType>(
+                ArrowTypeParser.MapToArrowType(
+                    sqlType,
+                    enableComplexDatatypeSupport: true));
+        }
+
+        [Fact]
+        public void NestedGeospatialType_UsesTaggedInternalTypes()
+        {
+            const string sqlType =
+                "STRUCT<geom:GEOMETRY(ANY),items:ARRAY<GEOGRAPHY(4326)>>";
+
+            StructType native = Assert.IsType<StructType>(
+                ArrowTypeParser.ParseComplexType(sqlType));
+            Assert.IsType<StructType>(native.Fields[0].DataType);
+            Assert.IsType<StructType>(
+                Assert.IsType<ListType>(native.Fields[1].DataType).ValueDataType);
+        }
     }
 }

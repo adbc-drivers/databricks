@@ -51,6 +51,26 @@ namespace AdbcDrivers.Databricks.Tests
             Console.Error.WriteLine($"[DIAG] {message}");
         }
 
+        /// <summary>
+        /// Forces a full, blocking GC that also compacts the Large Object Heap. A normal
+        /// <see cref="GC.Collect(int, GCCollectionMode, bool)"/> reclaims dead LOH objects but does
+        /// not return the freed LOH segments, so repeated large (1M-row) CloudFetch allocations
+        /// leave the heap high-water-mark elevated even with no leak. Requesting a one-shot LOH
+        /// compaction makes <see cref="GC.GetTotalMemory(bool)"/> reflect live bytes, giving a
+        /// stable per-iteration measurement. The compaction mode resets to its default after one
+        /// blocking gen-2 collection, so this does not permanently change GC behavior.
+        /// </summary>
+        private static void CompactAndCollect()
+        {
+            // Available since .NET Framework 4.5.1, so this applies on net472 too (no #if guard needed,
+            // unlike the GC.GetGCMemoryInfo() blocks below which require .NET Core+).
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        }
+
         public CloudFetchStressTests(ITestOutputHelper? outputHelper)
             : base(outputHelper, new DatabricksTestEnvironment.Factory())
         {
@@ -213,9 +233,13 @@ namespace AdbcDrivers.Databricks.Tests
                 int gen0Before = GC.CollectionCount(0);
                 int gen1Before = GC.CollectionCount(1);
                 int gen2Before = GC.CollectionCount(2);
-                GC.Collect(2, GCCollectionMode.Forced, true);
-                GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, true);
+                // A 1M-row CloudFetch allocates large buffers on the Large Object Heap, which a
+                // normal forced GC does NOT compact — so GC.GetTotalMemory carries tens of MB of
+                // LOH high-water-mark / fragmentation noise that varies iteration-to-iteration.
+                // Request a one-shot LOH compaction so each post-GC snapshot reflects live bytes,
+                // not retained-but-dead LOH capacity. Without this the growth measurement below is
+                // dominated by allocator noise rather than any real leak.
+                CompactAndCollect();
                 int gen0After = GC.CollectionCount(0);
                 int gen1After = GC.CollectionCount(1);
                 int gen2After = GC.CollectionCount(2);
@@ -247,14 +271,20 @@ namespace AdbcDrivers.Databricks.Tests
                 Assert.Equal(LargeQueryExpectedRows, rows);
             }
 
-            // After warmup (first 2 iterations), memory should be stable
+            // After warmup (first 2 iterations), memory should be stable. Use the MINIMUM
+            // post-warmup sample as the baseline rather than the first: the first post-warmup
+            // reading can happen to land high (LOH not yet compacted, a finalizer still pending),
+            // and comparing a single high-then-low pair against a single low-then-high pair
+            // manufactures phantom "growth" from allocator noise. min() anchors to the lowest
+            // steady-state seen, so a real leak still shows as final-well-above-baseline while
+            // run-to-run jitter does not trip the assert.
             var postWarmup = samples.Skip(2).ToList();
-            double baselineMB = postWarmup.First().bytes / 1024.0 / 1024.0;
+            double baselineMB = postWarmup.Min(s => s.bytes) / 1024.0 / 1024.0;
             double finalMB = postWarmup.Last().bytes / 1024.0 / 1024.0;
             double growthMB = finalMB - baselineMB;
 
             Log($"--- CloudFetch memory analysis ---");
-            Log($"Post-warmup baseline: {baselineMB:F2} MB");
+            Log($"Post-warmup baseline (min): {baselineMB:F2} MB");
             Log($"Final: {finalMB:F2} MB");
             Log($"Growth: {growthMB:F2} MB over {postWarmup.Count} iterations");
 

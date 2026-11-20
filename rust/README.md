@@ -16,6 +16,10 @@
 
 # Databricks ADBC Driver for Rust
 
+> [!WARNING]
+> This Rust driver is under development and is not ready for production use.
+> Do not depend on it for production workloads.
+
 A Rust implementation of an ADBC (Arrow Database Connectivity) driver for Databricks SQL endpoints.
 
 ## Project Structure

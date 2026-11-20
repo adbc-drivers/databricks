@@ -384,6 +384,14 @@ namespace AdbcDrivers.Databricks.Tests
                     null // QueryTimeout = 300
                 };
 
+                // At QueryTimeout=1 the timeout can surface at different layers depending on the
+                // protocol: Thrift throws a transport-level TTransportException, whereas SEA (REST)
+                // translates the cancelled HTTP request into a TimeoutException (see
+                // StatementExecutionConnection.GetObjects, mirroring HiveServer2Connection.GetObjects).
+                // Accept TimeoutException as the alternate so the matrix is protocol-agnostic for the
+                // 1-second timeout instead of flaking whenever a metadata call happens to exceed it.
+                alternateExceptions ??= new List<Type?>() { null, typeof(TimeoutException), null, null, null };
+
                 AddAction(name, action, expectedExceptions, alternateExceptions);
             }
 
@@ -502,23 +510,27 @@ namespace AdbcDrivers.Databricks.Tests
             Assert.Equal(TestConfiguration.DbSchema, defaultNamespace.SchemaName);
         }
 
-        // Test that the catalog and schema are set correctly in the dbr session and the statement
-        // note - this test assumes not legacy dbr and hive_metastore is the default catalog
-        // also assumes there is a main catalog and hive_metastore.information_schema schema
+        // Test that the catalog and schema are set correctly in the dbr session and the statement.
+        // The default catalog (what current_catalog() returns when the driver pins no specific
+        // catalog) is read live via GetWarehouseDefaultCatalogAsync rather than assumed: it is a
+        // workspace-side setting that has changed over time (historically hive_metastore, now main)
+        // and depends on the multiple-catalog mode, so no literal is hard-coded. Expectations are
+        // derived from that discovered default. Assumes there is a "main" catalog and a
+        // hive_metastore.information_schema schema.
         [SkippableTheory]
-        [InlineData(null, null, "true", "hive_metastore", "default")]
-        [InlineData("main", null, "true", "main", "default")]
-        [InlineData(null, "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData("main", "information_schema", "true", "main", "information_schema")]
-        [InlineData("SPARK", null, "true", "hive_metastore", "default")]
-        [InlineData("SPARK", "information_schema", "true", "hive_metastore", "information_schema")]
-        [InlineData(null, null, "false", null, "default")]
-        [InlineData("main", null, "false", null, "default")]
-        [InlineData(null, "information_schema", "false", null, "information_schema")]
-        [InlineData("main", "information_schema", "false", null, "information_schema")]
-        [InlineData("SPARK", null, "false", null, "default")]
-        [InlineData("SPARK", "information_schema", "false", null, "information_schema")]
-        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedCatalogInStatement, string? expectedRuntimeSchema)
+        [InlineData(null, null, "true", "default")]
+        [InlineData("main", null, "true", "default")]
+        [InlineData(null, "information_schema", "true", "information_schema")]
+        [InlineData("main", "information_schema", "true", "information_schema")]
+        [InlineData("SPARK", null, "true", "default")]
+        [InlineData("SPARK", "information_schema", "true", "information_schema")]
+        [InlineData(null, null, "false", "default")]
+        [InlineData("main", null, "false", "default")]
+        [InlineData(null, "information_schema", "false", "information_schema")]
+        [InlineData("main", "information_schema", "false", "information_schema")]
+        [InlineData("SPARK", null, "false", "default")]
+        [InlineData("SPARK", "information_schema", "false", "information_schema")]
+        public async Task SetDefaultCatalogAndSchemaOptionsTest(string? inputCatalog, string? inputSchema, string enableMultipleCatalogSupport, string? expectedRuntimeSchema)
         {
             // Arrange
             var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
@@ -558,16 +570,27 @@ namespace AdbcDrivers.Databricks.Tests
             var catalogFromRuntime = ((StringArray)batch.Column(0)).GetString(0);
             var schemaFromRuntime = ((StringArray)batch.Column(1)).GetString(0);
 
-            // Assert runtime results
-            // if !enableMultipleCatalogSupport, then the runtime catalog should be hive_metastore
-            var expectedRuntimeCatalog = enableMultipleCatalogSupport == "true" ? expectedCatalogInStatement : "hive_metastore";
+            // Assert runtime results.
+            // current_catalog() reflects the default catalog for this mode, EXCEPT when a real UC
+            // catalog is explicitly pinned (multi-catalog ON + an existing catalog like "main").
+            // "SPARK"/null pin nothing real, so the session falls back to that default.
+            // The default is a workspace-side value that also depends on the multiple-catalog mode:
+            // on Thrift, legacy mode (off) yields hive_metastore while UC mode (on) yields the
+            // workspace default (historically hive_metastore, now main). So we discover it live, in
+            // the SAME mode as the case, instead of asserting a literal.
+            string defaultCatalog = await GetWarehouseDefaultCatalogAsync(enableMultipleCatalogSupport);
+            bool pinsRealCatalog = enableMultipleCatalogSupport == "true" && inputCatalog == "main";
+            var expectedRuntimeCatalog = pinsRealCatalog ? inputCatalog : defaultCatalog;
             Assert.Equal(expectedRuntimeCatalog, catalogFromRuntime);
             Assert.Equal(expectedRuntimeSchema, schemaFromRuntime);
 
-            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName
+            // Assert statement object values — only applies to Thrift; SEA uses StatementExecutionStatement which doesn't expose CatalogName.
+            // With multiple-catalog support ON the driver tracks the effective session catalog (the
+            // pinned real catalog, else the discovered default); with it OFF it pins no catalog.
             if (statement is DatabricksStatement dbStatement)
             {
-                Assert.Equal(expectedCatalogInStatement, dbStatement.CatalogName);
+                string? expectedStatementCatalog = enableMultipleCatalogSupport == "true" ? expectedRuntimeCatalog : null;
+                Assert.Equal(expectedStatementCatalog, dbStatement.CatalogName);
                 Assert.Null(dbStatement.SchemaName); // Always null, to be consistent with odbc
 
                 OutputHelper?.WriteLine(
@@ -581,6 +604,216 @@ namespace AdbcDrivers.Databricks.Tests
                     $"Runtime catalog={catalogFromRuntime}, schema={schemaFromRuntime}");
             }
         }
+
+        /// <summary>
+        /// Discovers the default catalog — the value <c>current_catalog()</c> returns when the driver
+        /// pins no specific catalog (no catalog configured) — for the given multiple-catalog mode.
+        /// This is a workspace/warehouse-side default that has changed over time (historically
+        /// <c>hive_metastore</c>, now <c>main</c>) AND depends on the mode (on Thrift, legacy/off mode
+        /// yields hive_metastore while UC/on mode yields the workspace default), so the test reads it
+        /// live in the same mode as the case under test rather than hard-coding it.
+        /// </summary>
+        private async Task<string> GetWarehouseDefaultCatalogAsync(string enableMultipleCatalogSupport)
+        {
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.EnableMultipleCatalogSupport = enableMultipleCatalogSupport;
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+
+            using var connection = NewConnection(testConfig);
+            return await ExecuteScalarStringAsync(connection, "SELECT current_catalog()");
+        }
+
+        /// <summary>Runs <paramref name="sql"/> on a new statement and returns the first column of the first row as a string.</summary>
+        private static Task<string> ExecuteScalarStringAsync(AdbcConnection connection, string sql)
+        {
+            var statement = connection.CreateStatement();
+            statement.SqlQuery = sql;
+            return ExecuteScalarStringAsync(statement);
+        }
+
+        /// <summary>Executes <paramref name="statement"/> and returns the first column of the first row as a string.</summary>
+        private static async Task<string> ExecuteScalarStringAsync(AdbcStatement statement)
+        {
+            var result = await statement.ExecuteQueryAsync();
+            var batch = await result.Stream!.ReadNextRecordBatchAsync();
+            return ((StringArray)batch.Column(0)).GetString(0);
+        }
+
+        /// <summary>
+        /// Regression test (ES-2115589): with adbc.databricks.scope_current_catalog opted in, the
+        /// statement's target catalog (ApacheParameters.CatalogName) must scope the executed DML
+        /// statement's session, so a query using a bare 2-level
+        /// `schema`.`table` name resolves against that catalog. Without it the driver issues no
+        /// USE CATALOG and the 2-level name resolves against the session's open-time catalog,
+        /// failing with TABLE_OR_VIEW_NOT_FOUND. Runs on the Thrift path.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogScopesTwoLevelNameQuery()
+            => RunStatementCatalogScopesTwoLevelNameQuery(protocol: null);
+
+        /// <summary>
+        /// SEA (REST) variant of <see cref="StatementCatalogScopesTwoLevelNameQuery"/>. The SEA
+        /// path always runs with a session, so the per-request Catalog is forced null and the
+        /// session's open-time catalog governs resolution — meaning a drilled-in catalog needs
+        /// the same USE CATALOG scoping as Thrift. Forces protocol=rest regardless of the
+        /// global test-config protocol. See ES-2115589.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogScopesTwoLevelNameQuery_Sea()
+            => RunStatementCatalogScopesTwoLevelNameQuery(protocol: "rest");
+
+        private async Task RunStatementCatalogScopesTwoLevelNameQuery(string? protocol)
+        {
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            // Connect WITHOUT a default catalog so the session default is not the target
+            // catalog; the only catalog scoping comes from the statement-level option below.
+            // ScopeCurrentCatalog=true opts in to the driver issuing USE CATALOG (default off).
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = string.Empty;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            testConfig.ScopeCurrentCatalog = "true";
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+            var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.CatalogName, catalog);
+            // 2-level name (schema.table), relying on the statement catalog to resolve it.
+            statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+            var result = await statement.ExecuteQueryAsync();
+            Assert.NotNull(result);
+            Assert.NotNull(result.Stream);
+            var batch = await result.Stream.ReadNextRecordBatchAsync();
+            Assert.NotNull(batch);
+            Assert.Equal(1, batch.Length);
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogScopesTwoLevelNameQuery (protocol={protocol ?? "default"}): catalog={catalog}, " +
+                $"ran `SELECT COUNT(*) FROM {schema}.{table}` and resolved.");
+        }
+
+        /// <summary>
+        /// Opt-in gate (ES-2115589): with ScopeCurrentCatalog OFF (the default), the driver must
+        /// NOT issue USE CATALOG even when a statement target catalog is set — so a 2-level
+        /// `schema`.`table` name against a NON-default catalog fails to resolve. This proves the
+        /// feature is fully opt-in (existing users see no behavior change). Thrift; SEA is _Sea.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogNotScopedWhenFlagOff()
+            => RunStatementCatalogNotScopedWhenFlagOff(protocol: null);
+
+        [SkippableFact]
+        public Task StatementCatalogNotScopedWhenFlagOff_Sea()
+            => RunStatementCatalogNotScopedWhenFlagOff(protocol: "rest");
+
+        private async Task RunStatementCatalogNotScopedWhenFlagOff(string? protocol)
+        {
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = string.Empty;      // open on the session's own default catalog
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            // ScopeCurrentCatalog left OFF (default) — the statement target catalog must be ignored.
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+
+            // The session's own default catalog, before any statement target is set.
+            var sessionCatalog = await ExecuteScalarStringAsync(connection, "SELECT current_catalog()");
+
+            // Target a catalog that DIFFERS from the session default, so "not scoped" is observable
+            // no matter what the workspace default catalog is (it changed from hive_metastore to main).
+            // With the flag OFF the driver must not issue USE CATALOG, so the target is ignored and
+            // current_catalog() stays on the session default. Asserting the catalog value directly
+            // (rather than a 2-level-name resolution failure) keeps this independent of warehouse
+            // name-resolution quirks such as cross-catalog fallback. The scoped counterpart is
+            // StatementCatalogScopesTwoLevelNameQuery.
+            string targetCatalog = string.Equals(sessionCatalog, "main", StringComparison.OrdinalIgnoreCase)
+                ? "hive_metastore"
+                : "main";
+
+            var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.CatalogName, targetCatalog);
+            statement.SqlQuery = "SELECT current_catalog()";
+            var catalogAfterTarget = await ExecuteScalarStringAsync(statement);
+
+            // Flag off => target catalog ignored => current catalog unchanged (never the target).
+            Assert.Equal(sessionCatalog, catalogAfterTarget);
+            Assert.NotEqual(targetCatalog, catalogAfterTarget);
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogNotScopedWhenFlagOff (protocol={protocol ?? "default"}): " +
+                $"session default={sessionCatalog}, statement target={targetCatalog} ignored (flag off), " +
+                $"current_catalog stayed {catalogAfterTarget}.");
+        }
+
+        /// <summary>
+        /// ES-2115589 (issue-on-change): with ScopeCurrentCatalog ON and the session already on
+        /// the target catalog (connection default == statement target catalog), the driver must NOT issue a
+        /// redundant USE CATALOG — the tracked current catalog matches, so it's skipped (ODBC
+        /// parity). Connects WITH the target catalog as the default, then runs the 2-level query
+        /// twice on one connection: both must resolve, and (verified out-of-band via query
+        /// history) no USE CATALOG is emitted. Runs on Thrift; the SEA variant is _Sea below.
+        /// </summary>
+        [SkippableFact]
+        public Task StatementCatalogUseIsIdempotentWhenAlreadyCurrent()
+            => RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(protocol: null);
+
+        [SkippableFact]
+        public Task StatementCatalogUseIsIdempotentWhenAlreadyCurrent_Sea()
+            => RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(protocol: "rest");
+
+        private async Task RunStatementCatalogUseIsIdempotentWhenAlreadyCurrent(string? protocol)
+        {
+            var catalog = TestConfiguration.Metadata.Catalog;
+            var schema = TestConfiguration.Metadata.Schema;
+            var table = TestConfiguration.Metadata.Table;
+
+            // Connect WITH the target catalog as the session default and opt in via
+            // ScopeCurrentCatalog; the statement target catalog then re-selects the same catalog. Because the
+            // tracked current catalog already matches, no USE CATALOG should be issued.
+            var testConfig = (DatabricksTestConfiguration)TestConfiguration.Clone();
+            testConfig.Catalog = catalog;
+            testConfig.DbSchema = string.Empty;
+            testConfig.EnableMultipleCatalogSupport = "true";
+            testConfig.ScopeCurrentCatalog = "true";
+            if (protocol != null)
+            {
+                testConfig.Protocol = protocol;
+            }
+
+            using var connection = NewConnection(testConfig);
+
+            // Run twice on the same connection; both must resolve (no USE CATALOG needed).
+            for (int i = 0; i < 2; i++)
+            {
+                var statement = connection.CreateStatement();
+                statement.SetOption(ApacheParameters.CatalogName, catalog);
+                statement.SqlQuery = $"SELECT COUNT(*) FROM `{schema}`.`{table}`";
+
+                var result = await statement.ExecuteQueryAsync();
+                Assert.NotNull(result);
+                Assert.NotNull(result.Stream);
+                var batch = await result.Stream!.ReadNextRecordBatchAsync();
+                Assert.NotNull(batch);
+                Assert.Equal(1, batch!.Length);
+            }
+
+            OutputHelper?.WriteLine(
+                $"StatementCatalogUseIsIdempotentWhenAlreadyCurrent (protocol={protocol ?? "default"}): " +
+                $"default catalog={catalog}, ran the 2-level query twice; repeated USE CATALOG is idempotent.");
+        }
+
 
         /// <summary>
         /// Tests that trace propagation configuration is correctly parsed and stored.

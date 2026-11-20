@@ -21,6 +21,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Apache.Arrow.Adbc;
 using AdbcDrivers.Databricks.StatementExecution;
 using Moq;
 using Moq.Protected;
@@ -142,11 +143,12 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(HttpMethod.Post, capturedRequest.Method);
-            Assert.Equal("https://test.databricks.com/api/2.0/sql/sessions",
+            Assert.Equal("https://test.databricks.com/api/2.0/sql/warehouses/warehouse-123/sessions",
                 capturedRequest.RequestUri?.ToString());
 
             Assert.NotNull(capturedContent);
-            Assert.Contains("\"warehouse_id\":\"warehouse-123\"", capturedContent);
+            Assert.Contains("\"execution_mode\":\"FAST\"", capturedContent);
+            Assert.DoesNotContain("\"warehouse_id\"", capturedContent);
             Assert.Contains("\"catalog\":\"main\"", capturedContent);
             Assert.Contains("\"schema\":\"default\"", capturedContent);
             Assert.Contains("spark.sql.ansi.enabled", capturedContent);
@@ -179,31 +181,39 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #region DeleteSessionAsync Tests
 
         [Fact]
-        public async Task DeleteSessionAsync_WithValidSessionId_Succeeds()
+        public async Task DeleteSessionAsync_WithCreatedSession_Succeeds()
         {
             var sessionId = "test-session-id";
             var warehouseId = "test-warehouse-id";
-            SetupMockResponse(HttpStatusCode.OK, "");
+            SetupMockResponse(HttpStatusCode.OK, JsonSerializer.Serialize(new { session_id = sessionId }));
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
-            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
+            await client.CreateSessionAsync(new CreateSessionRequest { WarehouseId = warehouseId }, CancellationToken.None);
+            SetupMockResponse(HttpStatusCode.OK, "");
+            await client.DeleteSessionAsync(CancellationToken.None);
 
             // No exception means success
         }
 
         [Fact]
-        public async Task DeleteSessionAsync_SendsCorrectRequest()
+        public async Task DeleteSessionAsync_UsesCreatedSession()
         {
             var sessionId = "test-session-id";
             var warehouseId = "test-warehouse-id";
             HttpRequestMessage? capturedRequest = null;
+            SetupMockResponse(HttpStatusCode.OK, JsonSerializer.Serialize(new { session_id = sessionId }));
+
+            var client = new StatementExecutionClient(_httpClient, _testHost);
+            var createRequest = new CreateSessionRequest { WarehouseId = warehouseId };
+            var createResponse = await client.CreateSessionAsync(createRequest, CancellationToken.None);
+            createRequest.WarehouseId = "other-warehouse";
+            createResponse.SessionId = "other-session";
 
             SetupMockResponseWithCapture(HttpStatusCode.OK, "",
                 req => capturedRequest = req,
                 _ => { });
 
-            var client = new StatementExecutionClient(_httpClient, _testHost);
-            await client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None);
+            await client.DeleteSessionAsync(CancellationToken.None);
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(HttpMethod.Delete, capturedRequest.Method);
@@ -212,11 +222,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         }
 
         [Fact]
-        public async Task DeleteSessionAsync_WithEmptySessionId_ThrowsArgumentException()
+        public async Task DeleteSessionAsync_WithoutCreatedSession_ThrowsInvalidOperationException()
         {
             var client = new StatementExecutionClient(_httpClient, _testHost);
-            await Assert.ThrowsAsync<ArgumentException>(() =>
-                client.DeleteSessionAsync(string.Empty, "warehouse-id", CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                client.DeleteSessionAsync(CancellationToken.None));
+            _mockHttpMessageHandler.Protected().Verify("SendAsync", Times.Never(),
+                ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>());
         }
 
         [Fact]
@@ -224,11 +236,13 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         {
             var sessionId = "test-session-id";
             var warehouseId = "test-warehouse-id";
-            SetupMockResponse(HttpStatusCode.NotFound, "{\"error_code\":\"SESSION_NOT_FOUND\",\"message\":\"Session not found\"}");
+            SetupMockResponse(HttpStatusCode.OK, JsonSerializer.Serialize(new { session_id = sessionId }));
 
             var client = new StatementExecutionClient(_httpClient, _testHost);
+            await client.CreateSessionAsync(new CreateSessionRequest { WarehouseId = warehouseId }, CancellationToken.None);
+            SetupMockResponse(HttpStatusCode.NotFound, "{\"error_code\":\"SESSION_NOT_FOUND\",\"message\":\"Session not found\"}");
             var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
-                client.DeleteSessionAsync(sessionId, warehouseId, CancellationToken.None));
+                client.DeleteSessionAsync(CancellationToken.None));
 
             Assert.Contains("404", exception.Message);
         }
@@ -236,6 +250,59 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
         #endregion
 
         #region ExecuteStatementAsync Tests
+
+        [Fact]
+        public async Task ExecuteStatementAsync_NativeMetadata_SendsHeadersAndReadsManifest()
+        {
+            var request = new ExecuteStatementRequest
+            {
+                Statement = "SHOW TABLES IN CATALOG `main`",
+                WarehouseId = "warehouse-123",
+                IsMetadata = true,
+                MetadataOperation = MetadataOperation.GetTables,
+            };
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-native",
+                status = new { state = "SUCCEEDED" },
+                manifest = new { is_native_metadata_result = true },
+            });
+            HttpRequestMessage? capturedRequest = null;
+            string? capturedContent = null;
+            SetupMockResponseWithCapture(HttpStatusCode.OK, responseJson,
+                req => capturedRequest = req, content => capturedContent = content);
+
+            var response = await new StatementExecutionClient(_httpClient, _testHost)
+                .ExecuteStatementAsync(request, CancellationToken.None);
+
+            Assert.Equal(true, response.Manifest?.IsNativeMetadataResult);
+            Assert.Equal("true", Assert.Single(capturedRequest!.Headers.GetValues("x-databricks-sea-can-run-fully-sync")));
+            Assert.Equal("GetTables", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-metadata-operation-type")));
+            Assert.Equal("true", Assert.Single(capturedRequest.Headers.GetValues("x-databricks-require-thrift-native-metadata")));
+            using var requestJson = JsonDocument.Parse(capturedContent!);
+            foreach (var property in requestJson.RootElement.EnumerateObject())
+            {
+                Assert.False(string.Equals(property.Name, "MetadataOperation", StringComparison.OrdinalIgnoreCase));
+                Assert.False(string.Equals(property.Name, "IsNativeMetadataResult", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_MetadataWithoutOperation_OmitsNativeHeaders()
+        {
+            var request = new ExecuteStatementRequest { Statement = "DESC TABLE t", IsMetadata = true };
+            HttpRequestMessage? capturedRequest = null;
+            SetupMockResponseWithCapture(HttpStatusCode.OK,
+                "{\"statement_id\":\"stmt-1\",\"status\":{\"state\":\"SUCCEEDED\"}}",
+                req => capturedRequest = req, _ => { });
+
+            await new StatementExecutionClient(_httpClient, _testHost)
+                .ExecuteStatementAsync(request, CancellationToken.None);
+
+            Assert.True(capturedRequest!.Headers.Contains("x-databricks-sea-can-run-fully-sync"));
+            Assert.False(capturedRequest.Headers.Contains("x-databricks-metadata-operation-type"));
+            Assert.False(capturedRequest.Headers.Contains("x-databricks-require-thrift-native-metadata"));
+        }
 
         [Fact]
         public async Task ExecuteStatementAsync_WithValidRequest_ReturnsResponse()
@@ -313,6 +380,47 @@ namespace AdbcDrivers.Databricks.Tests.Unit.StatementExecution
             var client = new StatementExecutionClient(_httpClient, _testHost);
             await Assert.ThrowsAsync<ArgumentNullException>(() =>
                 client.ExecuteStatementAsync(null!, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task ExecuteStatementAsync_WithFailedState_ThrowsDatabricksExceptionWithSqlStateAndNativeError()
+        {
+            // A synchronously-FAILED execution surfaces a DatabricksException — the natural
+            // type for the SEA/REST path — with Status + SqlState + NativeError populated
+            // from the server error. Cross-protocol parity with the Thrift path
+            // (HiveServer2Exception) is enforced by the Thrift-vs-SEA comparator on
+            // Status + SqlState (any AdbcException subclass is equivalent), not on the
+            // concrete subclass. This asserts the load-bearing Status/SqlState/NativeError.
+            var request = new ExecuteStatementRequest { Statement = "SELECT 1" };
+            // Mirror the REAL SEA FAILED response shape (verified live against a warehouse):
+            // sql_state sits at the status level (sibling of error); the error object carries
+            // only error_code + message — it does NOT contain sql_state. The driver must read
+            // status.sql_state, not status.error.sql_state.
+            var responseJson = JsonSerializer.Serialize(new
+            {
+                statement_id = "stmt-failed",
+                status = new
+                {
+                    state = "FAILED",
+                    sql_state = "22001",
+                    error = new
+                    {
+                        error_code = "12345",
+                        message = "value too long for VARCHAR",
+                    },
+                },
+            });
+
+            SetupMockResponse(HttpStatusCode.OK, responseJson);
+
+            var client = new StatementExecutionClient(_httpClient, _testHost);
+            var exception = await Assert.ThrowsAsync<DatabricksException>(() =>
+                client.ExecuteStatementAsync(request, CancellationToken.None));
+
+            Assert.Equal(AdbcStatusCode.InternalError, exception.Status);
+            Assert.Equal("22001", exception.SqlState);
+            Assert.Equal(12345, exception.NativeError);
+            Assert.Contains("value too long for VARCHAR", exception.Message);
         }
 
         [Fact]

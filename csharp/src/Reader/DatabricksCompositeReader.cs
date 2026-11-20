@@ -50,6 +50,8 @@ namespace AdbcDrivers.Databricks.Reader
         public override Schema Schema { get { return _schema; } }
 
         private BaseDatabricksReader? _activeReader;
+        private ChunkMetrics? _chunkMetricsSnapshot;
+        private bool _useCloudFetch;
         private readonly IHiveServer2Statement _statement;
         private readonly Schema _schema;
         private readonly IResponse _response;
@@ -120,23 +122,23 @@ namespace AdbcDrivers.Databricks.Reader
 
         private BaseDatabricksReader DetermineReader(TFetchResultsResp initialResults, Activity? activity = null)
         {
-            bool useCloudFetch = ShouldUseCloudFetch(initialResults);
+            _useCloudFetch = ShouldUseCloudFetch(initialResults);
             activity?.AddEvent("composite_reader.determine_reader", [
-                new("use_cloudfetch", useCloudFetch),
+                new("use_cloudfetch", _useCloudFetch),
                 new("has_result_links", initialResults.__isset.results && initialResults.Results.__isset.resultLinks),
                 new("result_links_count", initialResults.Results?.ResultLinks?.Count ?? 0)
             ]);
 
             // Add telemetry tag for result format
-            activity?.SetTag(StatementExecutionEvent.ResultFormat, useCloudFetch ? "cloudfetch" : "inline");
+            activity?.SetTag(StatementExecutionEvent.ResultFormat, _useCloudFetch ? "cloudfetch" : "inline");
 
             // Add telemetry tag for chunk count if using CloudFetch
-            if (useCloudFetch && initialResults.Results?.ResultLinks != null)
+            if (_useCloudFetch && initialResults.Results?.ResultLinks != null)
             {
                 activity?.SetTag(StatementExecutionEvent.ResultChunkCount, initialResults.Results.ResultLinks.Count);
             }
 
-            if (useCloudFetch)
+            if (_useCloudFetch)
             {
                 return CreateCloudFetchReader(initialResults);
             }
@@ -252,7 +254,18 @@ namespace AdbcDrivers.Databricks.Reader
                             // Always close the operation here at the composite level.
                             // CloudFetchReader is protocol-agnostic and does not send CloseOperation,
                             // so we must not rely on the contained reader to do it.
-                            activity?.AddEvent("composite_reader.close_operation");
+                            //
+                            // Issue #489: bracket the Thrift TCloseOperationReq RPC with a pair
+                            // of events ("...started" before, "...completed" after) so the
+                            // timestamp delta between them captures the RPC's wall-clock
+                            // latency in the trace. Previously a single
+                            // "composite_reader.close_operation" event was emitted before the
+                            // call, which made its timestamp identical to the surrounding
+                            // "composite_reader.disposing" event and hid the RPC's cost.
+                            // Mirrors the cancel_operation event-pair pattern used in
+                            // HiveServer2Statement.CancelOperationAsync ("...starting" /
+                            // "...completed").
+                            activity?.AddEvent("composite_reader.close_operation.started");
                             // Time the TCloseOperationReq RPC so CLOSE_STATEMENT telemetry
                             // emitted later from DatabricksStatement.Dispose can report the
                             // actual server-side close latency (PECO-2991).
@@ -265,8 +278,18 @@ namespace AdbcDrivers.Databricks.Reader
                             }
                             catch (Exception ex)
                             {
+                                // Best-effort close: the TCloseOperationReq is a teardown cleanup
+                                // RPC issued during Dispose, and the operation's results have
+                                // already been consumed by this point — a close failure cannot
+                                // invalidate them and is not actionable by the caller. Record it
+                                // (captured into CloseStatementRpcError below and surfaced via the
+                                // CLOSE_STATEMENT telemetry event + the trace exception) but do NOT
+                                // rethrow: throwing out of Dispose violates the .NET dispose
+                                // contract and would skip the remaining teardown (the active
+                                // reader's Dispose just below), leaking it. Mirrors the swallow
+                                // pattern in DatabricksStatement.Dispose's telemetry emit.
                                 closeError = ex;
-                                throw;
+                                activity?.AddException(ex);
                             }
                             finally
                             {
@@ -276,12 +299,25 @@ namespace AdbcDrivers.Databricks.Reader
                                     dbxStatement.CloseStatementRpcLatencyMs = closeStopwatch.ElapsedMilliseconds;
                                     dbxStatement.CloseStatementRpcError = closeError;
                                 }
+                                // Emit the matching "completed" event regardless of whether
+                                // the RPC threw so the trace always records when the close
+                                // call returned. Error details are also surfaced via
+                                // AddException above; the tag here lets consumers filter
+                                // clean vs. failed closes without parsing the exception.
+                                activity?.AddEvent("composite_reader.close_operation.completed", [
+                                    new("error", closeError != null)
+                                ]);
                             }
                             if (_activeReader != null)
                             {
                                 activity?.AddEvent("composite_reader.disposing_active_reader", [
                                     new("reader_type", _activeReader.GetType().Name)
                                 ]);
+                                // Keep metrics for statement telemetry: a `using` reader is often disposed first.
+                                if (_activeReader is CloudFetchReader cloudFetchReader)
+                                {
+                                    _chunkMetricsSnapshot = cloudFetchReader.GetChunkMetrics();
+                                }
                                 _activeReader.Dispose();
                                 _activeReader = null;
                             }
@@ -352,8 +388,8 @@ namespace AdbcDrivers.Databricks.Reader
                 return cloudFetchReader.GetChunkMetrics();
             }
 
-            // Not using CloudFetch or reader not initialized yet
-            return null;
+            // Reader already disposed, or not using CloudFetch / not initialized yet
+            return _chunkMetricsSnapshot;
         }
 
         /// <summary>
@@ -369,8 +405,10 @@ namespace AdbcDrivers.Databricks.Reader
         /// Reflects the server's actual choice for this result set (presence of result links in the
         /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
         /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
-        /// active reader has not been initialized yet.
+        /// active reader has not been initialized yet. Recorded when the reader is chosen, so it stays
+        /// correct after <see cref="Dispose"/>: statement telemetry is often built after a <c>using</c>
+        /// reader is disposed.
         /// </summary>
-        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
+        public bool IsCloudFetchActive => _useCloudFetch;
     }
 }

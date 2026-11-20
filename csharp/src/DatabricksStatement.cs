@@ -41,6 +41,7 @@ using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Hive2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc.Tracing;
+using Apache.Arrow.Ipc;
 using Apache.Arrow.Types;
 using Apache.Hive.Service.Rpc.Thrift;
 using static AdbcDrivers.Databricks.Result.DescTableExtendedResult;
@@ -65,10 +66,19 @@ namespace AdbcDrivers.Databricks
         private bool enablePKFK;
         private bool runAsyncInThrift;
         private bool enableComplexDatatypeSupport;
+        private bool enableGeospatialSupport;
         private Dictionary<string, string>? confOverlay;
         internal string? StatementId { get; set; }
         private QueryResult? _lastQueryResult; // Track last query result for telemetry chunk metrics
         internal bool IsInternalCall { get; set; } // Marks if this is a driver-internal operation (e.g., USE SCHEMA)
+
+        /// <summary>
+        /// Optional override for the Thrift RunAsync flag on a single statement. When non-null,
+        /// takes precedence over the connection-level <see cref="DatabricksConnection.RunAsyncInThrift"/>.
+        /// Pairs with the SQL-level STATIC ONLY modifier on DESC TABLE EXTENDED: RunAsync=false
+        /// is what tells the warehouse to route the command off the WLM path.
+        /// </summary>
+        internal bool? RunAsyncOverride { get; set; }
 
         /// <summary>
         /// Telemetry context for the current statement execution, pending emission on Dispose.
@@ -121,6 +131,7 @@ namespace AdbcDrivers.Databricks
 
             runAsyncInThrift = connection.RunAsyncInThrift;
             enableComplexDatatypeSupport = connection.EnableComplexDatatypeSupport;
+            enableGeospatialSupport = connection.EnableGeospatialSupport;
 
             // Override the Apache base default (500ms) with Databricks-specific poll interval (100ms)
             if (!connection.Properties.ContainsKey(ApacheParameters.PollTimeMilliseconds))
@@ -211,21 +222,75 @@ namespace AdbcDrivers.Databricks
             CaptureRetryCount(ctx);
         }
 
+        /// <summary>
+        /// When statement-level catalog scoping is opted in (connection ScopeCurrentCatalog flag)
+        /// and this statement's catalog (CatalogName, from adbc.get_metadata.target_catalog)
+        /// differs from the session's current catalog, set the session's current catalog with a
+        /// standalone USE CATALOG on the same connection before running the query, so a 2-level
+        /// `schema`.`table` name resolves against it. The Thrift execute request has no honored
+        /// per-statement catalog (StatementConf.InitialNamespace is ignored by the server), so
+        /// this mirrors what the ODBC/Simba and JDBC drivers do.
+        ///
+        /// Issued only on change (matching ODBC's issue-on-change, not per query); CatalogName is
+        /// auto-filled from the connection default, so a regular query whose catalog already
+        /// matches the session is a no-op. Not issued for metadata commands, driver-internal
+        /// statements, the SPARK default-catalog alias, or when multi-catalog support is off. See
+        /// ES-2115589.
+        /// </summary>
+        private async Task EnsureCatalogScopedAsync()
+        {
+            var connection = (DatabricksConnection)Connection;
+
+            if (IsMetadataCommand
+                || IsInternalCall
+                || !connection.ScopeCurrentCatalog
+                || !enableMultipleCatalogSupport)
+            {
+                return;
+            }
+
+            // Normalize the SPARK legacy default-catalog alias to null (same as SEA), so we don't
+            // emit a bogus USE CATALOG `SPARK` and treat it as "no explicit catalog".
+            string? catalog = DatabricksConnection.HandleSparkCatalog(CatalogName);
+            if (string.IsNullOrEmpty(catalog))
+            {
+                return;
+            }
+
+            // Issue-on-change: skip if the session is already on this catalog (ODBC parity).
+            // CurrentCatalog is null when the open-time catalog is unknown; then issue once and record.
+            if (string.Equals(connection.CurrentCatalog, catalog, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            using var useStatement = new DatabricksStatement(connection);
+            useStatement.SqlQuery = $"USE CATALOG `{catalog!.Replace("`", "``")}`";
+            useStatement.IsInternalCall = true; // prevents recursion + marks as driver-internal
+            await useStatement.ExecuteUpdateAsync().ConfigureAwait(false);
+            connection.UpdateCurrentCatalog(catalog);
+        }
+
         public override QueryResult ExecuteQuery()
         {
+            EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return base.ExecuteQuery();
+            if (ctx == null) return MaybeWrapComplexTypes(base.ExecuteQuery());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = base.ExecuteQuery();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry: EmitTelemetry inspects
+                // _lastQueryResult.Stream via `is CloudFetchReader/DatabricksCompositeReader`
+                // to read chunk metrics and IsCompressed/ResultFormat. ComplexTypeSerializingStream
+                // would mask those types, so keep the real reader here and wrap only on return.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
@@ -239,19 +304,22 @@ namespace AdbcDrivers.Databricks
 
         public override async ValueTask<QueryResult> ExecuteQueryAsync()
         {
+            await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = IsMetadataCommand
                 ? CreateMetadataTelemetryContext()
                 : CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Query);
-            if (ctx == null) return await base.ExecuteQueryAsync();
+            if (ctx == null) return MaybeWrapComplexTypes(await base.ExecuteQueryAsync());
 
             // Expose ctx to NewReader so the operation status poller can update PollCount/PollLatencyMs (PECO-2992).
             PendingTelemetryContext = ctx;
             try
             {
                 QueryResult result = await base.ExecuteQueryAsync();
-                _lastQueryResult = result; // Store for telemetry
+                // Store the UNWRAPPED result for telemetry (see ExecuteQuery for rationale):
+                // the wrapper would mask CloudFetchReader/DatabricksCompositeReader from EmitTelemetry.
+                _lastQueryResult = result;
                 RecordSuccess(ctx);
-                return result;
+                return MaybeWrapComplexTypes(result);
             }
             catch (Exception ex)
             {
@@ -263,8 +331,28 @@ namespace AdbcDrivers.Databricks
             }
         }
 
+        /// <summary>
+        /// Applies client-side geospatial representation handling before the optional
+        /// complex-type JSON serializer.
+        /// </summary>
+        private QueryResult MaybeWrapComplexTypes(QueryResult result)
+        {
+            if (result.Stream == null) return result;
+
+            IArrowArrayStream stream = new GeospatialTransformingStream(
+                result.Stream,
+                enableGeospatialSupport,
+                enableComplexDatatypeSupport);
+            if (!enableComplexDatatypeSupport)
+            {
+                stream = new ComplexTypeSerializingStream(stream);
+            }
+            return new QueryResult(result.RowCount, stream);
+        }
+
         public override UpdateResult ExecuteUpdate()
         {
+            EnsureCatalogScopedAsync().GetAwaiter().GetResult();
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return base.ExecuteUpdate();
 
@@ -287,6 +375,7 @@ namespace AdbcDrivers.Databricks
 
         public override async Task<UpdateResult> ExecuteUpdateAsync()
         {
+            await EnsureCatalogScopedAsync().ConfigureAwait(false);
             var ctx = CreateTelemetryContext(Telemetry.Proto.Statement.Types.Type.Update);
             if (ctx == null) return await base.ExecuteUpdateAsync();
 
@@ -364,6 +453,12 @@ namespace AdbcDrivers.Databricks
                         metrics.SumChunksDownloadTimeMs);
                 }
 
+                // ES-2356918: report lost rows as error_name without failing the statement.
+                if (!ctx.HasError && metrics?.RowCountShortfall > 0)
+                {
+                    ctx.ErrorName = "CloudFetchRowCountShortfall";
+                }
+
                 OssSqlDriverTelemetryLog telemetryLog = ctx.BuildTelemetryLog();
 
                 var frontendLog = new TelemetryFrontendLog
@@ -425,19 +520,23 @@ namespace AdbcDrivers.Databricks
             base.SetStatementProperties(statement);
 
             // Set Databricks-specific statement properties
-            // TODO: Ensure this is set dynamically depending on server capabilities.
             statement.EnforceResultPersistenceMode = false;
             statement.CanReadArrowResult = true;
+
+            // Gate advanced Arrow native types on protocol V5+, matching JDBC behavior.
+            // TimestampAsArrow is always set; the rest require V5+.
+            // If the server protocol version is unknown (null), default to enabling them.
+            var serverProtocolVersion = ((DatabricksConnection)Connection).ServerProtocolVersion;
+            bool advancedArrowTypes = serverProtocolVersion == null
+                || FeatureVersionNegotiator.SupportsAdvancedArrowTypes(serverProtocolVersion.Value);
 
             statement.UseArrowNativeTypes = new TSparkArrowTypes
             {
                 TimestampAsArrow = true,
-                DecimalAsArrow = true,
-                // When false (default), complex types (ARRAY, MAP, STRUCT) are returned as JSON-encoded
-                // strings by the Thrift server. When true, the server returns native Arrow types.
-                // Note: Thrift ARRAY_TYPE responses do not embed element type info, so callers cannot
-                // reliably determine element types; returning strings is the safe default.
-                ComplexTypesAsArrow = enableComplexDatatypeSupport,
+                DecimalAsArrow = advancedArrowTypes,
+                // Request native complex types when V5+ so ComplexTypeSerializingStream can
+                // re-serialize them client-side with correct JSON escaping (PECO-3032).
+                ComplexTypesAsArrow = advancedArrowTypes,
                 IntervalTypesAsArrow = false,
             };
 
@@ -445,7 +544,7 @@ namespace AdbcDrivers.Databricks
             statement.CanDownloadResult = useCloudFetch;
             statement.CanDecompressLZ4Result = canDecompressLz4;
             statement.MaxBytesPerFile = maxBytesPerFile;
-            statement.RunAsync = runAsyncInThrift;
+            statement.RunAsync = RunAsyncOverride ?? runAsyncInThrift;
 
             Connection.TrySetGetDirectResults(statement);
 
@@ -471,7 +570,11 @@ namespace AdbcDrivers.Databricks
             Activity.Current?.SetTag("statement.cloudfetch.can_decompress_lz4", canDecompressLz4);
             Activity.Current?.SetTag("statement.cloudfetch.max_bytes_per_file", maxBytesPerFile);
             Activity.Current?.SetTag("statement.cloudfetch.max_bytes_per_file_mb", maxBytesPerFile / 1024.0 / 1024.0);
-            Activity.Current?.SetTag("statement.property.run_async", runAsyncInThrift);
+            Activity.Current?.SetTag("statement.property.run_async", statement.RunAsync);
+            if (RunAsyncOverride.HasValue)
+            {
+                Activity.Current?.SetTag("statement.property.run_async.source", "override");
+            }
 
             Activity.Current?.AddEvent("statement.set_properties.complete");
         }
@@ -773,6 +876,11 @@ namespace AdbcDrivers.Databricks
                 HandleSparkCatalog();
                 activity?.SetTag("statement.catalog_name_after_spark_handling", CatalogName ?? "(none)");
 
+                // Empty (non-null) table-types filter → match no table types (zero rows);
+                // null → all. Enforced by the shared HiveServer2 base
+                // (HiveServer2Statement.GetTablesAsync short-circuits an empty filter; see
+                // adbc-drivers/hiveserver2#83), so no Databricks-layer handling is required.
+
                 // If EnableMultipleCatalogSupport is false and catalog is not null or SPARK, return empty result without RPC call
                 if (!enableMultipleCatalogSupport && CatalogName != null)
                 {
@@ -791,7 +899,13 @@ namespace AdbcDrivers.Databricks
                 QueryResult result = await base.GetTablesAsync(cancellationToken);
                 activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
                 activity?.AddEvent("statement.get_tables.complete");
-                return result;
+                // Match databricks-jdbc (MetadataResultSetBuilder): substitute "TABLE" for any
+                // null/empty TABLE_TYPE the Thrift GetTables path leaves empty — e.g. legacy
+                // hive_metastore tables in a broad enumeration. See TableTypeDefaultingStream.
+                // Guard a null stream (mirrors MaybeWrapComplexTypes) so a null-stream base
+                // result is passed through rather than converted into a thrown exception.
+                if (result.Stream == null) return result;
+                return new QueryResult(result.RowCount, new TableTypeDefaultingStream(result.Stream));
             }, activityName: "GetTables");
         }
 
@@ -927,10 +1041,31 @@ namespace AdbcDrivers.Databricks
                 }
 
                 activity?.AddEvent("statement.get_cross_reference.calling_base_implementation");
-                QueryResult result = await base.GetCrossReferenceAsync(cancellationToken);
-                activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
-                activity?.AddEvent("statement.get_cross_reference.complete");
-                return result;
+                try
+                {
+                    QueryResult result = await base.GetCrossReferenceAsync(cancellationToken);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, result.RowCount);
+                    activity?.AddEvent("statement.get_cross_reference.complete");
+                    return result;
+                }
+                catch (AdbcException ex) when (DatabricksException.IsObjectNotFoundException(ex))
+                {
+                    // The Thrift server rejects an object-not-found / invalid-name argument
+                    // (e.g. an empty-string parent catalog: TGetCrossReferenceReq sends
+                    // ParentCatalogName="" and the server throws TABLE_OR_VIEW_NOT_FOUND /
+                    // INVALID_PARAMETER_VALUE). Per the JDBC spec — and matching the JDBC
+                    // reference driver (DatabricksThriftServiceClient.listCrossReferences, which
+                    // catches isObjectNotFoundException) as well as this driver's SEA path —
+                    // metadata methods return an EMPTY result for a non-existent / invalid object
+                    // rather than throwing.
+                    activity?.AddEvent("statement.get_cross_reference.object_not_found_returning_empty", [
+                        new("sql_state", ex.SqlState ?? "(none)"),
+                        new("error_message", ex.Message)
+                    ]);
+                    activity?.SetTag(SemanticConventions.Db.Response.ReturnedRows, 0);
+                    activity?.AddEvent("statement.get_cross_reference.complete");
+                    return EmptyCrossReferenceResult();
+                }
             }, activityName: "GetCrossReference");
         }
 
@@ -972,7 +1107,8 @@ namespace AdbcDrivers.Databricks
             {
                 activity?.AddEvent("statement.get_columns_extended.start");
                 string? fullTableName = BuildTableName();
-                var canUseDescTableExtended = ((DatabricksConnection)Connection).CanUseDescTableExtended;
+                var connection = (DatabricksConnection)Connection;
+                var canUseDescTableExtended = connection.CanUseDescTableExtended;
 
                 activity?.SetTag("statement.catalog_name", CatalogName ?? "(none)");
                 activity?.SetTag("statement.schema_name", SchemaName ?? "(none)");
@@ -993,13 +1129,24 @@ namespace AdbcDrivers.Databricks
                     return baseResult;
                 }
 
-                string query = $"DESC TABLE EXTENDED {fullTableName} AS JSON";
+                // Fast metadata: STATIC ONLY (runtime PR #198486) bypasses the server's WLM
+                // path. Both the SQL keyword and RunAsync=false are required to take effect.
+                bool useFastMetadataQuery = connection.UseFastMetadataQuery;
+                string query = useFastMetadataQuery
+                    ? $"DESC TABLE EXTENDED {fullTableName} AS JSON STATIC ONLY"
+                    : $"DESC TABLE EXTENDED {fullTableName} AS JSON";
                 activity?.AddEvent("statement.desc_table_extended.executing_query", [
-                    new("query_summary", query.Length > 100 ? query.Substring(0, 100) + "..." : query)
+                    new("query_summary", query.Length > 100 ? query.Substring(0, 100) + "..." : query),
+                    new("fast_metadata_query", useFastMetadataQuery)
                 ]);
 
-                using var descStmt = Connection.CreateStatement();
+                using var descStmt = (DatabricksStatement)connection.CreateStatement();
                 descStmt.SqlQuery = query;
+
+                if (useFastMetadataQuery)
+                {
+                    descStmt.RunAsyncOverride = false;
+                }
                 QueryResult descResult;
 
                 try

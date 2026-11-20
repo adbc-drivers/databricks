@@ -16,6 +16,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using Apache.Arrow.Adbc;
 using Apache.Arrow.Adbc.Tests;
@@ -71,8 +73,9 @@ namespace AdbcDrivers.Databricks.Tests
             // Log the TTL from the server
             OutputHelper?.WriteLine($"[FeatureFlagCacheE2ETest] TTL from server: {context.Ttl.TotalSeconds} seconds");
 
-            // Note: We don't assert flags.Count > 0 because the server may return empty flags
-            // in some environments, but we verify the infrastructure works
+            // Happy path: the connector-service endpoint should return at least one flag.
+            // Requires a flag-configured workspace (the CI/test workspace).
+            Assert.True(flags.Count > 0, "Feature flag endpoint should return at least one flag");
 
             // Execute a simple query to verify the connection works
             using var statement = connection.CreateStatement();
@@ -204,12 +207,65 @@ namespace AdbcDrivers.Databricks.Tests
         }
 
         /// <summary>
-        /// Creates a connection with feature flag cache explicitly enabled.
+        /// Verifies the shared singleton cache dedups external calls: opening multiple
+        /// connections to the same host within the cache window results in exactly one
+        /// actual connector-service fetch; the rest are served from the cache.
+        /// </summary>
+        [SkippableFact]
+        public async Task TestFeatureFlagCache_SingleExternalCallAcrossConnections()
+        {
+            // Arrange
+            var cache = FeatureFlagCache.GetInstance();
+            var hostName = GetNormalizedHostName();
+            Skip.If(string.IsNullOrEmpty(hostName), "Cannot determine host name from test configuration");
+
+            // Start from a clean cache so the external-call count is deterministic.
+            cache.Clear();
+
+            // Count actual external fetches via the feature-flag ActivitySource.
+            // Each real connector-service call starts a "FetchFeatureFlags.*" activity.
+            int fetchCount = 0;
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = src => src.Name == "AdbcDrivers.Databricks.FeatureFlags",
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStarted = activity =>
+                {
+                    if (activity.OperationName.StartsWith("FetchFeatureFlags", StringComparison.Ordinal))
+                    {
+                        Interlocked.Increment(ref fetchCount);
+                    }
+                }
+            };
+            ActivitySource.AddActivityListener(listener);
+
+            // Act - open several connections to the SAME host within the cache window.
+            const int connectionCount = 5;
+            for (int i = 0; i < connectionCount; i++)
+            {
+                using var connection = NewConnectionWithFeatureFlagCache();
+                using var statement = connection.CreateStatement();
+                statement.SqlQuery = "SELECT 1";
+                var result = await statement.ExecuteQueryAsync();
+                Assert.NotNull(result.Stream);
+            }
+
+            OutputHelper?.WriteLine(
+                $"[FeatureFlagCacheE2ETest] {connectionCount} connections to the same host -> actual external feature-flag fetches: {fetchCount}");
+
+            // Assert - exactly one external call; the rest served from the shared cache.
+            Assert.Equal(1, fetchCount);
+            Assert.True(cache.TryGetContext(hostName!, out _), "Context should be cached after the first fetch");
+        }
+
+        /// <summary>
+        /// Creates a connection with the feature flag cache active. The cache is enabled by
+        /// default, so this intentionally does NOT set adbc.databricks.feature_flag_cache_enabled,
+        /// which exercises the default-on behavior end-to-end.
         /// </summary>
         private AdbcConnection NewConnectionWithFeatureFlagCache()
         {
             var parameters = GetDriverParameters(TestConfiguration);
-            parameters[DatabricksParameters.FeatureFlagCacheEnabled] = "true";
             var driver = new DatabricksDriver();
             var database = driver.Open(parameters);
             return database.Connect(new Dictionary<string, string>());

@@ -131,7 +131,9 @@ impl ChunkLinkFetchResult {
 /// This trait provides the full client abstraction for session management,
 /// statement execution, and result fetching. Implementations handle
 /// protocol-specific details.
+// async-trait adds a redundant #[must_use] to the generated boxed futures.
 #[async_trait]
+#[allow(clippy::double_must_use)]
 pub trait DatabricksClient: Send + Sync + std::fmt::Debug {
     // --- Session Management ---
 

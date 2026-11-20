@@ -20,14 +20,19 @@
 
    ```shell
    export DATABRICKS_HOST=""
-   export DATABRICKS_ACCESSTOKEN=""
+   export DATABRICKS_OAUTH_CLIENT_ID=""
+   export DATABRICKS_OAUTH_CLIENT_SECRET=""
    export DATABRICKS_HTTPPATH=""
-   export DATABRICKS_CATALOG=""
-   export DATABRICKS_SCHEMA=""
    ```
 
-2. Run the tests:
+   Validation uses the `main.adbc_testing` schema.
+
+2. Build the driver and run the tests:
 
    ```shell
-   pixi run validate
+   pixi run make
+   pixi run validate --vendor-version latest
    ```
+
+   The default version is `latest`, which uses the same validation configuration
+   as `--vendor-version 17`.

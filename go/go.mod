@@ -14,79 +14,102 @@
 
 module github.com/adbc-drivers/databricks/go
 
-go 1.25.5
+go 1.27.4
 
 require (
-	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20251215145213-df04bfe8de4f
-	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20251215145213-df04bfe8de4f
-	github.com/apache/arrow-adbc/go/adbc v1.9.0
-	github.com/apache/arrow-go/v18 v18.5.0
-	github.com/databricks/databricks-sql-go v1.9.0
-	github.com/rs/zerolog v1.28.0
-	github.com/stretchr/testify v1.11.1
+	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20261109034954-869784ceb17f
+	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20261008155521-bb49cea59efb
+	github.com/adbc-drivers/driverbase-go/validation v0.0.0-20261015034256-4c82882827b5
+	github.com/apache/arrow-adbc/go/adbc v1.13.0
+	github.com/apache/arrow-go/v18 v18.8.0
+	github.com/databricks/databricks-sdk-go v0.153.0
+	github.com/databricks/databricks-sql-go v1.19.0
+	github.com/pkg/errors v0.9.1
+	github.com/rs/zerolog v1.35.1
+	github.com/stretchr/testify v1.12.1
 )
 
 require (
-	github.com/adbc-drivers/driverbase-go/testutil v0.0.0-20251215145213-df04bfe8de4f // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
+	cloud.google.com/go/auth v0.4.2 // indirect
+	cloud.google.com/go/auth/oauth2adapt v0.2.2 // indirect
+	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	github.com/andybalholm/brotli v1.3.0 // indirect
 	github.com/apache/arrow/go/v12 v12.0.1 // indirect
-	github.com/apache/thrift v0.22.0 // indirect
+	github.com/apache/thrift v0.25.0 // indirect
+	github.com/bitfield/gotestdox v0.2.3 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coreos/go-oidc/v3 v3.5.0 // indirect
-	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_amd64 v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_arm64 v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_amd64 v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_arm64 v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_amd64 v1.4.0 // indirect
+	github.com/databricks/databricks-sql-kernel-bindings/lib/windows_arm64 v1.4.0 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
-	github.com/fatih/color v1.16.0 // indirect
-	github.com/fsnotify/fsnotify v1.5.4 // indirect
-	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/fatih/color v1.19.0 // indirect
+	github.com/felixge/httpsnoop v1.1.0 // indirect
+	github.com/fsnotify/fsnotify v1.10.1 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.9 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/goccy/go-json v0.10.5 // indirect
+	github.com/goccy/go-json v0.12.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/flatbuffers v25.9.23+incompatible // indirect
+	github.com/google/flatbuffers v25.12.19+incompatible // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
+	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.3 // indirect
+	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-retryablehttp v0.7.7 // indirect
+	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
-	github.com/klauspost/compress v1.18.2 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/mattn/go-colorable v0.1.13 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/klauspost/compress v1.20.4 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.2 // indirect
+	github.com/mattn/go-colorable v0.1.16 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/asm2plan9s v0.0.0-20200509001527-cdd76441f9d8 // indirect
 	github.com/minio/c2goasm v0.0.0-20190812172519-36a3d3bbc4f3 // indirect
-	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
-	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/zeebo/xxh3 v1.0.2 // indirect
+	github.com/zeebo/xxh3 v1.1.0 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/otel v1.39.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.39.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.39.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.39.0 // indirect
-	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.39.0 // indirect
-	go.opentelemetry.io/otel/metric v1.39.0 // indirect
-	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
-	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
-	golang.org/x/mod v0.31.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/oauth2 v0.32.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/telemetry v0.0.0-20251215142616-e75fd47794af // indirect
-	golang.org/x/term v0.38.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
-	golang.org/x/tools v0.40.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
+	go.opentelemetry.io/otel v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0 // indirect
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
+	go.opentelemetry.io/otel/metric v1.47.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.47.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/exp v0.0.0-20261109185158-a52e3aef5920 // indirect
+	golang.org/x/mod v0.43.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/oauth2 v0.38.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/telemetry v0.0.0-20261109170223-bc0f59dd170a // indirect
+	golang.org/x/term v0.48.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
+	golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20251213004720-97cd9d5aeac2 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251213004720-97cd9d5aeac2 // indirect
-	google.golang.org/grpc v1.77.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gotest.tools/gotestsum v1.8.2 // indirect
+	google.golang.org/api v0.182.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
+	google.golang.org/grpc v1.85.0 // indirect
+	google.golang.org/protobuf v1.36.12 // indirect
+	gopkg.in/ini.v1 v1.67.0 // indirect
+	gotest.tools/gotestsum v1.13.0 // indirect
 )

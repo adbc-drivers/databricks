@@ -19,9 +19,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Apache.Arrow.Adbc.Client", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DatabricksBenchmarks", "Benchmarks\DatabricksBenchmarks.csproj", "{A1B2C3D4-E5F6-7890-1234-567890ABCDEF}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.HiveServer2", "hiveserver2\csharp\src\AdbcDrivers.HiveServer2.csproj", "{D5E6F7A8-B9C0-1234-5678-9ABCDEF01234}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.HiveServer2", "hiveserver2\csharp\src\AdbcDrivers.HiveServer2\AdbcDrivers.HiveServer2.csproj", "{D5E6F7A8-B9C0-1234-5678-9ABCDEF01234}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.Tests.HiveServer2", "hiveserver2\csharp\test\AdbcDrivers.Tests.HiveServer2.csproj", "{E6F7A8B9-C0D1-2345-6789-ABCDEF012345}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AdbcDrivers.Tests.HiveServer2", "hiveserver2\csharp\test\AdbcDrivers.Tests.HiveServer2\AdbcDrivers.Tests.HiveServer2.csproj", "{E6F7A8B9-C0D1-2345-6789-ABCDEF012345}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Dependencies", "Dependencies", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
 EndProject

@@ -1,0 +1,285 @@
+// Copyright (c) 2026 ADBC Drivers Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//         http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package databricks
+
+import (
+	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/databricks/databricks-sdk-go/common/environment"
+	sdkconfig "github.com/databricks/databricks-sdk-go/config"
+	dbsql "github.com/databricks/databricks-sql-go"
+	"github.com/databricks/databricks-sql-go/auth"
+	"github.com/databricks/databricks-sql-go/auth/oauth/m2m"
+)
+
+// authField is an option a login method needs, read from the database.
+type authField struct {
+	option string
+	label  string
+	value  func(d *databaseImpl) string
+}
+
+// loginMethod is one way to authenticate: the options it requires and how it
+// configures the SQL driver. Adding a method means adding one
+// entry to loginMethods, keyed by its auth_type value. A method either builds
+// its own connection option (build) or is a credential of the Databricks SDK
+// (sdk).
+type loginMethod struct {
+	required []authField
+	build    func(d *databaseImpl) dbsql.ConnOption
+	sdk      *sdkLogin
+}
+
+// sdkLogin describes a login done by the Databricks SDK.
+type sdkLogin struct {
+	// cloud is set when the auth type implies one; otherwise the SDK guesses
+	// it from the host name.
+	cloud       environment.Cloud
+	credentials func(d *databaseImpl) sdkconfig.CredentialsStrategy
+	// apply copies the method's options into the SDK config.
+	apply func(d *databaseImpl, cfg *sdkconfig.Config)
+}
+
+var loginMethods = map[string]loginMethod{
+	OptionValueAuthTypePAT: {
+		required: []authField{
+			{OptionAccessToken, "access token", func(d *databaseImpl) string { return d.accessToken }},
+		},
+		build: func(d *databaseImpl) dbsql.ConnOption {
+			return dbsql.WithAccessToken(d.accessToken)
+		},
+	},
+	OptionValueAuthTypeOAuthM2M: {
+		required: []authField{
+			{OptionOAuthClientID, "client ID", func(d *databaseImpl) string { return d.oauthClientID }},
+			{OptionOAuthClientSecret, "client secret", func(d *databaseImpl) string { return d.oauthClientSecret }},
+		},
+		build: func(d *databaseImpl) dbsql.ConnOption {
+			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
+		},
+	},
+	// OIDC token federation: the SDK exchanges an ID token for a Databricks
+	// token. The ID token is read from the file option when it is set, and
+	// otherwise from the environment.
+	OptionValueAuthTypeOIDC: {
+		required: []authField{
+			{OptionOIDCClientID, "client ID", func(d *databaseImpl) string { return d.oidcClientID }},
+		},
+		sdk: &sdkLogin{
+			credentials: func(d *databaseImpl) sdkconfig.CredentialsStrategy {
+				if d.oidcTokenFilepath != "" {
+					return sdkconfig.FileOIDCCredentials{}
+				}
+				return sdkconfig.EnvOIDCCredentials{}
+			},
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				cfg.ClientID = d.oidcClientID
+				cfg.OIDCTokenFilepath = d.oidcTokenFilepath
+			},
+		},
+	},
+	// Microsoft Entra ID service principal on Azure Databricks. The SDK only
+	// activates this credential when the tenant is set, so it is required.
+	OptionValueAuthTypeAzureClientSecret: {
+		required: []authField{
+			{OptionAzureClientID, "azure client ID", func(d *databaseImpl) string { return d.azureClientID }},
+			{OptionAzureClientSecret, "azure client secret", func(d *databaseImpl) string { return d.azureClientSecret }},
+			{OptionAzureTenantID, "azure tenant ID", func(d *databaseImpl) string { return d.azureTenantID }},
+		},
+		sdk: &sdkLogin{
+			cloud:       environment.CloudAzure,
+			credentials: func(*databaseImpl) sdkconfig.CredentialsStrategy { return sdkconfig.AzureClientSecretCredentials{} },
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				env := azureEnvironment(cfg.Host)
+				cfg.DatabricksEnvironment = &env
+				cfg.AzureClientID = d.azureClientID
+				cfg.AzureClientSecret = d.azureClientSecret
+				cfg.AzureTenantID = d.azureTenantID
+			},
+		},
+	},
+}
+
+// azureEnvironment returns the Azure environment of the workspace URL, which
+// holds the Entra ID endpoint. The SDK matches the host name against the DNS
+// zones with its port still attached, so a URL such as "https://host:8443"
+// matches none and the Entra ID endpoint would be empty. A host name in no
+// known zone, such as a private link name, is taken to be Azure public cloud.
+func azureEnvironment(workspaceURL string) environment.DatabricksEnvironment {
+	hostname := workspaceURL
+	if u, err := url.Parse(workspaceURL); err == nil {
+		hostname = u.Hostname()
+	}
+	for _, env := range environment.AllEnvironments() {
+		if env.Cloud == environment.CloudAzure && strings.HasSuffix(hostname, env.DnsZone) && !strings.HasPrefix(env.DnsZone, ".dev") && !strings.HasPrefix(env.DnsZone, ".staging") {
+			return env
+		}
+	}
+	return environment.GetEnvironmentForHostname("workspace.azuredatabricks.net")
+}
+
+// sdkHost returns the workspace URL for the SDK. The SQL client takes the port
+// separately, so it is added here unless it is the default of the scheme or the
+// host name already has one.
+func (d *databaseImpl) sdkHost() string {
+	host := d.serverHostname
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Host == "" {
+		return host
+	}
+	defaultPort := map[string]string{"http": "80", "https": "443"}[u.Scheme]
+	if port := strconv.Itoa(d.port); u.Port() == "" && d.port != 0 && port != defaultPort {
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// sdkConfig returns the SDK config of login method name, to be used as the SQL
+// client's authenticator. The config resolves itself on the first request, so
+// a bad value surfaces when the connection is opened. Only environment
+// variables are read, never ~/.databrickscfg, so a profile on disk cannot
+// change the login method. Because auth_type is always set, credentials in
+// other DATABRICKS_* variables (such as DATABRICKS_TOKEN) are ignored.
+func (d *databaseImpl) sdkConfig(login *sdkLogin) *sdkconfig.Config {
+	credentials := login.credentials(d)
+	cfg := &sdkconfig.Config{
+		Host:        d.sdkHost(),
+		Loaders:     []sdkconfig.Loader{sdkconfig.ConfigAttributes},
+		AuthType:    credentials.Name(),
+		Cloud:       login.cloud,
+		Credentials: credentials,
+	}
+	// The login talks to the workspace itself, so it needs the same TLS settings
+	// as the SQL client.
+	if transport := d.customTransport(); transport != nil {
+		cfg.HTTPTransport = transport
+	}
+	if login.apply != nil {
+		login.apply(d, cfg)
+	}
+	return cfg
+}
+
+// connOption returns the SQL client option that logs in with this method.
+func (m loginMethod) connOption(name string, d *databaseImpl) dbsql.ConnOption {
+	if m.sdk != nil {
+		return dbsql.WithAuthenticator(d.sdkConfig(m.sdk))
+	}
+	return m.build(d)
+}
+
+// newM2MAuthenticator requests the configured scopes, or "all-apis" when none
+// are set, so a secret limited to other scopes (for example "sql") can log in.
+func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
+	host := d.serverHostname
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	if u, err := url.Parse(host); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, host, d.oauthScopes)
+}
+
+// isScopeChar reports whether r may appear in an OAuth scope token:
+// %x21 / %x23-5B / %x5D-7E (RFC 6749 section 3.3).
+func isScopeChar(r rune) bool {
+	return r == 0x21 || (r >= 0x23 && r <= 0x5b) || (r >= 0x5d && r <= 0x7e)
+}
+
+// parseScopes splits a comma or whitespace separated list of OAuth scopes.
+// Each scope must be a valid RFC 6749 scope token.
+func parseScopes(value string) ([]string, error) {
+	scopes := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	if len(scopes) == 0 {
+		// An empty or blank value clears the setting. Only separators, such as
+		// ",,,", is a mistake rather than an unset option.
+		if strings.TrimSpace(value) == "" {
+			return nil, nil
+		}
+		return nil, adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  fmt.Sprintf("[db] no OAuth scope in '%s' for '%s'", value, OptionOAuthScopes),
+		}
+	}
+	for _, scope := range scopes {
+		for _, r := range scope {
+			if !isScopeChar(r) {
+				return nil, adbc.Error{
+					Code: adbc.StatusInvalidArgument,
+					Msg:  fmt.Sprintf("[db] invalid OAuth scope '%s' for '%s'", scope, OptionOAuthScopes),
+				}
+			}
+		}
+	}
+	return scopes, nil
+}
+
+// resolveLoginMethod picks the login method for the configured options and
+// checks that everything it requires is set. It returns the method's auth_type
+// name along with the method.
+//
+// When databricks.auth_type is set, it names the method. When it is not, the
+// method is inferred from the options that are set, as it was before
+// auth_type existed: an access token means "pat", a client ID or secret means
+// "oauth-m2m".
+func (d *databaseImpl) resolveLoginMethod() (string, loginMethod, error) {
+	name := d.authType
+	if name == "" {
+		hasOAuth := d.oauthClientID != "" || d.oauthClientSecret != ""
+		switch {
+		case d.accessToken == "" && !hasOAuth:
+			return "", loginMethod{}, adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  "[db] access token or OAuth config is required",
+			}
+		case d.accessToken != "" && hasOAuth:
+			return "", loginMethod{}, adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  "[db] cannot specify both access token and OAuth config",
+			}
+		case d.accessToken != "":
+			name = OptionValueAuthTypePAT
+		default:
+			name = OptionValueAuthTypeOAuthM2M
+		}
+	}
+
+	method, ok := loginMethods[name]
+	if !ok {
+		return "", loginMethod{}, adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  fmt.Sprintf("[db] unknown auth type '%s'", name),
+		}
+	}
+	for _, f := range method.required {
+		if f.value(d) == "" {
+			return "", loginMethod{}, adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] %s is required when using auth type '%s'. Set this via '%s'.", f.label, name, f.option),
+			}
+		}
+	}
+	return name, method, nil
+}

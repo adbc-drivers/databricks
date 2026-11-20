@@ -222,6 +222,7 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.use_desc_table_extended` | Use DESC TABLE EXTENDED when supported | `true` | `true` |
 | `adbc.databricks.enable_run_async_thrift` | Enable RunAsync flag | `true` | Not Supported (Thrift-only concept) |
 | `adbc.databricks.enable_complex_datatype_support` | Return native Arrow types for ARRAY/MAP/STRUCT | `false` | `false` |
+| `adbc.databricks.enable_geospatial_support` | Return GEOMETRY/GEOGRAPHY as GeoArrow WKB instead of strings | `false` | `false` |
 | `adbc.databricks.fetch_heartbeat_interval` | Heartbeat interval for long operations (s) | `60` | Not Supported (no fetch-handle to keep warm) |
 | `adbc.databricks.operation_status_request_timeout` | Timeout for status polling requests (s) | `30` | Not Supported |
 | `adbc.spark.temporarily_unavailable_retry` | Retry on 408/502/503/504 responses | `true` | `true` |
@@ -234,6 +235,28 @@ The Databricks driver supports two protocols: **Thrift** (default, HiveServer2) 
 | `adbc.databricks.feature_flag_timeout_seconds` | Timeout for feature flag fetch requests | `10` | Not Supported |
 | `adbc.databricks.feature_flag_cache_ttl_seconds` | TTL for cached feature flags | `900` | Not Supported |
 | `adbc.databricks.ssp_<name>` | Pass session configuration (e.g., `ssp_use_cached_result=true`) | (none) | (none) |
+| `adbc.databricks.fail_on_row_count_mismatch` | Fail the read when a result decodes to fewer rows than the server declared, instead of returning the partial result (the shortfall is recorded in traces either way, and on Thrift also in statement telemetry). Currently checked for CloudFetch results only. More rows than declared are trimmed, not an error. | `false` | `false` |
+
+Native geospatial values nested inside ARRAY, MAP, or STRUCT also require
+`adbc.databricks.enable_complex_datatype_support=true`. Otherwise, the outer complex value is
+returned as JSON with each nested geospatial value rendered as a WKT/EWKT string.
+
+GeoArrow fields use the `geoarrow.wkb` extension. Fixed-SRID columns use ISO WKB; positive
+SRIDs are carried as an opaque database `srid` CRS in column metadata. `GEOMETRY(ANY)` /
+`GEOGRAPHY(ANY)` use EWKB to preserve each row's SRID in the bytes, with no column CRS.
+GEOGRAPHY fields also declare spherical edges.
+
+Statement Execution API (SEA) results read and buffer the first batch only when
+`adbc.databricks.enable_complex_datatype_support=true` and an ARRAY, MAP, or STRUCT
+contains a nested GEOMETRY or GEOGRAPHY value. The batch supplies physical container
+and sibling field details that SEA's manifest omits, and it is returned on the first
+read. Top-level geospatial results, complex support disabled, Thrift results, and
+results without nested geospatial values remain lazy.
+
+`ANY` has a reader compatibility limitation: some readers reject EWKB, and the
+[GeoArrow specification](https://github.com/geoarrow/geoarrow/blob/main/format.md#serialized-encodings)
+allows readers to ignore embedded SRIDs. Consuming `ANY` values without losing SRIDs requires
+an EWKB-aware reader that preserves them; the `geoarrow.wkb` label alone does not guarantee this.
 
 **Performance Notes:**
 - Databricks Thrift default `batch_size` is `2000000` (vs Apache Spark's `50000`) — optimized for CloudFetch's 1024MB limit.
@@ -245,12 +268,12 @@ CloudFetch is Databricks' high-performance result retrieval system that download
 
 **CloudFetch Properties:**
 
-On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only.
+On the SEA path, CloudFetch-equivalent behavior is controlled via `adbc.databricks.rest.result_disposition` (see *REST API Configuration* below). The `adbc.databricks.cloudfetch.*` keys below apply to the Thrift path only, except `adbc.databricks.cloudfetch.lz4.enabled`, which also controls SEA result compression (see *REST API Configuration*).
 
 | Property | Description | Thrift Default | SEA Default |
 |----------|-------------|----------------|-------------|
 | `adbc.databricks.cloudfetch.enabled` | Enable/disable CloudFetch | `true` | Not Supported |
-| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | Not Supported |
+| `adbc.databricks.cloudfetch.lz4.enabled` | Enable LZ4 decompression | `true` | `true` (also drives SEA result compression: `LZ4_FRAME` when enabled, else `NONE`) |
 | `adbc.databricks.cloudfetch.max_bytes_per_file` | Max bytes per file (supports KB, MB, GB) | `20MB` | Not Supported |
 | `adbc.databricks.cloudfetch.parallel_downloads` | Max parallel downloads | `3` | Not Supported |
 | `adbc.databricks.cloudfetch.prefetch_count` | Files to prefetch ahead | `2` | Not Supported |
@@ -292,7 +315,7 @@ These properties apply only when `adbc.databricks.protocol=rest`.
 |----------|-------------|-------------|
 | `adbc.databricks.rest.result_disposition` | Result mode: `inline`, `external_links`, or `inline_or_external_links` | `inline_or_external_links` |
 | `adbc.databricks.rest.result_format` | Format: `arrow_stream`, `json_array`, or `csv` | `arrow_stream` |
-| `adbc.databricks.rest.result_compression` | Compression: `lz4`, `gzip`, or `none` | (auto) |
+| `adbc.databricks.rest.result_compression` | **Deprecated and ignored** — recognized but inert; setting it has no effect. Compression is derived solely from `adbc.databricks.cloudfetch.lz4.enabled`: `LZ4_FRAME` is requested whenever the client can decompress it (default), regardless of result format; `NONE` is requested when the flag is disabled. The server ignores the codec for non-Arrow formats (e.g. `JSON_ARRAY`, `CSV`). | (derived) |
 | `adbc.databricks.rest.wait_timeout` | Wait timeout in seconds (0=async, 5-50=sync) | `10` |
 | `adbc.databricks.rest.enable_session_management` | Enable session management | `true` |
 
@@ -399,10 +422,38 @@ The driver automatically converts Databricks/Spark types to Apache Arrow types:
 | ARRAY | List | string | Complex types serialize as strings |
 | MAP | Map | string | Complex types serialize as strings |
 | STRUCT | Struct | string | Complex types serialize as strings |
+| GEOMETRY | String (default) or Binary | string or byte[] | Set `adbc.databricks.enable_geospatial_support=true` for GeoArrow WKB |
+| GEOGRAPHY | String (default) or Binary | string or byte[] | Set `adbc.databricks.enable_geospatial_support=true` for GeoArrow WKB |
 
 **Data Type Conversion Mode:**
 - `adbc.spark.data_type_conv` = `scalar` (default): Converts DATE, DECIMAL, TIMESTAMP to native types
 - `adbc.spark.data_type_conv` = `none`: No conversion, returns raw string representations
+
+#### Geospatial result types
+
+By default, `GEOMETRY` and `GEOGRAPHY` preserve the existing WKT/EWKT string
+contract. Set `adbc.databricks.enable_geospatial_support=true` to return a Binary
+Arrow field carrying the `geoarrow.wkb` extension instead. This option is applied
+locally by the driver and is not sent to Thrift or SEA.
+
+Databricks has two supported server representations:
+
+- Legacy result paths return String or LargeString WKT/EWKT. In the default string
+  mode, the driver passes this text through verbatim; it does not normalize spacing
+  or precision, parse it again, or validate an embedded EWKT SRID against the
+  declared column SRID.
+- Reyden Arrow results return a tagged `struct<srid:int32,wkb:binary>`. The `wkb`
+  child is little-endian OGC/ISO WKB and carries `geometry=true` or
+  `geography=true` plus the type-level `srid`. The driver renders this locally as
+  WKT/EWKT in the default mode or converts it to GeoArrow WKB when enabled.
+
+The representation and Arrow schema are stable across inline and CloudFetch chunks
+within one query result. Plain Binary WKB and an untagged `struct<srid,wkb>` are not
+server result contracts: plain Binary is rejected, and an untagged struct is not
+recognized without logical SQL type metadata. For a fixed-SRID type, GeoArrow output
+is ordinary WKB with column CRS metadata. For `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)`,
+each row's SRID is embedded as EWKB because a single column CRS cannot describe all
+rows; some GeoArrow consumers may not preserve that EWKB SRID.
 
 ### Server-Side Properties
 

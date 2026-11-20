@@ -31,7 +31,7 @@ namespace AdbcDrivers.Databricks.StatementExecution.MetadataCommands
         {
             var sql = new StringBuilder("SHOW CATALOGS");
             if (_catalogPattern != null)
-                sql.Append(string.Format(LikeFormat, ConvertPattern(_catalogPattern)));
+                sql.Append(string.Format(LikeFormat, LikePattern(_catalogPattern)));
             return sql.ToString();
         }
     }

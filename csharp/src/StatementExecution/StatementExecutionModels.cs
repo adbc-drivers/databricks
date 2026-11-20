@@ -19,6 +19,16 @@ using System.Text.Json.Serialization;
 
 namespace AdbcDrivers.Databricks.StatementExecution
 {
+    internal enum MetadataOperation
+    {
+        GetCatalogs,
+        GetSchemas,
+        GetTables,
+        GetColumns,
+        GetPrimaryKeys,
+        GetCrossReference,
+    }
+
     // ============================================================================
     // Session Management Models
     // ============================================================================
@@ -28,10 +38,13 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// </summary>
     public class CreateSessionRequest
     {
+        [JsonPropertyName("execution_mode")]
+        public string ExecutionMode { get; set; } = "FAST";
+
         /// <summary>
-        /// The warehouse ID to use for this session.
+        /// The warehouse ID included in the session creation URL.
         /// </summary>
-        [JsonPropertyName("warehouse_id")]
+        [JsonIgnore]
         public string WarehouseId { get; set; } = string.Empty;
 
         /// <summary>
@@ -63,6 +76,15 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("session_id")]
         public string SessionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
+    }
+
+    public class SessionVersion
+    {
+        [JsonPropertyName("version_id")]
+        public long? VersionId { get; set; }
     }
 
     // ============================================================================
@@ -121,6 +143,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("session_id")]
         public string? SessionId { get; set; }
+
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
 
         /// <summary>
         /// The SQL statement to execute.
@@ -185,6 +210,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         [JsonIgnore]
         public bool IsMetadata { get; set; }
 
+        [JsonIgnore]
+        internal MetadataOperation? MetadataOperation { get; set; }
+
         /// <summary>
         /// Maximum number of rows to return.
         /// </summary>
@@ -202,6 +230,21 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("query_tags")]
         public List<QueryTag>? QueryTags { get; set; }
+
+        internal ExecuteStatementRequest WithSessionVersion(SessionVersion? sessionVersion)
+        {
+            var request = (ExecuteStatementRequest)MemberwiseClone();
+            request.SessionVersion = sessionVersion;
+            return request;
+        }
+
+        internal ExecuteStatementRequest WithoutRoutingIds()
+        {
+            var request = (ExecuteStatementRequest)MemberwiseClone();
+            request.WarehouseId = null;
+            request.SessionId = null;
+            return request;
+        }
     }
 
     /// <summary>
@@ -273,6 +316,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
     /// </summary>
     public class StatementStatus
     {
+        [JsonPropertyName("session_version")]
+        public SessionVersion? SessionVersion { get; set; }
+
         /// <summary>
         /// The execution state: "PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "CLOSED".
         /// </summary>
@@ -284,6 +330,16 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("error")]
         public StatementError? Error { get; set; }
+
+        /// <summary>
+        /// SQL state code for a failed statement. The SEA response places this at the
+        /// <c>status.sql_state</c> level (a sibling of <c>error</c>), NOT inside
+        /// <c>status.error</c> — the <c>error</c> object only carries <c>error_code</c> and
+        /// <c>message</c> (verified live: FAILED responses return e.g. status.sql_state="42601"
+        /// with status.error.sql_state absent). Read this rather than <see cref="StatementError.SqlState"/>.
+        /// </summary>
+        [JsonPropertyName("sql_state")]
+        public string? SqlState { get; set; }
     }
 
     /// <summary>
@@ -390,6 +446,9 @@ namespace AdbcDrivers.Databricks.StatementExecution
         /// </summary>
         [JsonPropertyName("is_volume_operation")]
         public bool? IsVolumeOperation { get; set; }
+
+        [JsonPropertyName("is_native_metadata_result")]
+        public bool? IsNativeMetadataResult { get; set; }
     }
 
     /// <summary>

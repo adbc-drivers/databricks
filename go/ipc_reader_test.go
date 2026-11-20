@@ -198,13 +198,13 @@ func TestIPCReaderAdapterMultipleStreams(t *testing.T) {
 	var streams [][]byte
 	totalRows := 0
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		builder := array.NewRecordBuilder(mem, schema)
 
 		// Each batch has different data
 		start := i * 100
 		values := make([]int32, 100)
-		for j := 0; j < 100; j++ {
+		for j := range 100 {
 			values[j] = int32(start + j)
 		}
 		builder.Field(0).(*array.Int32Builder).AppendValues(values, nil)

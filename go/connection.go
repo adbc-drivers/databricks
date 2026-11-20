@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -43,11 +44,29 @@ type connectionImpl struct {
 	catalog  string
 	dbSchema string
 
+	// Query tags: the database's defaults, plus any set on the connection
+	queryTags   map[string]string
+	queryTagsMu sync.RWMutex
+
 	// Database connection
 	conn *sql.Conn
 }
 
-func (c *connectionImpl) Close() error {
+func (c *connectionImpl) SetOption(ctx context.Context, key, val string) error {
+	if name, ok := queryTagName(key); ok {
+		return c.setQueryTag(name, val)
+	}
+	return c.ConnectionImplBase.SetOption(ctx, key, val)
+}
+
+func (c *connectionImpl) GetOption(ctx context.Context, key string) (string, error) {
+	if name, ok := queryTagName(key); ok {
+		return c.getQueryTag(name)
+	}
+	return c.ConnectionImplBase.GetOption(ctx, key)
+}
+
+func (c *connectionImpl) Close(ctx context.Context) error {
 	if c.conn == nil {
 		return adbc.Error{Code: adbc.StatusInvalidState}
 	}
@@ -57,15 +76,15 @@ func (c *connectionImpl) Close() error {
 	return c.conn.Close()
 }
 
-func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
-	return &statementImpl{
+func (c *connectionImpl) NewStatement(ctx context.Context) (adbc.StatementWithContext, error) {
+	return driverbase.NewStatement(&statementImpl{
 		StatementImplBase: driverbase.NewStatementImplBase(&c.ConnectionImplBase, c.ErrorHelper),
 		conn:              c,
 		bulkIngestOptions: driverbase.NewBulkIngestOptions(),
-	}, nil
+	}), nil
 }
 
-func (c *connectionImpl) SetAutocommit(autocommit bool) error {
+func (c *connectionImpl) SetAutocommit(ctx context.Context, autocommit bool) error {
 	// Databricks SQL doesn't support explicit transaction control in the same way
 	// as traditional databases. Most operations are implicitly committed.
 	if !autocommit {
@@ -78,7 +97,7 @@ func (c *connectionImpl) SetAutocommit(autocommit bool) error {
 }
 
 // CurrentNamespacer interface implementation
-func (c *connectionImpl) GetCurrentCatalog() (string, error) {
+func (c *connectionImpl) GetCurrentCatalog(ctx context.Context) (string, error) {
 	if c.catalog != "" {
 		return c.catalog, nil
 	}
@@ -91,7 +110,7 @@ func (c *connectionImpl) GetCurrentCatalog() (string, error) {
 	}
 
 	var catalog string
-	err := c.conn.QueryRowContext(context.Background(), "SELECT current_catalog()").Scan(&catalog)
+	err := c.conn.QueryRowContext(ctx, "SELECT current_catalog()").Scan(&catalog)
 	if err != nil {
 		return "", adbc.Error{
 			Code: adbc.StatusInternal,
@@ -102,7 +121,7 @@ func (c *connectionImpl) GetCurrentCatalog() (string, error) {
 	return catalog, nil
 }
 
-func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
+func (c *connectionImpl) GetCurrentDbSchema(ctx context.Context) (string, error) {
 	if c.dbSchema != "" {
 		return c.dbSchema, nil
 	}
@@ -115,7 +134,7 @@ func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
 	}
 
 	var schema string
-	err := c.conn.QueryRowContext(context.Background(), "SELECT current_schema()").Scan(&schema)
+	err := c.conn.QueryRowContext(ctx, "SELECT current_schema()").Scan(&schema)
 	if err != nil {
 		return "", adbc.Error{
 			Code: adbc.StatusInternal,
@@ -126,7 +145,7 @@ func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
 	return schema, nil
 }
 
-func (c *connectionImpl) SetCurrentCatalog(catalog string) error {
+func (c *connectionImpl) SetCurrentCatalog(ctx context.Context, catalog string) error {
 	if catalog == "" {
 		return adbc.Error{
 			Code: adbc.StatusInvalidArgument,
@@ -140,7 +159,7 @@ func (c *connectionImpl) SetCurrentCatalog(catalog string) error {
 		}
 	}
 	escapedCatalog := strings.ReplaceAll(catalog, "`", "``")
-	_, err := c.conn.ExecContext(context.Background(), fmt.Sprintf("USE CATALOG `%s`", escapedCatalog))
+	_, err := c.conn.ExecContext(ctx, fmt.Sprintf("USE CATALOG `%s`", escapedCatalog))
 	if err != nil {
 		return adbc.Error{
 			Code: adbc.StatusInternal,
@@ -151,7 +170,7 @@ func (c *connectionImpl) SetCurrentCatalog(catalog string) error {
 	return nil
 }
 
-func (c *connectionImpl) SetCurrentDbSchema(schema string) error {
+func (c *connectionImpl) SetCurrentDbSchema(ctx context.Context, schema string) error {
 	if schema == "" {
 		return adbc.Error{
 			Code: adbc.StatusInvalidArgument,
@@ -165,7 +184,7 @@ func (c *connectionImpl) SetCurrentDbSchema(schema string) error {
 		}
 	}
 	escapedSchema := strings.ReplaceAll(schema, "`", "``")
-	_, err := c.conn.ExecContext(context.Background(), fmt.Sprintf("USE SCHEMA `%s`", escapedSchema))
+	_, err := c.conn.ExecContext(ctx, fmt.Sprintf("USE SCHEMA `%s`", escapedSchema))
 	if err != nil {
 		return adbc.Error{
 			Code: adbc.StatusInternal,

@@ -22,6 +22,8 @@
 */
 
 using System;
+using System.Diagnostics;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using AdbcDrivers.Databricks.Reader;
@@ -29,7 +31,10 @@ using AdbcDrivers.Databricks.Telemetry;
 using AdbcDrivers.Databricks.Telemetry.Proto;
 using AdbcDrivers.HiveServer2.Hive2;
 using Apache.Hive.Service.Rpc.Thrift;
+using Apache.Arrow.Adbc.Tracing;
 using Moq;
+using Thrift.Protocol;
+using Thrift.Transport;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -53,7 +58,7 @@ namespace AdbcDrivers.Databricks.Tests.Unit
             _mockResponse = new Mock<IResponse>();
             _operationHandle = new TOperationHandle
             {
-                OperationId = new THandleIdentifier { Guid = new byte[] { 1, 2, 3, 4 } },
+                OperationId = new THandleIdentifier { Guid = new byte[] { 1, 2, 3, 4 }, Secret = new byte[16] },
                 OperationType = TOperationType.EXECUTE_STATEMENT
             };
 
@@ -308,6 +313,214 @@ namespace AdbcDrivers.Databricks.Tests.Unit
 
             Assert.True(pollCount > 0, "Should have polled at least once");
             _mockClient.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        }
+
+        [Theory]
+        [InlineData(1, false)]
+        [InlineData(4, false)]
+        [InlineData(10, false)]
+        [InlineData(20, false)]
+        [InlineData(28, false)]
+        [InlineData(1, true)]
+        [InlineData(4, true)]
+        [InlineData(10, true)]
+        [InlineData(20, true)]
+        [InlineData(28, true)]
+        public async Task StoppingDuringSerializationPreservesCloseOperation(int pauseAfterWrite, bool cancelExternally)
+        {
+            _operationHandle.OperationId.Secret = new byte[16];
+            _operationHandle.HasResultSet = true;
+            var server = new Mock<TCLIService.IAsync>(MockBehavior.Strict);
+            server.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TGetOperationStatusResp
+                {
+                    Status = new TStatus(TStatusCode.SUCCESS_STATUS),
+                    OperationState = TOperationState.FINISHED_STATE
+                });
+            server.Setup(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TCloseOperationResp { Status = new TStatus(TStatusCode.SUCCESS_STATUS) });
+
+            using var httpClient = new HttpClient(new ThriftHandler(server.Object))
+            {
+                BaseAddress = new Uri("http://localhost/")
+            };
+            using var transport = new PausingHttpTransport(httpClient, pauseAfterWrite);
+            using var connection = new ThriftTestConnection();
+            using var client = connection.CreateClient(new TBinaryProtocol(transport));
+            _mockStatement.Setup(s => s.Client).Returns(client);
+            using var cancellation = new CancellationTokenSource();
+            using var poller = new DatabricksOperationStatusPoller(_mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds);
+
+            poller.Start(cancellation.Token);
+            try
+            {
+                await WaitForSignal(transport.Paused.Task);
+                if (cancelExternally)
+                {
+                    cancellation.Cancel();
+                }
+                else
+                {
+                    poller.Stop();
+                }
+            }
+            finally
+            {
+                transport.Resume.TrySetResult(true);
+                poller.Dispose();
+            }
+
+            await client.CloseOperation(new TCloseOperationReq(_operationHandle));
+
+            server.Verify(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()), Times.Never);
+            server.Verify(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task RequestTimeoutDuringSerializationPreservesCloseOperation()
+        {
+            var server = new Mock<TCLIService.IAsync>(MockBehavior.Strict);
+            server.Setup(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TCloseOperationResp { Status = new TStatus(TStatusCode.SUCCESS_STATUS) });
+            using var httpClient = new HttpClient(new ThriftHandler(server.Object)) { BaseAddress = new Uri("http://localhost/") };
+            using var transport = new PausingHttpTransport(httpClient, pauseAfterWrite: 20);
+            using var connection = new ThriftTestConnection();
+            using var client = connection.CreateClient(new TBinaryProtocol(transport));
+            var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .Returns((TGetOperationStatusReq request, CancellationToken token) =>
+                {
+                    started.TrySetResult(token);
+                    return client.GetOperationStatus(request, token);
+                });
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds, requestTimeoutSeconds: 1);
+            poller.Start();
+            try
+            {
+                await WaitForSignal(transport.Paused.Task);
+                await WaitForSignal(started.Task);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = (await started.Task).Register(() => cancelled.TrySetResult(true));
+                await WaitForSignal(cancelled.Task);
+            }
+            finally
+            {
+                poller.Stop();
+                transport.Resume.TrySetResult(true);
+                poller.Dispose();
+            }
+            await client.CloseOperation(new TCloseOperationReq(_operationHandle));
+            server.Verify(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task HttpCancellationOnlyReportsErrorForRequestTimeout(bool stopPoller)
+        {
+            var server = new Mock<TCLIService.IAsync>(MockBehavior.Strict);
+            server.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TGetOperationStatusResp { Status = new TStatus(TStatusCode.SUCCESS_STATUS) });
+            server.Setup(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new TCloseOperationResp { Status = new TStatus(TStatusCode.SUCCESS_STATUS) });
+            using var handler = new ThriftHandler(server.Object, blockFirstRequest: true);
+            using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
+            using var transport = new PausingHttpTransport(httpClient, pauseAfterWrite: int.MaxValue);
+            using var connection = new ThriftTestConnection();
+            using var client = connection.CreateClient(new TBinaryProtocol(transport));
+            _mockStatement.Setup(s => s.Client).Returns(client);
+            using var trace = new ActivityTrace(nameof(HttpCancellationOnlyReportsErrorForRequestTimeout));
+            var tracer = new Mock<IActivityTracer>();
+            tracer.Setup(t => t.Trace).Returns(trace);
+            var completed = new TaskCompletionSource<Activity>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => ReferenceEquals(source, trace.ActivitySource),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStopped = activity => completed.TrySetResult(activity)
+            };
+            ActivitySource.AddActivityListener(listener);
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds,
+                requestTimeoutSeconds: stopPoller ? 30 : 1, activityTracer: tracer.Object);
+            poller.Start();
+            try
+            {
+                await WaitForSignal(handler.Started.Task);
+                if (stopPoller) poller.Stop();
+                await WaitForSignal(completed.Task);
+            }
+            finally
+            {
+                handler.Resume.TrySetResult(true);
+                poller.Dispose();
+            }
+            Activity activity = await completed.Task;
+            if (stopPoller)
+            {
+                Assert.DoesNotContain(activity.Events, e => e.Name == "operation_status_poller.poll_error");
+            }
+            else
+            {
+                Assert.Contains(activity.Events, e => e.Name == "operation_status_poller.poll_error");
+            }
+            Assert.NotEqual(ActivityStatusCode.Error, activity.Status);
+            await client.CloseOperation(new TCloseOperationReq(_operationHandle));
+            server.Verify(c => c.CloseOperation(It.IsAny<TCloseOperationReq>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public async Task StoppingStillReportsUnrelatedPollErrors(bool transportError)
+        {
+            Exception error = transportError
+                ? new TTransportException(TTransportException.ExceptionType.NotOpen, "Connection closed")
+                : new InvalidOperationException("Unexpected poll failure");
+            var started = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var resume = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _mockClient.Setup(c => c.GetOperationStatus(It.IsAny<TGetOperationStatusReq>(), It.IsAny<CancellationToken>()))
+                .Returns(async () =>
+                {
+                    started.TrySetResult(true);
+                    await resume.Task;
+                    throw error;
+                });
+            using var trace = new ActivityTrace(nameof(StoppingStillReportsUnrelatedPollErrors));
+            var tracer = new Mock<IActivityTracer>();
+            tracer.Setup(t => t.Trace).Returns(trace);
+            var completed = new TaskCompletionSource<Activity>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var listener = new ActivityListener
+            {
+                ShouldListenTo = source => ReferenceEquals(source, trace.ActivitySource),
+                Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+                ActivityStopped = activity => completed.TrySetResult(activity)
+            };
+            ActivitySource.AddActivityListener(listener);
+            using var poller = new DatabricksOperationStatusPoller(
+                _mockStatement.Object, _mockResponse.Object, _heartbeatIntervalSeconds, activityTracer: tracer.Object);
+            poller.Start();
+            try
+            {
+                await WaitForSignal(started.Task);
+                poller.Stop();
+                resume.TrySetResult(true);
+                await WaitForSignal(completed.Task);
+            }
+            finally
+            {
+                resume.TrySetResult(true);
+                poller.Dispose();
+            }
+
+            Activity activity = await completed.Task;
+            Assert.Contains(activity.Events, e => e.Name == "operation_status_poller.poll_error");
+        }
+
+        private static Task WaitForSignal(Task task)
+        {
+            return ThriftCancellationTests.WaitForSignal(task);
         }
     }
 }

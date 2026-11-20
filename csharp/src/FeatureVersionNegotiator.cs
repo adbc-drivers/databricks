@@ -89,6 +89,13 @@ namespace AdbcDrivers.Databricks
         * - ArrowMetadata (used to determine advanced arrow types in metadata response schema)
         */
 
+        /// <summary>
+        /// Gets whether the server supports advanced Arrow native types
+        /// (DecimalAsArrow, ComplexTypesAsArrow, IntervalTypesAsArrow, NullTypeAsArrow).
+        /// </summary>
+        public static bool SupportsAdvancedArrowTypes(TProtocolVersion protocolVersion) =>
+            SupportsProtocolVersion(protocolVersion, TProtocolVersion.SPARK_CLI_SERVICE_PROTOCOL_V5);
+
         #endregion
 
         #region Protocol Version V6 Features

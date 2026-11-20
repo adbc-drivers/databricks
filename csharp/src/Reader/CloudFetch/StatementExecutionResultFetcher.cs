@@ -40,6 +40,13 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         private int _currentChunkIndex;
         private bool _disposed;
 
+        // Pipelined link prefetch: the in-flight GetResultChunk for the NEXT batch of links, started
+        // while the CURRENT batch is being enqueued. A batch that is actually consumed is awaited (so
+        // its fault surfaces there); a batch left in flight when the fetch loop stops is observed by
+        // OnFetchLoopCompleted so a fault — e.g. a transient network error that races cancellation and
+        // Faults the task rather than Canceling it — is never left as an unobserved task exception.
+        private Task<ResultData>? _prefetchTask;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="StatementExecutionResultFetcher"/> class.
         /// </summary>
@@ -68,6 +75,19 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
         protected override void ResetState()
         {
             _currentChunkIndex = 0;
+        }
+
+        /// <inheritdoc />
+        protected override void OnFetchLoopCompleted()
+        {
+            // Runs whenever the fetch loop stops (completion, error, or the cancellation-between-
+            // iterations exit that FetchNextBatchAsync's catch never sees). Observe an abandoned
+            // look-ahead prefetch so a fault — e.g. a transient network error that races cancellation
+            // and Faults the task instead of Canceling it — is not left as an unobserved task
+            // exception. A Canceled task doesn't run the continuation, so it needs no observation.
+            var pending = _prefetchTask;
+            _prefetchTask = null;
+            pending?.ContinueWith(static t => { _ = t.Exception; }, TaskScheduler.Default);
         }
 
         /// <inheritdoc />
@@ -111,36 +131,35 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
             }
 
             int chunkToFetch = _currentChunkIndex;
-
-            Activity.Current?.AddEvent("cloudfetch.fetch_chunk_start", [
-                new("chunk_index", chunkToFetch),
-                new("total_chunks", _manifest.TotalChunkCount)
-            ]);
-
             try
             {
-                var resultData = await _client.GetResultChunkAsync(
-                    _statementId,
-                    chunkToFetch,
-                    cancellationToken).ConfigureAwait(false);
+                // Use the batch we began prefetching last iteration, if any; otherwise fetch now.
+                Task<ResultData> currentFetch = _prefetchTask ?? FetchChunkAsync(chunkToFetch, cancellationToken);
+                _prefetchTask = null;
+                ResultData resultData = await currentFetch.ConfigureAwait(false);
 
-                Activity.Current?.AddEvent("cloudfetch.fetch_chunk_complete", [
-                    new("chunk_index", chunkToFetch),
-                    new("external_links_count", resultData.ExternalLinks?.Count ?? 0)
-                ]);
+                // Use next_chunk_index from the last link to determine the next fetch;
+                // null (or no links) means no more chunks.
+                var lastLink = resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0
+                    ? resultData.ExternalLinks[resultData.ExternalLinks.Count - 1]
+                    : null;
+                int nextChunkIndex = (int)(lastLink?.NextChunkIndex ?? _manifest.TotalChunkCount);
+
+                // Pipeline: start the NEXT GetResultChunk before enqueuing this batch, so the
+                // full REST round-trip overlaps the (potentially blocking) enqueue below and keeps
+                // the download slots fed. Links are metadata, so nothing extra is buffered.
+                if (nextChunkIndex < _manifest.TotalChunkCount)
+                {
+                    _prefetchTask = FetchChunkAsync(nextChunkIndex, cancellationToken);
+                }
 
                 if (resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0)
                 {
                     ProcessExternalLinks(resultData.ExternalLinks, cancellationToken);
                 }
 
-                // Use next_chunk_index from the last link to determine the next fetch;
-                // null (or no links) means no more chunks
-                var lastLink = resultData.ExternalLinks != null && resultData.ExternalLinks.Count > 0
-                    ? resultData.ExternalLinks[resultData.ExternalLinks.Count - 1]
-                    : null;
-                _currentChunkIndex = (int)(lastLink?.NextChunkIndex ?? _manifest.TotalChunkCount);
-                _hasMoreResults = _currentChunkIndex < _manifest.TotalChunkCount;
+                _currentChunkIndex = nextChunkIndex;
+                _hasMoreResults = nextChunkIndex < _manifest.TotalChunkCount;
             }
             catch (Exception ex)
             {
@@ -152,6 +171,30 @@ namespace AdbcDrivers.Databricks.Reader.CloudFetch
                 _hasMoreResults = false;
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Fetches one chunk's external links via the REST API. Kept separate from
+        /// <see cref="FetchNextBatchAsync"/> so the fetch can be started for the next batch
+        /// while the current batch is still being enqueued/consumed (pipelining).
+        /// </summary>
+        private async Task<ResultData> FetchChunkAsync(int chunkIndex, CancellationToken cancellationToken)
+        {
+            Activity.Current?.AddEvent("cloudfetch.fetch_chunk_start", [
+                new("chunk_index", chunkIndex),
+                new("total_chunks", _manifest.TotalChunkCount)
+            ]);
+
+            var resultData = await _client.GetResultChunkAsync(
+                _statementId,
+                chunkIndex,
+                cancellationToken).ConfigureAwait(false);
+
+            Activity.Current?.AddEvent("cloudfetch.fetch_chunk_complete", [
+                new("chunk_index", chunkIndex),
+                new("external_links_count", resultData.ExternalLinks?.Count ?? 0)
+            ]);
+            return resultData;
         }
 
         /// <summary>

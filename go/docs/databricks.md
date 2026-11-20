@@ -44,10 +44,10 @@ To connect, edit the `uri` option below to match your environment and run the fo
 from adbc_driver_manager import dbapi
 
 conn = dbapi.connect(
-  driver="databricks",
-  db_kwargs = {
-    "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
-  }
+    driver="databricks",
+    db_kwargs={
+        "uri": "databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh"
+    },
 )
 ```
 
@@ -113,6 +113,61 @@ Examples:
 - `databricks://token:dapi1234abcd5678efgh@dbc-a1b2345c-d6e7.cloud.databricks.com:443/sql/protocolv1/o/1234567890123456/1234-567890-abcdefgh`
 - `databricks://myworkspace.cloud.databricks.com:443/sql/1.0/warehouses/abc123def456?authType=OauthU2M`
 - `databricks://myworkspace.cloud.databricks.com:443/sql/1.0/warehouses/abc123def456?authType=OAuthM2M&clientID=12345678-1234-1234-1234-123456789012&clientSecret=mysecret123`
+
+## Options
+
+### Authentication Options
+
+`databricks.auth_type`
+: **Values:** `pat`, `oauth-m2m`, `oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
+
+  How to authenticate.
+
+  - `pat`: personal access token. Requires `databricks.access_token`.
+  - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
+  - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
+  - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
+
+  If not set, the method is inferred: `pat` when `databricks.access_token` is set, `oauth-m2m` when a client ID or secret is set. Setting both an access token and OAuth options without `databricks.auth_type` is an error. If set, options that belong to other methods are ignored.
+
+`databricks.oauth.scopes`
+: **Values:** space- or comma-separated scope names, such as `sql` or `sql offline_access`. **Default:** (empty, requests `all-apis`)
+
+  The scopes `oauth-m2m` requests. Set it when the service principal is limited to specific scopes and cannot log in to `all-apis`.
+
+`databricks.oidc.client_id`
+: **Default:** (empty)
+
+  The client ID of the Databricks service principal to log in as. Required for `oidc`.
+
+`databricks.oidc.token_filepath`
+: **Default:** (empty, the ID token is read from the environment)
+
+  Path of the file holding the ID token. Used by `oidc`.
+
+`databricks.azure.client_id`
+: **Default:** (empty)
+
+  The application (client) ID of the Entra ID service principal. Required for `azure-client-secret`.
+
+`databricks.azure.client_secret`
+: **Default:** (empty)
+
+  The client secret of the Entra ID service principal. Required for `azure-client-secret`.
+
+`databricks.azure.tenant_id`
+: **Default:** (empty)
+
+  The Entra ID tenant ID. Required for `azure-client-secret`; the driver does not discover it.
+
+### Query Options
+
+`databricks.query.query_tag.<name>`
+: **Values:** a string, which may be empty. **Default:** (not set)
+
+  Sets the query tag `<name>`, for example `databricks.query.query_tag.team`. May be set at the database, connection or statement level, and a tag set at a more specific level overrides one of the same name set at a less specific level. Reading a tag that is not set returns `NOT_FOUND`.
+
+  Names and values may be at most 128 characters, counted in UTF-16 code units. Names must not be empty or contain `,` `:` `-` `/` `=` or `.`. At most 20 tags are allowed. A tag that breaks these limits is rejected with `INVALID_ARGUMENT`. Names starting with `@@` are reserved by Databricks and passed through unchanged.
 
 ## Feature & Type Support
 

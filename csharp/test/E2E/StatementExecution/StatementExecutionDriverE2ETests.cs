@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using AdbcDrivers.HiveServer2;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
@@ -482,6 +483,142 @@ namespace AdbcDrivers.Databricks.Tests.E2E.StatementExecution
                 $"Expected polltime_ms={slowPollMs} to drive SEA polling cadence, but query " +
                 $"completed in {sw.ElapsedMilliseconds}ms (expected >= 1800ms). " +
                 $"This indicates polltime_ms is not wired into SEA's polling interval.");
+        }
+
+        // Issue #525: the `%` SQL-LIKE wildcard must mean "match all catalogs" on the SEA
+        // path, exactly as Thrift treats it. Previously the SEA metadata path passed the
+        // catalog argument through as a literal backtick-quoted identifier, so
+        // GetSchemas(catalog="%") generated `SHOW SCHEMAS IN `%`` which matches no catalog
+        // and returns an empty result, while Thrift enumerates every catalog. This asserts
+        // the SEA path now expands `%` to all catalogs and echoes the server's matched
+        // catalog name (e.g. "main"), not the literal "%" argument.
+        [SkippableFact]
+        public async Task GetSchemas_CatalogPercentWildcard_ExpandsToAllCatalogs()
+        {
+            SkipIfNotConfigured();
+
+            using var connection = CreateRestConnection();
+            using var statement = connection.CreateStatement();
+            statement.SetOption(ApacheParameters.IsMetadataCommand, "true");
+            statement.SetOption(ApacheParameters.CatalogName, "%");
+            statement.SqlQuery = "GetSchemas";
+
+            var result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            int catalogColIndex = -1;
+            for (int j = 0; j < reader!.Schema.FieldsList.Count; j++)
+            {
+                var name = reader.Schema.GetFieldByIndex(j).Name;
+                if (name.Equals("TABLE_CATALOG", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("TABLE_CAT", StringComparison.OrdinalIgnoreCase))
+                {
+                    catalogColIndex = j;
+                    break;
+                }
+            }
+            Assert.True(catalogColIndex >= 0, "GetSchemas result must contain a catalog column");
+
+            var catalogValues = new HashSet<string>(StringComparer.Ordinal);
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                var catalogArray = (Apache.Arrow.StringArray)batch.Column(catalogColIndex);
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    if (!catalogArray.IsNull(i))
+                        catalogValues.Add(catalogArray.GetString(i));
+                }
+            }
+
+            // `%` must expand to all catalogs, so we must get schemas from at least the
+            // "main" catalog, and the echoed catalog name must be the server's matched
+            // name ("main"), never the literal wildcard "%".
+            Assert.Contains("main", catalogValues);
+            Assert.DoesNotContain("%", catalogValues);
+        }
+
+        // DATATYPE-042: An untyped NULL column (`SELECT NULL`, SQL type VOID) must report the
+        // driver's STRING type on the result-set schema, identically to a CAST(NULL AS STRING)
+        // sibling selected in the SAME result set. The SEA path historically mapped VOID/NULL to
+        // Arrow Null, producing a self-inconsistent schema (untyped_null=Null, typed=Utf8) while
+        // Thrift reports STRING for both.
+        [SkippableFact]
+        public async Task UntypedNullColumnReportsStringType_LiveData()
+        {
+            SkipIfNotConfigured();
+
+            using var connection = CreateRestConnection();
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT NULL AS untyped_null, CAST(NULL AS STRING) AS typed_null_string";
+
+            var result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var schema = reader!.Schema;
+            Assert.Equal(2, schema.FieldsList.Count);
+            Assert.Equal("untyped_null", schema.GetFieldByIndex(0).Name);
+            Assert.Equal("typed_null_string", schema.GetFieldByIndex(1).Name);
+
+            // Both columns must report Utf8/STRING and match each other.
+            Assert.Equal(Apache.Arrow.Types.ArrowTypeId.String, schema.GetFieldByIndex(0).DataType.TypeId);
+            Assert.Equal(Apache.Arrow.Types.ArrowTypeId.String, schema.GetFieldByIndex(1).DataType.TypeId);
+            Assert.Equal(schema.GetFieldByIndex(1).DataType.TypeId, schema.GetFieldByIndex(0).DataType.TypeId);
+
+            int totalRows = 0;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                // The batch arrays must agree with the declared StringType schema.
+                Assert.IsType<Apache.Arrow.StringArray>(batch.Column(0));
+                Assert.IsType<Apache.Arrow.StringArray>(batch.Column(1));
+                for (int i = 0; i < batch.Length; i++)
+                {
+                    Assert.True(batch.Column(0).IsNull(i), "untyped_null row should be null");
+                    Assert.True(batch.Column(1).IsNull(i), "typed_null_string row should be null");
+                }
+                totalRows += batch.Length;
+            }
+            Assert.Equal(1, totalRows);
+        }
+
+        // DATATYPE-042 (empty-result path): the same untyped-NULL column must report STRING on the
+        // schema even when zero rows are returned (WHERE 1 = 0), matching the CAST(NULL AS STRING)
+        // sibling and the Thrift path.
+        [SkippableFact]
+        public async Task UntypedNullColumnReportsStringType_EmptyResult()
+        {
+            SkipIfNotConfigured();
+
+            using var connection = CreateRestConnection();
+            using var statement = connection.CreateStatement();
+            statement.SqlQuery = "SELECT NULL AS untyped_null, CAST(NULL AS STRING) AS typed_null_string FROM range(1) WHERE 1 = 0";
+
+            var result = statement.ExecuteQuery();
+            using var reader = result.Stream;
+            Assert.NotNull(reader);
+
+            var schema = reader!.Schema;
+            Assert.Equal(2, schema.FieldsList.Count);
+            Assert.Equal("untyped_null", schema.GetFieldByIndex(0).Name);
+            Assert.Equal("typed_null_string", schema.GetFieldByIndex(1).Name);
+
+            Assert.Equal(Apache.Arrow.Types.ArrowTypeId.String, schema.GetFieldByIndex(0).DataType.TypeId);
+            Assert.Equal(Apache.Arrow.Types.ArrowTypeId.String, schema.GetFieldByIndex(1).DataType.TypeId);
+            Assert.Equal(schema.GetFieldByIndex(1).DataType.TypeId, schema.GetFieldByIndex(0).DataType.TypeId);
+
+            int totalRows = 0;
+            while (true)
+            {
+                using var batch = await reader.ReadNextRecordBatchAsync();
+                if (batch == null) break;
+                totalRows += batch.Length;
+            }
+            Assert.Equal(0, totalRows);
         }
     }
 }

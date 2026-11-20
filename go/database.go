@@ -27,7 +27,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -60,6 +62,7 @@ type databaseImpl struct {
 	serverHostname string
 	httpPath       string
 	accessToken    string
+	authType       string
 	port           int
 	catalog        string
 	schema         string
@@ -76,10 +79,23 @@ type databaseImpl struct {
 	sslCertPool *x509.CertPool
 	sslInsecure bool
 
-	// OAuth options (for future expansion)
+	// OAuth options
 	oauthClientID     string
 	oauthClientSecret string
+	oauthScopes       []string
 	oauthRefreshToken string
+
+	// Default query tags, keyed by tag name
+	queryTags map[string]string
+
+	// Azure service principal options
+	azureClientID     string
+	azureClientSecret string
+	azureTenantID     string
+
+	// OIDC token federation options
+	oidcClientID      string
+	oidcTokenFilepath string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -97,28 +113,16 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		}
 	}
 
-	// FIXME: Support other auth methods
-	if d.accessToken == "" && d.oauthClientID == "" && d.oauthClientSecret == "" {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] access token or OAuth config is required",
-		}
-	} else if d.accessToken != "" && (d.oauthClientID != "" || d.oauthClientSecret != "") {
-		return nil, adbc.Error{
-			Code: adbc.StatusInvalidArgument,
-			Msg:  "[db] cannot specify both access token and OAuth config",
-		}
+	loginName, login, err := d.resolveLoginMethod()
+	if err != nil {
+		return nil, err
 	}
 
 	opts := []dbsql.ConnOption{
 		dbsql.WithServerHostname(d.serverHostname),
 		dbsql.WithHTTPPath(d.httpPath),
-	}
-
-	if d.accessToken != "" {
-		opts = append(opts, dbsql.WithAccessToken(d.accessToken))
-	} else {
-		opts = append(opts, dbsql.WithClientCredentials(d.oauthClientID, d.oauthClientSecret))
+		dbsql.WithArrowNativeDecimal(true),
+		login.connOption(loginName, d),
 	}
 
 	// Validate and set custom port
@@ -148,43 +152,73 @@ func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
 		opts = append(opts, dbsql.WithMaxDownloadThreads(d.downloadThreadCount))
 	}
 
-	// TLS/SSL handling
-	// Configure a custom transport with proper timeout settings when custom
-	// TLS config is needed. These settings match the defaults from
-	// databricks-sql-go's PooledTransport to ensure reliable connections
-	// for large result set downloads.
-	if d.sslCertPool != nil || d.sslInsecure {
-		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		}
-
-		if d.sslCertPool != nil {
-			tlsConfig.RootCAs = d.sslCertPool
-		}
-
-		if d.sslInsecure {
-			tlsConfig.InsecureSkipVerify = true
-		}
-
-		transport := &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSClientConfig:       tlsConfig,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       180 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			MaxIdleConnsPerHost:   10,
-			MaxConnsPerHost:       100,
-		}
+	if transport := d.customTransport(); transport != nil {
 		opts = append(opts, dbsql.WithTransport(transport))
 	}
 
+	if len(d.queryTags) > 0 {
+		opts = append(opts, dbsql.WithQueryTags(d.queryTags))
+	}
+
 	return opts, nil
+}
+
+// customTransport returns the HTTP transport for the TLS settings (a custom
+// root certificate or skipping verification), or nil when there are none. It
+// has timeout settings that match the defaults from databricks-sql-go's
+// PooledTransport to ensure reliable connections for large result set
+// downloads. The SQL client and the SDK's OIDC login both use it.
+func (d *databaseImpl) customTransport() *http.Transport {
+	if d.sslCertPool == nil && !d.sslInsecure {
+		return nil
+	}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if d.sslCertPool != nil {
+		tlsConfig.RootCAs = d.sslCertPool
+	}
+
+	if d.sslInsecure {
+		tlsConfig.InsecureSkipVerify = true
+	}
+
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSClientConfig:       tlsConfig,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       180 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		MaxConnsPerHost:       100,
+	}
+}
+
+func (d *databaseImpl) resolveConnectionDSN() (string, error) {
+	dsn := d.uri
+	if !strings.HasPrefix(dsn, "https://") && !strings.HasPrefix(dsn, "http://") {
+		dsn = "https://" + dsn
+	}
+	parsed, err := driverbase.SafeParseURL(dsn)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: fmt.Sprintf("[db] invalid connection URI: %v", err)}
+	}
+	parameters, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "", adbc.Error{Code: adbc.StatusInvalidArgument, Msg: "invalid connection URI query parameters"}
+	}
+	if !parameters.Has("useArrowNativeDecimal") {
+		parameters.Set("useArrowNativeDecimal", "true")
+	}
+	parsed.RawQuery = parameters.Encode()
+	return parsed.String(), nil
 }
 
 func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, error) {
@@ -192,8 +226,11 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 
 	// Use URI if provided
 	if d.uri != "" {
-		var err error
-		db, err = sql.Open("databricks", d.uri)
+		dsn, err := d.resolveConnectionDSN()
+		if err != nil {
+			return nil, err
+		}
+		db, err = sql.Open("databricks", dsn)
 		if err != nil {
 			return nil, err
 		}
@@ -223,7 +260,7 @@ func (d *databaseImpl) initializeConnectionPool(ctx context.Context) (*sql.DB, e
 	return db, nil
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
 	// Re-initialize the connection pool and settings if anything
 	// has changed, or we have not initialized yet
 	if d.needsRefresh || d.db == nil {
@@ -254,6 +291,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		catalog:            d.catalog,
 		dbSchema:           d.schema,
+		queryTags:          maps.Clone(d.queryTags),
 		conn:               c,
 	}
 
@@ -266,15 +304,18 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		Connection(), nil
 }
 
-func (d *databaseImpl) Close() error {
+func (d *databaseImpl) Close(ctx context.Context) error {
 	defer func() {
 		d.needsRefresh = true
 		d.db = nil
 	}()
-	return d.db.Close()
+	if d.db != nil {
+		return d.db.Close()
+	}
+	return nil
 }
 
-func (d *databaseImpl) GetOption(key string) (string, error) {
+func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case adbc.OptionKeyURI:
 		return d.uri, nil
@@ -284,6 +325,8 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.httpPath, nil
 	case OptionAccessToken:
 		return d.accessToken, nil
+	case OptionAuthType:
+		return d.authType, nil
 	case OptionPort:
 		return strconv.Itoa(d.port), nil
 	case OptionCatalog:
@@ -318,14 +361,32 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.oauthClientID, nil
 	case OptionOAuthClientSecret:
 		return d.oauthClientSecret, nil
+	case OptionOAuthScopes:
+		return strings.Join(d.oauthScopes, " "), nil
 	case OptionOAuthRefreshToken:
 		return d.oauthRefreshToken, nil
+	case OptionAzureClientID:
+		return d.azureClientID, nil
+	case OptionAzureClientSecret:
+		return d.azureClientSecret, nil
+	case OptionAzureTenantID:
+		return d.azureTenantID, nil
+	case OptionOIDCClientID:
+		return d.oidcClientID, nil
+	case OptionOIDCTokenFilepath:
+		return d.oidcTokenFilepath, nil
 	default:
-		return d.DatabaseImplBase.GetOption(key)
+		if name, ok := queryTagName(key); ok {
+			if v, ok := d.queryTags[name]; ok {
+				return v, nil
+			}
+			return "", queryTagNotSet(&d.ErrorHelper, name)
+		}
+		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
-func (d *databaseImpl) SetOptions(options map[string]string) error {
+func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 
@@ -348,7 +409,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	}
 
 	for k, v := range options {
-		err := d.SetOption(k, v)
+		err := d.SetOption(ctx, k, v)
 		if err != nil {
 			return err
 		}
@@ -356,7 +417,7 @@ func (d *databaseImpl) SetOptions(options map[string]string) error {
 	return nil
 }
 
-func (d *databaseImpl) SetOption(key, value string) error {
+func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	// We need to re-initialize the db/connection pool if options change
 	d.needsRefresh = true
 	switch key {
@@ -367,7 +428,7 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		} else {
 			return adbc.Error{
 				Code: adbc.StatusInvalidArgument,
-				Msg:  fmt.Sprintf("invalid URI scheme: expected 'databricks://', got '%s'", value),
+				Msg:  "invalid URI scheme: expected 'databricks://'",
 			}
 		}
 	case OptionServerHostname:
@@ -376,6 +437,14 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.httpPath = value
 	case OptionAccessToken:
 		d.accessToken = value
+	case OptionAuthType:
+		if _, ok := loginMethods[value]; !ok && value != "" {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] unknown auth type '%s'", value),
+			}
+		}
+		d.authType = value
 	case OptionPort:
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
@@ -484,10 +553,29 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.oauthClientID = value
 	case OptionOAuthClientSecret:
 		d.oauthClientSecret = value
+	case OptionOAuthScopes:
+		scopes, err := parseScopes(value)
+		if err != nil {
+			return err
+		}
+		d.oauthScopes = scopes
 	case OptionOAuthRefreshToken:
 		d.oauthRefreshToken = value
+	case OptionAzureClientID:
+		d.azureClientID = value
+	case OptionAzureClientSecret:
+		d.azureClientSecret = value
+	case OptionAzureTenantID:
+		d.azureTenantID = value
+	case OptionOIDCClientID:
+		d.oidcClientID = value
+	case OptionOIDCTokenFilepath:
+		d.oidcTokenFilepath = value
 	default:
-		return d.DatabaseImplBase.SetOption(key, value)
+		if name, ok := queryTagName(key); ok {
+			return d.setQueryTag(name, value)
+		}
+		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
 }
