@@ -16,11 +16,15 @@ package databricks
 
 import (
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode"
 
 	"github.com/apache/arrow-adbc/go/adbc"
+	"github.com/databricks/databricks-sdk-go/common/environment"
+	sdkconfig "github.com/databricks/databricks-sdk-go/config"
 	dbsql "github.com/databricks/databricks-sql-go"
 	"github.com/databricks/databricks-sql-go/auth"
 	"github.com/databricks/databricks-sql-go/auth/oauth/m2m"
@@ -34,11 +38,24 @@ type authField struct {
 }
 
 // loginMethod is one way to authenticate: the options it requires and how it
-// configures the SQL driver. Adding a method means adding one entry to
-// loginMethods, keyed by its auth_type value.
+// configures the SQL driver. Adding a method means adding one
+// entry to loginMethods, keyed by its auth_type value. A method either builds
+// its own connection option (build) or is a credential of the Databricks SDK
+// (sdk).
 type loginMethod struct {
 	required []authField
 	build    func(d *databaseImpl) dbsql.ConnOption
+	sdk      *sdkLogin
+}
+
+// sdkLogin describes a login done by the Databricks SDK.
+type sdkLogin struct {
+	// cloud is set when the auth type implies one; otherwise the SDK guesses
+	// it from the host name.
+	cloud       environment.Cloud
+	credentials func(d *databaseImpl) sdkconfig.CredentialsStrategy
+	// apply copies the method's options into the SDK config.
+	apply func(d *databaseImpl, cfg *sdkconfig.Config)
 }
 
 var loginMethods = map[string]loginMethod{
@@ -59,6 +76,79 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
 		},
 	},
+	// OIDC token federation: the SDK exchanges an ID token for a Databricks
+	// token. The ID token is read from the file option when it is set, and
+	// otherwise from the environment.
+	OptionValueAuthTypeOIDC: {
+		required: []authField{
+			{OptionOIDCClientID, "client ID", func(d *databaseImpl) string { return d.oidcClientID }},
+		},
+		sdk: &sdkLogin{
+			credentials: func(d *databaseImpl) sdkconfig.CredentialsStrategy {
+				if d.oidcTokenFilepath != "" {
+					return sdkconfig.FileOIDCCredentials{}
+				}
+				return sdkconfig.EnvOIDCCredentials{}
+			},
+			apply: func(d *databaseImpl, cfg *sdkconfig.Config) {
+				cfg.ClientID = d.oidcClientID
+				cfg.OIDCTokenFilepath = d.oidcTokenFilepath
+			},
+		},
+	},
+}
+
+// sdkHost returns the workspace URL for the SDK. The SQL client takes the port
+// separately, so it is added here unless it is the default of the scheme or the
+// host name already has one.
+func (d *databaseImpl) sdkHost() string {
+	host := d.serverHostname
+	if !strings.Contains(host, "://") {
+		host = "https://" + host
+	}
+	u, err := url.Parse(host)
+	if err != nil || u.Host == "" {
+		return host
+	}
+	defaultPort := map[string]string{"http": "80", "https": "443"}[u.Scheme]
+	if port := strconv.Itoa(d.port); u.Port() == "" && d.port != 0 && port != defaultPort {
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// sdkConfig returns the SDK config of login method name, to be used as the SQL
+// client's authenticator. The config resolves itself on the first request, so
+// a bad value surfaces when the connection is opened. Only environment
+// variables are read, never ~/.databrickscfg, so a profile on disk cannot
+// change the login method. Because auth_type is always set, credentials in
+// other DATABRICKS_* variables (such as DATABRICKS_TOKEN) are ignored.
+func (d *databaseImpl) sdkConfig(login *sdkLogin) *sdkconfig.Config {
+	credentials := login.credentials(d)
+	cfg := &sdkconfig.Config{
+		Host:        d.sdkHost(),
+		Loaders:     []sdkconfig.Loader{sdkconfig.ConfigAttributes},
+		AuthType:    credentials.Name(),
+		Cloud:       login.cloud,
+		Credentials: credentials,
+	}
+	// The login talks to the workspace itself, so it needs the same TLS settings
+	// as the SQL client.
+	if transport := d.customTransport(); transport != nil {
+		cfg.HTTPTransport = transport
+	}
+	if login.apply != nil {
+		login.apply(d, cfg)
+	}
+	return cfg
+}
+
+// connOption returns the SQL client option that logs in with this method.
+func (m loginMethod) connOption(name string, d *databaseImpl) dbsql.ConnOption {
+	if m.sdk != nil {
+		return dbsql.WithAuthenticator(d.sdkConfig(m.sdk))
+	}
+	return m.build(d)
 }
 
 // newM2MAuthenticator requests the configured scopes, or "all-apis" when none
