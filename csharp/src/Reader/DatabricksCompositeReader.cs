@@ -51,6 +51,7 @@ namespace AdbcDrivers.Databricks.Reader
 
         private BaseDatabricksReader? _activeReader;
         private ChunkMetrics? _chunkMetricsSnapshot;
+        private bool _useCloudFetch;
         private readonly IHiveServer2Statement _statement;
         private readonly Schema _schema;
         private readonly IResponse _response;
@@ -121,23 +122,23 @@ namespace AdbcDrivers.Databricks.Reader
 
         private BaseDatabricksReader DetermineReader(TFetchResultsResp initialResults, Activity? activity = null)
         {
-            bool useCloudFetch = ShouldUseCloudFetch(initialResults);
+            _useCloudFetch = ShouldUseCloudFetch(initialResults);
             activity?.AddEvent("composite_reader.determine_reader", [
-                new("use_cloudfetch", useCloudFetch),
+                new("use_cloudfetch", _useCloudFetch),
                 new("has_result_links", initialResults.__isset.results && initialResults.Results.__isset.resultLinks),
                 new("result_links_count", initialResults.Results?.ResultLinks?.Count ?? 0)
             ]);
 
             // Add telemetry tag for result format
-            activity?.SetTag(StatementExecutionEvent.ResultFormat, useCloudFetch ? "cloudfetch" : "inline");
+            activity?.SetTag(StatementExecutionEvent.ResultFormat, _useCloudFetch ? "cloudfetch" : "inline");
 
             // Add telemetry tag for chunk count if using CloudFetch
-            if (useCloudFetch && initialResults.Results?.ResultLinks != null)
+            if (_useCloudFetch && initialResults.Results?.ResultLinks != null)
             {
                 activity?.SetTag(StatementExecutionEvent.ResultChunkCount, initialResults.Results.ResultLinks.Count);
             }
 
-            if (useCloudFetch)
+            if (_useCloudFetch)
             {
                 return CreateCloudFetchReader(initialResults);
             }
@@ -404,8 +405,10 @@ namespace AdbcDrivers.Databricks.Reader
         /// Reflects the server's actual choice for this result set (presence of result links in the
         /// fetch response, see <see cref="ShouldUseCloudFetch"/>), not the connection-level
         /// <c>useCloudFetch</c> capability flag. Returns <c>false</c> before the first read, when the
-        /// active reader has not been initialized yet.
+        /// active reader has not been initialized yet. Recorded when the reader is chosen, so it stays
+        /// correct after <see cref="Dispose"/>: statement telemetry is often built after a <c>using</c>
+        /// reader is disposed.
         /// </summary>
-        public bool IsCloudFetchActive => _activeReader is CloudFetchReader;
+        public bool IsCloudFetchActive => _useCloudFetch;
     }
 }
