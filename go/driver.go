@@ -71,6 +71,7 @@ const (
 	// OAuth options
 	OptionOAuthClientID     = "databricks.oauth.client_id"
 	OptionOAuthClientSecret = "databricks.oauth.client_secret"
+	OptionOAuthScopes       = "databricks.oauth.scopes"
 	OptionOAuthRefreshToken = "databricks.oauth.refresh_token"
 
 	// Query tags attached to executed statements, e.g. "databricks.query.query_tag.team".
