@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Text.RegularExpressions;
 using AdbcDrivers.HiveServer2.Spark;
 using Apache.Arrow.Adbc;
 
@@ -260,34 +261,89 @@ namespace AdbcDrivers.Databricks
             return null;
         }
 
+        // Matches the workspace ID inside an all-purpose-compute HiveServer2 path of the form
+        // [/]sql/protocolv1/o/<workspace-id>/<cluster-id>[/...]. Workspace IDs are decimal
+        // integers; the regex rejects anything else so a stray segment can't be shipped as an org ID.
+        private static readonly Regex s_clusterPathOrgIdPattern = new(
+            @"(?:^|/)sql/protocolv1/o/(\d+)/[^/?]+",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         /// <summary>
-        /// Extracts the org ID from connection properties by inspecting the http path and URI query strings.
-        /// Checks <see cref="SparkParameters.Path"/> first, then falls back to <see cref="AdbcOptions.Uri"/>.
+        /// Extracts the org ID from connection properties by inspecting the http path and URI.
         /// </summary>
+        /// <remarks>
+        /// Two sources are checked, in priority order, for both
+        /// <see cref="SparkParameters.Path"/> and <see cref="AdbcOptions.Uri"/>:
+        /// <list type="number">
+        ///   <item><c>?o=&lt;workspace-id&gt;</c> query parameter (warehouse paths on SPOG
+        ///         typically encode the workspace this way).</item>
+        ///   <item><c>/sql/protocolv1/o/&lt;workspace-id&gt;/&lt;cluster-id&gt;</c> path segment
+        ///         (all-purpose-compute paths embed the workspace in the path itself).</item>
+        /// </list>
+        /// Without the path-segment fallback, non-Thrift requests (telemetry, feature flags)
+        /// on SPOG (custom-URL) hosts lack workspace context and PoPP redirects them to
+        /// <c>/login</c>, silently dropping telemetry.
+        /// </remarks>
         /// <param name="properties">Connection properties.</param>
         /// <returns>The org ID value, or null if not present.</returns>
         public static string? ParseOrgIdFromProperties(IReadOnlyDictionary<string, string>? properties)
         {
             if (properties == null) return null;
 
-            if (properties.TryGetValue(SparkParameters.Path, out string? path) && !string.IsNullOrEmpty(path))
+            properties.TryGetValue(SparkParameters.Path, out string? path);
+            bool hasPath = !string.IsNullOrEmpty(path);
+
+            Uri? parsedUri = null;
+            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri))
             {
-                int q = path.IndexOf('?');
-                if (q >= 0)
-                {
-                    string? orgId = ParseOrgIdFromQueryString(path.Substring(q + 1));
-                    if (orgId != null) return orgId;
-                }
+                Uri.TryCreate(uri, UriKind.Absolute, out parsedUri);
             }
 
-            if (properties.TryGetValue(AdbcOptions.Uri, out string? uri) && !string.IsNullOrEmpty(uri)
-                && Uri.TryCreate(uri, UriKind.Absolute, out Uri? parsedUri)
-                && !string.IsNullOrEmpty(parsedUri.Query))
+            // Both sources agree in practice; they can differ only when Path and Uri are
+            // supplied together and disagree. The ?o= query parameter is authoritative, so
+            // check it on BOTH sources before falling back to either path segment.
+            if (hasPath)
             {
-                return ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
+                string? orgId = ParseOrgIdFromPathQuery(path!);
+                if (orgId != null) return orgId;
+            }
+
+            if (parsedUri != null && !string.IsNullOrEmpty(parsedUri.Query))
+            {
+                string? orgId = ParseOrgIdFromQueryString(parsedUri.Query.TrimStart('?'));
+                if (orgId != null) return orgId;
+            }
+
+            // Fall back to /sql/protocolv1/o/<wsid>/<cluster>, again Path before Uri.
+            if (hasPath)
+            {
+                string? orgId = ParseOrgIdFromPathSegment(path!);
+                if (orgId != null) return orgId;
+            }
+
+            if (parsedUri != null)
+            {
+                Match uriPathMatch = s_clusterPathOrgIdPattern.Match(parsedUri.AbsolutePath);
+                if (uriPathMatch.Success) return uriPathMatch.Groups[1].Value;
             }
 
             return null;
+        }
+
+        // Extracts ?o= from the query portion of a raw http path string, if present.
+        private static string? ParseOrgIdFromPathQuery(string path)
+        {
+            int q = path.IndexOf('?');
+            return q >= 0 ? ParseOrgIdFromQueryString(path.Substring(q + 1)) : null;
+        }
+
+        // Extracts the workspace ID from the cluster path segment of a raw http path string.
+        private static string? ParseOrgIdFromPathSegment(string path)
+        {
+            int q = path.IndexOf('?');
+            string pathOnly = q >= 0 ? path.Substring(0, q) : path;
+            Match match = s_clusterPathOrgIdPattern.Match(pathOnly);
+            return match.Success ? match.Groups[1].Value : null;
         }
     }
 }
