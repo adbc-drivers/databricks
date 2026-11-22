@@ -106,10 +106,6 @@ classDiagram
         <<singleton>>
     }
 
-    class SafeObserver {
-        -inner: IStatementOperationObserver
-    }
-
     class StatementExecutionConnection {
         -_telemetry: IConnectionTelemetry
         +CreateStatement() AdbcStatement
@@ -134,8 +130,6 @@ classDiagram
     IConnectionTelemetry <|.. ConnectionTelemetry
     IStatementOperationObserver <|.. TelemetryObserver
     IStatementOperationObserver <|.. NullObserver
-    IStatementOperationObserver <|.. SafeObserver
-    SafeObserver --> IStatementOperationObserver : wraps
     StatementExecutionConnection --> IConnectionTelemetry
     DatabricksConnection --> IConnectionTelemetry
     StatementExecutionStatement --> IStatementOperationObserver
@@ -160,7 +154,7 @@ These components already exist for the Thrift path and are protocol-agnostic. Th
 - **`IStatementOperationObserver`** — small interface, ~8 methods, fail-open contract.
 - **`TelemetryObserver`** — default implementation that translates observer calls into `StatementTelemetryContext` mutations and enqueues a `OssSqlDriverTelemetryLog` on finalize.
 - **`NullObserver`** — singleton no-op, used as the default field value so callsites never need null checks.
-- **`SafeObserver`** (optional) — decorator that swallows any exception thrown by an inner observer. Belt-and-suspenders.
+_(A `SafeObserver` decorator was prototyped during implementation and removed after review: the only genuinely risky work in `TelemetryObserver` is the `OnFinalized` proto-build + enqueue path, which is now wrapped with a scoped `try/catch` inside that method. Lifecycle methods are plain field writes that cannot throw, so a per-method decorator was redundant.)_
 
 ### 4.4 Modified components
 
@@ -428,16 +422,12 @@ public void OnExecuteStarted(Statement.Types.Type stmt, Operation.Types.Type op,
     });
 
 public void OnPollCompleted(int count, long latencyMs, ExecutionResult.Types.Format resultFormat) =>
-    Safe(() => {
-        _ctx.PollCount     = count;
-        _ctx.PollLatencyMs = latencyMs;
-        _ctx.ResultFormat  = resultFormat;
-    });
+    _ctx.PollCount     = count;
+    _ctx.PollLatencyMs = latencyMs;
+    _ctx.ResultFormat  = resultFormat;
 ```
 
-This concentrates the try/catch in exactly one place per observer impl. The tiny per-call lambda allocation is acceptable — these methods are called O(1) times per statement.
-
-The optional `SafeObserver` decorator is available for future third-party observer implementations that may not honor the contract; it wraps any inner observer with a defensive try/catch per method.
+The lifecycle methods are plain field writes that cannot throw, so they need no defensive wrapping. Only `OnFinalized`'s proto-build + telemetry-client enqueue does risky work, and the `try/catch` is scoped tightly to exactly that block. Exceptions are surfaced as a `telemetry.observer.suppressed` activity event on the ambient `Activity`, never propagated to the caller.
 
 ### Circuit breaker reuse
 
@@ -501,8 +491,6 @@ No new configuration parameters. All existing knobs apply unchanged:
 **`IStatementOperationObserver` implementations:**
 - `NullObserver_AllMethods_AreNoOps`
 - `NullObserver_IsSingleton`
-- `SafeObserver_PropagatesNormalCallsToInner`
-- `SafeObserver_SwallowsExceptionsFromInner_LogsAtTrace`
 - `TelemetryObserver_OnExecuteStarted_PopulatesContext`
 - `TelemetryObserver_OnStatementSubmitted_RecordsStatementId`
 - `TelemetryObserver_OnPollCompleted_RecordsCountLatencyAndResultFormat`
@@ -559,7 +547,7 @@ No new configuration parameters. All existing knobs apply unchanged:
 ### PR sequencing
 
 1. Refactor `ConnectionTelemetry.Create` signature (string sessionId, `DriverMode mode` param). Thrift call site updates only. Verifies no behavioral change.
-2. Introduce `IStatementOperationObserver`, `TelemetryObserver`, `NullObserver`, `SafeObserver`. No callers yet.
+2. Introduce `IStatementOperationObserver`, `TelemetryObserver`, `NullObserver`. No callers yet.
 3. Refactor `DatabricksStatement` to use `_observer` field instead of private hooks. Mechanical; behavior unchanged.
 4. Wire telemetry into `StatementExecutionConnection` (`_telemetry`, `OpenAsync`, `Dispose`).
 5. Wire telemetry into `StatementExecutionStatement` (`_observer` field + hookpoint calls).
