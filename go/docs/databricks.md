@@ -125,7 +125,7 @@ Examples:
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL and tries to open it, then waits for the redirect on `localhost:8020`. The client is the built-in one of the cloud. Optional: `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL and tries to open it, then waits for the redirect on `localhost:8020`. The client is the built-in one of the cloud. Optional: `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. The redirect port is fixed, so only one browser login can run at a time on a machine.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 

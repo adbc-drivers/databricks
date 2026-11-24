@@ -215,7 +215,13 @@ func isRejectedGrant(err error) bool {
 // must outlive the request that triggered the login, so it drops that
 // request's cancellation, and it bounds each token request with a timeout.
 func (a *browserAuthenticator) tokenContext(ctx context.Context) context.Context {
-	return context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, &http.Client{
+	return a.requestContext(context.WithoutCancel(ctx))
+}
+
+// requestContext carries the HTTP client for token requests (the database's
+// TLS settings and a timeout) and keeps the cancellation of ctx.
+func (a *browserAuthenticator) requestContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, oauth2.HTTPClient, &http.Client{
 		Transport: a.cfg.transport,
 		Timeout:   tokenRequestTimeout,
 	})
@@ -303,7 +309,7 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 		if res.errCode != "" {
 			return nil, fmt.Errorf("identity provider error: %s: %s", res.errCode, res.errDesc)
 		}
-		token, err := conf.Exchange(a.tokenContext(ctx), res.code, verifier)
+		token, err := conf.Exchange(a.requestContext(ctx), res.code, verifier)
 		if err != nil {
 			return nil, fmt.Errorf("failed to exchange token: %w", err)
 		}
@@ -340,7 +346,7 @@ func handleBrowserCallback(w http.ResponseWriter, req *http.Request, state strin
 		w.WriteHeader(http.StatusBadRequest)
 		writeBrowserPage(w, "Login failed", "The identity provider returned an error: "+res.errCode)
 	} else {
-		writeBrowserPage(w, "Login successful", "You may close this window and go back to the terminal.")
+		writeBrowserPage(w, "Sign-in received", "You may close this window and go back to the terminal.")
 	}
 	select {
 	case results <- res:
