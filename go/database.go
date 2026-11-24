@@ -103,6 +103,7 @@ type databaseImpl struct {
 	// OIDC token federation options
 	oidcClientID      string
 	oidcTokenFilepath string
+	oauthRedirectURL  string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -382,6 +383,8 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
 		return d.oidcTokenFilepath, nil
+	case OptionOAuthRedirectURL:
+		return d.oauthRedirectURL, nil
 	case OptionExternalBrowserTimeout:
 		if d.oauthU2MTimeout > 0 {
 			return d.oauthU2MTimeout.String(), nil
@@ -583,6 +586,11 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:
 		d.oidcTokenFilepath = value
+	case OptionOAuthRedirectURL:
+		if err := validateBrowserRedirectURL(value); err != nil {
+			return err
+		}
+		d.oauthRedirectURL = value
 	case OptionExternalBrowserTimeout:
 		if value == "" {
 			d.oauthU2MTimeout = 0

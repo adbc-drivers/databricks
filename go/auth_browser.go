@@ -26,10 +26,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/databricks/databricks-sql-go/auth"
 	"github.com/databricks/databricks-sql-go/auth/oauth"
 	"github.com/databricks/databricks-sql-go/auth/oauth/u2m"
@@ -43,6 +45,12 @@ const (
 	// OptionValueAuthTypeExternalBrowser selects browser (user-to-machine
 	// OAuth) login for databricks.auth_type.
 	OptionValueAuthTypeExternalBrowser = "external-browser"
+
+	// OptionOAuthRedirectURL is the local address external-browser login
+	// listens on for the redirect, such as "localhost:9000" or
+	// "http://localhost:9000/callback". It must be registered on the OAuth app.
+	// The default is "localhost:8020".
+	OptionOAuthRedirectURL = "databricks.oauth.redirect_url"
 
 	// OptionExternalBrowserTimeout is how long browser login waits for the
 	// sign-in to finish, as a Go duration such as "2m".
@@ -101,11 +109,12 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 		transport = t
 	}
 	cfg := browserLoginConfig{
-		host:      d.oauthHostPort(),
-		clientID:  d.oauthClientID,
-		scopes:    d.oauthScopes,
-		timeout:   d.oauthU2MTimeout,
-		transport: transport,
+		host:        d.oauthHostPort(),
+		clientID:    d.oauthClientID,
+		scopes:      d.oauthScopes,
+		redirectURL: d.oauthRedirectURL,
+		timeout:     d.oauthU2MTimeout,
+		transport:   transport,
 	}
 	// Open can run on several goroutines: they must share one login, or they
 	// would fight over the redirect port.
@@ -116,7 +125,7 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	if timeout <= 0 {
 		timeout = DefaultBrowserLoginTimeout
 	}
-	key := fmt.Sprintf("%q|%v|%q|%v|%q|%q", cfg.host, timeout, d.sslRootCert, d.sslInsecure, cfg.clientID, cfg.scopes)
+	key := fmt.Sprintf("%q|%v|%q|%v|%q|%q|%q", cfg.host, timeout, d.sslRootCert, d.sslInsecure, cfg.clientID, cfg.scopes, cfg.redirectURL)
 	if d.browserLogin == nil || d.browserLoginKey != key {
 		d.browserLogin = newBrowserAuthenticator(cfg)
 		d.browserLoginKey = key
@@ -420,6 +429,80 @@ func writeBrowserPage(w http.ResponseWriter, title, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, "<!doctype html><html><head><title>%s</title></head><body><h2>%s</h2><p>%s</p></body></html>",
 		html.EscapeString(title), html.EscapeString(title), html.EscapeString(msg))
+}
+
+// muxAcceptsPath reports whether path can be registered on a ServeMux, which
+// panics on a pattern it cannot parse (braces, a space and so on). The login
+// registers the callback on a mux, so a path that panics there is rejected here.
+func muxAcceptsPath(path string) (ok bool) {
+	if path == "" {
+		path = "/" // the login uses "/" when the redirect has no path
+	}
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	http.NewServeMux().HandleFunc(path, func(http.ResponseWriter, *http.Request) {})
+	return true
+}
+
+// validateBrowserRedirectURL checks that the redirect address can be listened
+// on: a loopback host with an explicit port. An empty value means the default.
+func validateBrowserRedirectURL(value string) error {
+	if value == "" {
+		return nil
+	}
+	invalid := func(why string) error {
+		return adbc.Error{
+			Code: adbc.StatusInvalidArgument,
+			Msg:  "[db] invalid OAuth redirect URL: " + why,
+		}
+	}
+	// A fragment is not valid in a redirect URI (even an empty one), and an
+	// escape would make the path the browser asks for differ from the one the
+	// callback is registered under.
+	if strings.ContainsAny(value, "#%") {
+		return invalid("it must not contain '#' or '%'")
+	}
+	raw := value
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return invalid("not a valid URL")
+	}
+	if u.Scheme != "http" {
+		return invalid("the scheme must be http")
+	}
+	if u.User != nil {
+		return invalid("it must not contain a user name or password")
+	}
+	// The identity provider appends its own query to the redirect, and a
+	// fragment is not valid in a redirect URI.
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return invalid("it must not contain a query or a fragment")
+	}
+	// Go splits an unbracketed IPv6 address on its last colon, so it would pass
+	// here and fail later when the listener is opened.
+	if strings.Count(u.Host, ":") > 1 && !strings.HasPrefix(u.Host, "[") {
+		return invalid("an IPv6 address must be in brackets, such as [::1]:8020")
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return invalid("the host must be localhost, 127.0.0.1 or ::1")
+	}
+	// "{name}" and "{$}" are patterns to the mux, not part of a path.
+	if strings.ContainsAny(u.Path, "{}") || !muxAcceptsPath(u.Path) {
+		return invalid("the path cannot be used as a callback path")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return invalid("a port between 1 and 65535 is required")
+	}
+	return nil
 }
 
 func randomState(n int) (string, error) {
