@@ -133,6 +133,19 @@ func TestBrowserLoginIsKeptWhileOptionsAreUnchanged(t *testing.T) {
 	// An option it does use starts a new login.
 	require.NoError(t, db.SetOption(ctx, OptionExternalBrowserTimeout, "2m"))
 	require.NotSame(t, first, db.newBrowserAuthenticator())
+
+	// So does the client ID.
+	second := db.newBrowserAuthenticator()
+	require.NoError(t, db.SetOption(ctx, OptionOAuthClientID, "my-app"))
+	require.NotSame(t, second, db.newBrowserAuthenticator())
+}
+
+// The client ID and scopes options reach the login configuration.
+func TestBrowserOptionsReachTheLoginConfig(t *testing.T) {
+	db := &databaseImpl{oauthClientID: "my-app", oauthScopes: []string{"sql", "offline_access"}}
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "my-app", a.cfg.clientID)
+	require.Equal(t, []string{"sql", "offline_access"}, a.cfg.scopes)
 }
 
 // Connections opened on several goroutines share one login.
@@ -325,4 +338,23 @@ func TestCallbackIsHandledWhileTheLauncherIsHeldOpen(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the login did not see the callback while the launcher was running")
 	}
+}
+
+// The client ID and scopes reach the authorization request, with the scopes the
+// cloud requires added. An Azure host needs no network lookup: its endpoints
+// follow from the host name.
+func TestDefaultResolveConfigUsesTheClientAndScopes(t *testing.T) {
+	cfg := browserLoginConfig{host: "adb-1.2.azuredatabricks.net", clientID: "my-app", scopes: []string{"custom-scope"}}
+	conf, err := defaultResolveConfig(context.Background(), cfg)
+	require.NoError(t, err)
+	require.Equal(t, "my-app", conf.ClientID)
+	require.Equal(t, "http://localhost:8020", conf.RedirectURL)
+
+	u, err := url.Parse(conf.AuthCodeURL("state"))
+	require.NoError(t, err)
+	require.Equal(t, "my-app", u.Query().Get("client_id"))
+	scope := u.Query().Get("scope")
+	require.Contains(t, scope, "custom-scope")
+	require.Contains(t, scope, "offline_access")
+	require.Contains(t, scope, "/user_impersonation")
 }

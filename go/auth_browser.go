@@ -102,6 +102,8 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	}
 	cfg := browserLoginConfig{
 		host:      d.oauthHostPort(),
+		clientID:  d.oauthClientID,
+		scopes:    d.oauthScopes,
 		timeout:   d.oauthU2MTimeout,
 		transport: transport,
 	}
@@ -114,7 +116,7 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	if timeout <= 0 {
 		timeout = DefaultBrowserLoginTimeout
 	}
-	key := fmt.Sprintf("%q|%v|%q|%v", cfg.host, timeout, d.sslRootCert, d.sslInsecure)
+	key := fmt.Sprintf("%q|%v|%q|%v|%q|%q", cfg.host, timeout, d.sslRootCert, d.sslInsecure, cfg.clientID, cfg.scopes)
 	if d.browserLogin == nil || d.browserLoginKey != key {
 		d.browserLogin = newBrowserAuthenticator(cfg)
 		d.browserLoginKey = key
