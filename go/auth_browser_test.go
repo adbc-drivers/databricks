@@ -170,3 +170,21 @@ func TestIsRejectedGrant(t *testing.T) {
 	// An expired token with no refresh token can only be replaced by a new login.
 	require.True(t, isRejectedGrant(errors.New("oauth2: token expired and refresh token is not set")))
 }
+
+// The OAuth requests go to the port the SQL client uses.
+func TestOAuthHostPortFollowsTheServerPort(t *testing.T) {
+	for _, tt := range []struct {
+		host string
+		port int64
+		want string
+	}{
+		{"x.cloud.databricks.com", 0, "x.cloud.databricks.com"},
+		{"x.cloud.databricks.com", 443, "x.cloud.databricks.com"},
+		{"x.cloud.databricks.com", 8443, "x.cloud.databricks.com:8443"},
+		{"https://x.cloud.databricks.com", 8443, "x.cloud.databricks.com:8443"},
+		{"x.cloud.databricks.com:9443", 8443, "x.cloud.databricks.com:9443"},
+	} {
+		db := &databaseImpl{serverHostname: tt.host, port: int(tt.port)}
+		require.Equal(t, tt.want, db.oauthHostPort(), "%s:%d", tt.host, tt.port)
+	}
+}

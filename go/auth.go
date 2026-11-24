@@ -209,6 +209,17 @@ func (d *databaseImpl) oauthHost() string {
 	return host
 }
 
+// oauthHostPort is oauthHost with the server port added when it is not the
+// default, because the SQL client takes the port separately and the OAuth
+// requests have to reach the same one.
+func (d *databaseImpl) oauthHostPort() string {
+	host := d.oauthHost()
+	if u, err := url.Parse("https://" + host); err == nil && u.Port() == "" && d.port != 0 && d.port != DefaultPort {
+		return net.JoinHostPort(u.Hostname(), strconv.Itoa(d.port))
+	}
+	return host
+}
+
 // isScopeChar reports whether r may appear in an OAuth scope token:
 // %x21 / %x23-5B / %x5D-7E (RFC 6749 section 3.3).
 func isScopeChar(r rune) bool {

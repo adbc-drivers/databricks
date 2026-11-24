@@ -101,7 +101,7 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 		transport = t
 	}
 	cfg := browserLoginConfig{
-		host:      d.oauthHost(),
+		host:      d.oauthHostPort(),
 		timeout:   d.oauthU2MTimeout,
 		transport: transport,
 	}
