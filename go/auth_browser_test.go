@@ -16,11 +16,14 @@ package databricks
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 )
 
 func TestBrowserBuiltInClient(t *testing.T) {
@@ -141,4 +144,29 @@ func TestBrowserLoginIsSharedAcrossGoroutines(t *testing.T) {
 	for _, a := range got {
 		require.Same(t, got[0], a)
 	}
+}
+
+func TestOnlyOneBrowserFlowRunsAtATime(t *testing.T) {
+	release, err := acquireBrowserFlow(context.Background())
+	require.NoError(t, err)
+
+	// A second login waits, and gives up when its context ends.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = acquireBrowserFlow(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	release()
+	release, err = acquireBrowserFlow(context.Background())
+	require.NoError(t, err)
+	release()
+}
+
+func TestIsRejectedGrant(t *testing.T) {
+	require.True(t, isRejectedGrant(&oauth2.RetrieveError{ErrorCode: "invalid_grant"}))
+	require.False(t, isRejectedGrant(&oauth2.RetrieveError{ErrorCode: "server_error"}))
+	require.False(t, isRejectedGrant(errors.New("connection reset")))
+	require.False(t, isRejectedGrant(nil))
+	// An expired token with no refresh token can only be replaced by a new login.
+	require.True(t, isRejectedGrant(errors.New("oauth2: token expired and refresh token is not set")))
 }

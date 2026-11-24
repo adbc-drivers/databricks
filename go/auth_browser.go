@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -219,11 +220,33 @@ func (a *browserAuthenticator) Authenticate(r *http.Request) error {
 	return nil
 }
 
-// isRejectedGrant reports whether the identity provider refused the refresh
-// token (OAuth error invalid_grant), as opposed to being unreachable or failing.
+// errNoRefreshToken is the text of the error the oauth2 package returns for an
+// expired token that came without a refresh token.
+const errNoRefreshToken = "refresh token is not set"
+
+// isRejectedGrant reports whether the token can no longer be refreshed, so a new
+// login is needed: the identity provider refused the refresh token (OAuth error
+// invalid_grant), or it never gave one. A network or server failure is neither.
 func isRejectedGrant(err error) bool {
 	var re *oauth2.RetrieveError
-	return errors.As(err, &re) && re.ErrorCode == "invalid_grant"
+	if errors.As(err, &re) {
+		return re.ErrorCode == "invalid_grant"
+	}
+	return err != nil && strings.Contains(err.Error(), errNoRefreshToken)
+}
+
+// browserFlowSlot lets one browser login run at a time in a process: the
+// redirect port is fixed, so two at once would fail with "address in use".
+var browserFlowSlot = make(chan struct{}, 1)
+
+// acquireBrowserFlow waits for the slot, or for ctx to end.
+func acquireBrowserFlow(ctx context.Context) (release func(), err error) {
+	select {
+	case browserFlowSlot <- struct{}{}:
+		return func() { <-browserFlowSlot }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("interrupted while waiting for another login: %w", ctx.Err())
+	}
 }
 
 // tokenContext is the context the token source keeps for later refreshes. It
@@ -270,6 +293,12 @@ type callbackResult struct {
 // the redirect address, sends the user to the login page, and exchanges the
 // code the identity provider calls back with.
 func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.Config) (*oauth2.Token, error) {
+	release, err := acquireBrowserFlow(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	redirect, err := url.Parse(conf.RedirectURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid redirect URL '%s': %w", conf.RedirectURL, err)
