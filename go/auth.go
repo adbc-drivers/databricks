@@ -76,6 +76,7 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
 		},
 	},
+	OptionValueAuthTypeExternalBrowser: externalBrowserMethod,
 	// OIDC token federation: the SDK exchanges an ID token for a Databricks
 	// token. The ID token is read from the file option when it is set, and
 	// otherwise from the environment.
