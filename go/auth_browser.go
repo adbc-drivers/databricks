@@ -71,7 +71,7 @@ const (
 
 	// Built-in public OAuth clients, one per cloud. Copied from the
 	// unexported constants in
-	// https://github.com/databricks/databricks-sql-go/blob/v1.17.0/auth/oauth/u2m/authenticator.go
+	// https://github.com/databricks/databricks-sql-go/blob/v1.19.0/auth/oauth/u2m/authenticator.go
 	// so that a profile that sets no client ID signs in as before.
 	awsGCPBrowserClientID = "databricks-sql-connector"
 	azureBrowserClientID  = "96eecda7-19ea-49cc-abb5-240097d554f5"
@@ -85,6 +85,10 @@ var externalBrowserMethod = loginMethod{
 		return dbsql.WithAuthenticator(d.newBrowserAuthenticator())
 	},
 }
+
+// browserLoginMu guards databaseImpl.browserLogin and its key. It is shared by
+// all databases, which is cheap because only creating the login takes it.
+var browserLoginMu sync.Mutex
 
 // newBrowserAuthenticator builds the authenticator for external-browser login
 // from the database options. Nothing is contacted until the first request.
@@ -100,6 +104,10 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 		timeout:   d.oauthU2MTimeout,
 		transport: transport,
 	}
+	// Open can run on several goroutines: they must share one login, or they
+	// would fight over the redirect port.
+	browserLoginMu.Lock()
+	defer browserLoginMu.Unlock()
 	// Reuse the login while the options it depends on are unchanged.
 	key := fmt.Sprintf("%q|%v|%q|%v", cfg.host, cfg.timeout, d.sslRootCert, d.sslInsecure)
 	if d.browserLogin == nil || d.browserLoginKey != key {

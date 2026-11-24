@@ -16,6 +16,7 @@ package databricks
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -120,4 +121,24 @@ func TestBrowserLoginIsKeptWhileOptionsAreUnchanged(t *testing.T) {
 	// An option it does use starts a new login.
 	require.NoError(t, db.SetOption(ctx, OptionExternalBrowserTimeout, "2m"))
 	require.NotSame(t, first, db.newBrowserAuthenticator())
+}
+
+// Connections opened on several goroutines share one login.
+func TestBrowserLoginIsSharedAcrossGoroutines(t *testing.T) {
+	isolateHome(t)
+	db := &databaseImpl{serverHostname: "x.cloud.databricks.com"}
+	const n = 16
+	got := make([]interface{}, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i] = db.newBrowserAuthenticator()
+		}()
+	}
+	wg.Wait()
+	for _, a := range got {
+		require.Same(t, got[0], a)
+	}
 }
