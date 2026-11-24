@@ -15,6 +15,7 @@
 package databricks
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -51,6 +52,11 @@ const (
 	// "http://localhost:9000/callback". It must be registered on the OAuth app.
 	// The default is "localhost:8020".
 	OptionOAuthRedirectURL = "databricks.oauth.redirect_url"
+
+	// OptionTokenCache selects where the token of external-browser login is
+	// kept: "keyring" (the default) also keeps it in the OS keyring, so that
+	// later processes reuse it, and "memory" keeps it in the process only.
+	OptionTokenCache = "databricks.oauth.token_cache"
 
 	// OptionExternalBrowserTimeout is how long browser login waits for the
 	// sign-in to finish, as a Go duration such as "2m".
@@ -113,6 +119,7 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 		clientID:    d.oauthClientID,
 		scopes:      d.oauthScopes,
 		redirectURL: d.oauthRedirectURL,
+		tokenCache:  cmp.Or(d.tokenCache, tokenCacheKeyring),
 		timeout:     d.oauthU2MTimeout,
 		transport:   transport,
 	}
@@ -125,7 +132,7 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	if timeout <= 0 {
 		timeout = DefaultBrowserLoginTimeout
 	}
-	key := fmt.Sprintf("%q|%v|%q|%v|%q|%q|%q", cfg.host, timeout, d.sslRootCert, d.sslInsecure, cfg.clientID, cfg.scopes, cfg.redirectURL)
+	key := fmt.Sprintf("%q|%v|%q|%v|%q|%q|%q|%s", cfg.host, timeout, d.sslRootCert, d.sslInsecure, cfg.clientID, cfg.scopes, cfg.redirectURL, cfg.tokenCache)
 	if d.browserLogin == nil || d.browserLoginKey != key {
 		d.browserLogin = newBrowserAuthenticator(cfg)
 		d.browserLoginKey = key
@@ -144,10 +151,15 @@ type browserLoginConfig struct {
 	// transport carries the database's TLS settings; nil means the default.
 	transport http.RoundTripper
 
+	// tokenCache is where the token is kept: tokenCacheKeyring (the default
+	// when empty) or tokenCacheMemory.
+	tokenCache string
+
 	// Seams for tests; nil means the real implementation.
 	resolveConfig func(ctx context.Context, c browserLoginConfig) (oauth2.Config, error)
 	openBrowser   func(loginURL string) error
 	out           io.Writer
+	keyring       keyringBackend
 }
 
 // resolveBrowserClientID returns the configured client ID, or the built-in
@@ -188,7 +200,13 @@ type browserAuthenticator struct {
 	// context ends.
 	lock        chan struct{}
 	oauthConfig *oauth2.Config
-	tokenSource oauth2.TokenSource
+	// token is the token this authenticator last used. It is checked on every
+	// request; once it expires, login looks at the shared cache first.
+	token *oauth2.Token
+
+	// cache keeps the token in memory, shared by every database with the same
+	// workspace, client and scopes, and in the keyring unless that is off.
+	cache *tokenCache
 }
 
 func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
@@ -204,7 +222,7 @@ func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
 	if cfg.out == nil {
 		cfg.out = os.Stderr // stdout may carry query results
 	}
-	return &browserAuthenticator{cfg: cfg, lock: make(chan struct{}, 1)}
+	return &browserAuthenticator{cfg: cfg, cache: tokenCacheFor(cfg), lock: make(chan struct{}, 1)}
 }
 
 // Authenticate adds a bearer token to the request. The first call runs the
@@ -219,26 +237,19 @@ func (a *browserAuthenticator) Authenticate(r *http.Request) error {
 		return fmt.Errorf("interrupted while waiting for another login: %w", ctx.Err())
 	}
 
-	if a.tokenSource != nil {
-		token, err := a.tokenSource.Token()
-		if err == nil {
-			token.SetAuthHeader(r)
-			return nil
+	// A token that is still valid needs nothing. Otherwise login looks at the
+	// cache that every database of the workspace shares (another may already
+	// have refreshed), and refreshes or signs in on its turn. A refresh is never
+	// made outside that turn, so sibling databases do not use the same refresh
+	// token at once.
+	if a.token == nil || !a.token.Valid() {
+		token, err := a.login(ctx)
+		if err != nil {
+			return fmt.Errorf("browser login failed: %w", err)
 		}
-		if !isRejectedGrant(err) {
-			// A network or server failure says nothing about the refresh
-			// token: report it instead of opening a browser.
-			return fmt.Errorf("unable to refresh the login token: %w", err)
-		}
-		// The refresh token no longer works: sign in again.
-		a.tokenSource = nil
+		a.token = token
 	}
-
-	token, err := a.login(ctx)
-	if err != nil {
-		return fmt.Errorf("browser login failed: %w", err)
-	}
-	token.SetAuthHeader(r)
+	a.token.SetAuthHeader(r)
 	return nil
 }
 
@@ -271,13 +282,6 @@ func acquireBrowserFlow(ctx context.Context) (release func(), err error) {
 	}
 }
 
-// tokenContext is the context the token source keeps for later refreshes. It
-// must outlive the request that triggered the login, so it drops that
-// request's cancellation, and it bounds each token request with a timeout.
-func (a *browserAuthenticator) tokenContext(ctx context.Context) context.Context {
-	return a.requestContext(context.WithoutCancel(ctx))
-}
-
 // requestContext carries the HTTP client for token requests (the database's
 // TLS settings and a timeout) and keeps the cancellation of ctx.
 func (a *browserAuthenticator) requestContext(ctx context.Context) context.Context {
@@ -287,7 +291,18 @@ func (a *browserAuthenticator) requestContext(ctx context.Context) context.Conte
 	})
 }
 
+// login returns a token for the first request or after a rejected refresh. It
+// prefers, in order: a cached token that is still valid, the cached token
+// refreshed, and then a browser login. Refreshes and logins in a process take
+// turns, so when several databases need a token at once, one logs in and the
+// others then find its token in the cache.
 func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error) {
+	// A cached token that is still valid needs no refresh, no wait and no
+	// network, not even the endpoint lookup.
+	token, err := a.fromCache(ctx, false)
+	if err != nil || token != nil {
+		return token, err
+	}
 	if a.oauthConfig == nil {
 		// Discovery stops when the request does, and never takes longer than
 		// a token request.
@@ -299,11 +314,62 @@ func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error)
 		}
 		a.oauthConfig = &conf
 	}
-	token, err := a.runBrowserFlow(ctx, *a.oauthConfig)
+	release, err := acquireBrowserFlow(ctx)
 	if err != nil {
 		return nil, err
 	}
-	a.tokenSource = a.oauthConfig.TokenSource(a.tokenContext(ctx), token)
+	defer release()
+	// Another database or process may have refreshed or logged in while we
+	// waited: read the cache again, and refresh it if it has expired.
+	token, err = a.fromCache(ctx, true)
+	if err != nil || token != nil {
+		return token, err
+	}
+	token, err = a.runBrowserFlow(ctx, *a.oauthConfig)
+	if err != nil {
+		return nil, err
+	}
+	a.cache.Set(token)
+	return token, nil
+}
+
+// fromCache returns a usable token from the cache. With refresh false it only
+// returns a token that is still valid, and never makes a request. With refresh
+// true, which callers set after they take their turn, the keyring is read again
+// (another process may have rotated the refresh token) and an expired access
+// token is refreshed. It returns nil, nil when there is nothing usable,
+// including when the identity provider rejects the refresh token, which is then
+// removed from the cache unless another process has already replaced it. Any
+// other refresh failure (network, server error) is returned, so it never opens
+// a browser.
+func (a *browserAuthenticator) fromCache(ctx context.Context, refresh bool) (*oauth2.Token, error) {
+	if !refresh {
+		if cached := a.cache.Token(); cached != nil && cached.Valid() {
+			return cached, nil
+		}
+		return nil, nil
+	}
+	cached := a.cache.Reload()
+	if cached == nil {
+		return nil, nil
+	}
+	if cached.Valid() {
+		return cached, nil // another process refreshed it
+	}
+	token, err := a.oauthConfig.TokenSource(a.requestContext(ctx), cached).Token()
+	if err != nil {
+		if isRejectedGrant(err) {
+			if !a.cache.ClearIfSame(cached.RefreshToken) {
+				// Another process stored a newer token while we tried.
+				if newer := a.cache.Token(); newer != nil && newer.Valid() {
+					return newer, nil
+				}
+			}
+			return nil, nil
+		}
+		return nil, fmt.Errorf("unable to refresh the cached login token: %w", err)
+	}
+	a.cache.Set(token)
 	return token, nil
 }
 
@@ -315,12 +381,6 @@ type callbackResult struct {
 // the redirect address, sends the user to the login page, and exchanges the
 // code the identity provider calls back with.
 func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.Config) (*oauth2.Token, error) {
-	release, err := acquireBrowserFlow(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
-
 	redirect, err := url.Parse(conf.RedirectURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid redirect URL '%s': %w", conf.RedirectURL, err)

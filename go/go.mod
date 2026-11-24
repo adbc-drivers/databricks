@@ -28,6 +28,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/oauth2 v0.38.0
 )
 
@@ -42,6 +43,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_amd64 v1.4.0 // indirect
 	github.com/databricks/databricks-sql-kernel-bindings/lib/darwin_arm64 v1.4.0 // indirect
 	github.com/databricks/databricks-sql-kernel-bindings/lib/linux_amd64 v1.4.0 // indirect
@@ -57,6 +59,7 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/goccy/go-json v0.12.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
