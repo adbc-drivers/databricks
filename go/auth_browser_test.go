@@ -92,3 +92,14 @@ func TestExternalBrowserBuildsConnectorOption(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, opts)
 }
+
+func TestOAuthHostDropsSchemeAndPath(t *testing.T) {
+	for host, want := range map[string]string{
+		"x.cloud.databricks.com":                  "x.cloud.databricks.com",
+		"https://x.cloud.databricks.com":          "x.cloud.databricks.com",
+		"https://x.cloud.databricks.com:443/path": "x.cloud.databricks.com:443",
+	} {
+		db := &databaseImpl{serverHostname: host}
+		require.Equal(t, want, db.oauthHost(), host)
+	}
+}

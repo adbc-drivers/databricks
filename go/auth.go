@@ -193,6 +193,12 @@ func (m loginMethod) connOption(name string, d *databaseImpl) dbsql.ConnOption {
 // newM2MAuthenticator requests the configured scopes, or "all-apis" when none
 // are set, so a secret limited to other scopes (for example "sql") can log in.
 func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
+	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, d.oauthHost(), d.oauthScopes)
+}
+
+// oauthHost is the workspace host name as the OAuth helpers expect it: the
+// server hostname without a scheme or path.
+func (d *databaseImpl) oauthHost() string {
 	host := d.serverHostname
 	if !strings.Contains(host, "://") {
 		host = "https://" + host
@@ -200,7 +206,7 @@ func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
 	if u, err := url.Parse(host); err == nil && u.Host != "" {
 		host = u.Host
 	}
-	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, host, d.oauthScopes)
+	return host
 }
 
 // isScopeChar reports whether r may appear in an OAuth scope token:

@@ -57,6 +57,7 @@ const (
 	// callbackReadHeaderTimeout and callbackWriteTimeout bound the loopback
 	// server that receives the redirect.
 	callbackReadHeaderTimeout = 3 * time.Second
+	callbackShutdownTimeout   = 2 * time.Second
 	callbackWriteTimeout      = 30 * time.Second
 
 	// stateBytes is the size of the random state value that ties the redirect to
@@ -88,9 +89,16 @@ var externalBrowserMethod = loginMethod{
 // newBrowserAuthenticator builds the authenticator for external-browser login
 // from the database options. Nothing is contacted until the first request.
 func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
+	// Assign only a real transport: a nil *http.Transport in the interface
+	// would not be nil.
+	var transport http.RoundTripper
+	if t := d.customTransport(); t != nil {
+		transport = t
+	}
 	return newBrowserAuthenticator(browserLoginConfig{
-		host:    d.serverHostname,
-		timeout: d.oauthU2MTimeout,
+		host:      d.oauthHost(),
+		timeout:   d.oauthU2MTimeout,
+		transport: transport,
 	})
 }
 
@@ -102,6 +110,8 @@ type browserLoginConfig struct {
 	scopes      []string
 	redirectURL string
 	timeout     time.Duration
+	// transport carries the database's TLS settings; nil means the default.
+	transport http.RoundTripper
 
 	// Seams for tests; nil means the real implementation.
 	resolveConfig func(ctx context.Context, c browserLoginConfig) (oauth2.Config, error)
@@ -204,13 +214,20 @@ func isRejectedGrant(err error) bool {
 // tokenContext is the context the token source keeps for later refreshes. It
 // must outlive the request that triggered the login, so it drops that
 // request's cancellation, and it bounds each token request with a timeout.
-func tokenContext(ctx context.Context) context.Context {
-	return context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, &http.Client{Timeout: tokenRequestTimeout})
+func (a *browserAuthenticator) tokenContext(ctx context.Context) context.Context {
+	return context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, &http.Client{
+		Transport: a.cfg.transport,
+		Timeout:   tokenRequestTimeout,
+	})
 }
 
 func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error) {
 	if a.oauthConfig == nil {
-		conf, err := a.cfg.resolveConfig(context.WithoutCancel(ctx), a.cfg)
+		// Discovery stops when the request does, and never takes longer than
+		// a token request.
+		discoveryCtx, cancel := context.WithTimeout(ctx, tokenRequestTimeout)
+		conf, err := a.cfg.resolveConfig(discoveryCtx, a.cfg)
+		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("unable to generate oauth2.Config: %w", err)
 		}
@@ -220,7 +237,7 @@ func (a *browserAuthenticator) login(ctx context.Context) (*oauth2.Token, error)
 	if err != nil {
 		return nil, err
 	}
-	a.tokenSource = a.oauthConfig.TokenSource(tokenContext(ctx), token)
+	a.tokenSource = a.oauthConfig.TokenSource(a.tokenContext(ctx), token)
 	return token, nil
 }
 
@@ -267,7 +284,12 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 		WriteTimeout:      callbackWriteTimeout,
 	}
 	go func() { _ = srv.Serve(listener) }()
-	defer srv.Close() //nolint:errcheck
+	defer func() {
+		// Let the page reach the browser before the listener goes away.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), callbackShutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
 
 	_, _ = fmt.Fprintf(a.cfg.out, "\nOpen URL in Browser to Continue: %s\n\n", loginURL)
 	if err := a.cfg.openBrowser(loginURL); err != nil {
@@ -281,7 +303,7 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 		if res.errCode != "" {
 			return nil, fmt.Errorf("identity provider error: %s: %s", res.errCode, res.errDesc)
 		}
-		token, err := conf.Exchange(tokenContext(ctx), res.code, verifier)
+		token, err := conf.Exchange(a.tokenContext(ctx), res.code, verifier)
 		if err != nil {
 			return nil, fmt.Errorf("failed to exchange token: %w", err)
 		}
