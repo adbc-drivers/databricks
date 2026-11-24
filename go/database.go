@@ -85,6 +85,12 @@ type databaseImpl struct {
 	oauthScopes       []string
 	oauthRefreshToken string
 	oauthU2MTimeout   time.Duration
+	// browserLogin is the browser login in use. The connection pool is rebuilt
+	// when an option changes, and the login has to outlive it, or every Open
+	// would ask the user to sign in again. browserLoginKey is the options it
+	// was made from.
+	browserLogin    *browserAuthenticator
+	browserLoginKey string
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
@@ -280,7 +286,6 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, er
 		}
 
 		d.db = db
-		d.needsRefresh = false
 	}
 
 	c, err := d.db.Conn(ctx)

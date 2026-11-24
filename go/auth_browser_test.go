@@ -103,3 +103,21 @@ func TestOAuthHostDropsSchemeAndPath(t *testing.T) {
 		require.Equal(t, want, db.oauthHost(), host)
 	}
 }
+
+// The pool is rebuilt when an option changes, but the login has to outlive
+// it, or every Open would open the browser again.
+func TestBrowserLoginIsKeptWhileOptionsAreUnchanged(t *testing.T) {
+	isolateHome(t)
+	ctx := context.Background()
+	db := &databaseImpl{serverHostname: "x.cloud.databricks.com"}
+	first := db.newBrowserAuthenticator()
+	require.Same(t, first, db.newBrowserAuthenticator())
+
+	// An option the login does not use leaves it alone.
+	require.NoError(t, db.SetOption(ctx, OptionCatalog, "main"))
+	require.Same(t, first, db.newBrowserAuthenticator())
+
+	// An option it does use starts a new login.
+	require.NoError(t, db.SetOption(ctx, OptionExternalBrowserTimeout, "2m"))
+	require.NotSame(t, first, db.newBrowserAuthenticator())
+}

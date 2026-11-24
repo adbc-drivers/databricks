@@ -95,11 +95,18 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	if t := d.customTransport(); t != nil {
 		transport = t
 	}
-	return newBrowserAuthenticator(browserLoginConfig{
+	cfg := browserLoginConfig{
 		host:      d.oauthHost(),
 		timeout:   d.oauthU2MTimeout,
 		transport: transport,
-	})
+	}
+	// Reuse the login while the options it depends on are unchanged.
+	key := fmt.Sprintf("%q|%v|%q|%v", cfg.host, cfg.timeout, d.sslRootCert, d.sslInsecure)
+	if d.browserLogin == nil || d.browserLoginKey != key {
+		d.browserLogin = newBrowserAuthenticator(cfg)
+		d.browserLoginKey = key
+	}
+	return d.browserLogin
 }
 
 // browserLoginConfig is everything a browser login needs. Zero values mean
