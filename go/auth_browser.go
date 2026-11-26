@@ -184,7 +184,7 @@ func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
 		cfg.openBrowser = browser.OpenURL
 	}
 	if cfg.out == nil {
-		cfg.out = os.Stdout
+		cfg.out = os.Stderr // stdout may carry query results
 	}
 	return &browserAuthenticator{cfg: cfg}
 }
@@ -342,9 +342,14 @@ func (a *browserAuthenticator) runBrowserFlow(ctx context.Context, conf oauth2.C
 	}()
 
 	_, _ = fmt.Fprintf(a.cfg.out, "\nOpen URL in Browser to Continue: %s\n\n", loginURL)
-	if err := a.cfg.openBrowser(loginURL); err != nil {
-		_, _ = fmt.Fprintf(a.cfg.out, "Unable to open browser automatically. Please open manually: %s\n", loginURL)
-	}
+	// The launcher can stay attached to the browser (on Linux it is waited for),
+	// so it runs on its own: the wait for the callback, the timeout and
+	// cancellation start now, not when the launcher returns.
+	go func() {
+		if err := a.cfg.openBrowser(loginURL); err != nil {
+			_, _ = fmt.Fprintf(a.cfg.out, "Unable to open browser automatically. Please open manually: %s\n", loginURL)
+		}
+	}()
 
 	timer := time.NewTimer(a.cfg.timeout)
 	defer timer.Stop()

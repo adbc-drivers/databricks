@@ -17,6 +17,9 @@ package databricks
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -187,4 +190,46 @@ func TestOAuthHostPortFollowsTheServerPort(t *testing.T) {
 		db := &databaseImpl{serverHostname: tt.host, port: int(tt.port)}
 		require.Equal(t, tt.want, db.oauthHostPort(), "%s:%d", tt.host, tt.port)
 	}
+}
+
+// A browser launcher that never returns does not hold up the login: it still ends
+// when the caller gives up.
+func TestBrowserLauncherThatNeverReturnsDoesNotBlockLogin(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+
+	block := make(chan struct{})
+	defer close(block)
+	a := newBrowserAuthenticator(browserLoginConfig{
+		host:        "x.cloud.databricks.com",
+		timeout:     time.Minute,
+		redirectURL: addr,
+		out:         io.Discard,
+		openBrowser: func(string) error { <-block; return nil },
+	})
+	conf := oauth2.Config{
+		ClientID:    "c",
+		RedirectURL: "http://" + addr,
+		Endpoint:    oauth2.Endpoint{AuthURL: "https://x.cloud.databricks.com/authorize", TokenURL: "https://x.cloud.databricks.com/token"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { _, err := a.runBrowserFlow(ctx, conf); done <- err }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the login waited for the browser launcher")
+	}
+}
+
+// The login prompt goes to stderr by default, so it cannot mix with query
+// results written to stdout.
+func TestLoginPromptDefaultsToStderr(t *testing.T) {
+	a := newBrowserAuthenticator(browserLoginConfig{host: "x.cloud.databricks.com"})
+	require.Same(t, os.Stderr, a.cfg.out)
 }
