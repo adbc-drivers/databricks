@@ -125,7 +125,7 @@ Examples:
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020`. The client is the built-in one of the cloud. Optional: `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. The redirect port is fixed: logins in one process take turns, and a login in another process fails while the port is in use.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020`. Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. The redirect port is fixed: logins in one process take turns, and a login in another process fails while the port is in use.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
@@ -134,7 +134,7 @@ Examples:
 `databricks.oauth.scopes`
 : **Values:** space- or comma-separated scope names, such as `sql` or `sql offline_access`. **Default:** (empty, requests `all-apis`)
 
-  The scopes `oauth-m2m` requests. Set it when the service principal is limited to specific scopes and cannot log in to `all-apis`.
+  The scopes `oauth-m2m` and `external-browser` request. For `oauth-m2m`, set it when the service principal is limited to specific scopes and cannot log in to `all-apis`. For `external-browser`, `offline_access` and the cloud's SQL scope are always added.
 
 `databricks.oauth.external_browser.timeout`
 : **Values:** a positive Go duration such as `90s` or `2m`. **Default:** `1m`
