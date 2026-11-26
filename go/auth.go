@@ -76,6 +76,7 @@ var loginMethods = map[string]loginMethod{
 			return dbsql.WithAuthenticator(d.newM2MAuthenticator())
 		},
 	},
+	OptionValueAuthTypeExternalBrowser: externalBrowserMethod,
 	// OIDC token federation: the SDK exchanges an ID token for a Databricks
 	// token. The ID token is read from the file option when it is set, and
 	// otherwise from the environment.
@@ -192,6 +193,12 @@ func (m loginMethod) connOption(name string, d *databaseImpl) dbsql.ConnOption {
 // newM2MAuthenticator requests the configured scopes, or "all-apis" when none
 // are set, so a secret limited to other scopes (for example "sql") can log in.
 func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
+	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, d.oauthHost(), d.oauthScopes)
+}
+
+// oauthHost is the workspace host name as the OAuth helpers expect it: the
+// server hostname without a scheme or path.
+func (d *databaseImpl) oauthHost() string {
 	host := d.serverHostname
 	if !strings.Contains(host, "://") {
 		host = "https://" + host
@@ -199,7 +206,18 @@ func (d *databaseImpl) newM2MAuthenticator() auth.Authenticator {
 	if u, err := url.Parse(host); err == nil && u.Host != "" {
 		host = u.Host
 	}
-	return m2m.NewAuthenticatorWithScopes(d.oauthClientID, d.oauthClientSecret, host, d.oauthScopes)
+	return host
+}
+
+// oauthHostPort is oauthHost with the server port added when it is not the
+// default, because the SQL client takes the port separately and the OAuth
+// requests have to reach the same one.
+func (d *databaseImpl) oauthHostPort() string {
+	host := d.oauthHost()
+	if u, err := url.Parse("https://" + host); err == nil && u.Port() == "" && d.port != 0 && d.port != DefaultPort {
+		return net.JoinHostPort(u.Hostname(), strconv.Itoa(d.port))
+	}
+	return host
 }
 
 // isScopeChar reports whether r may appear in an OAuth scope token:

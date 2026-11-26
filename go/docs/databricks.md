@@ -119,12 +119,13 @@ Examples:
 ### Authentication Options
 
 `databricks.auth_type`
-: **Values:** `pat`, `oauth-m2m`, `oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
+: **Values:** `pat`, `oauth-m2m`, `external-browser`, `oidc`, `azure-client-secret`. **Default:** (empty, inferred from the options that are set)
 
   How to authenticate.
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020`. The client is the built-in one of the cloud. Optional: `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. The redirect port is fixed: logins in one process take turns, and a login in another process fails while the port is in use.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
@@ -134,6 +135,11 @@ Examples:
 : **Values:** space- or comma-separated scope names, such as `sql` or `sql offline_access`. **Default:** (empty, requests `all-apis`)
 
   The scopes `oauth-m2m` requests. Set it when the service principal is limited to specific scopes and cannot log in to `all-apis`.
+
+`databricks.oauth.external_browser.timeout`
+: **Values:** a positive Go duration such as `90s` or `2m`. **Default:** `1m`
+
+  How long `external-browser` login waits for the sign-in to finish before it fails.
 
 `databricks.oidc.client_id`
 : **Default:** (empty)

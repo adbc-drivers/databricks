@@ -84,6 +84,13 @@ type databaseImpl struct {
 	oauthClientSecret string
 	oauthScopes       []string
 	oauthRefreshToken string
+	oauthU2MTimeout   time.Duration
+	// browserLogin is the browser login in use. The connection pool is rebuilt
+	// when an option changes, and the login has to outlive it, or every Open
+	// would ask the user to sign in again. browserLoginKey is the options it
+	// was made from.
+	browserLogin    *browserAuthenticator
+	browserLoginKey string
 
 	// Default query tags, keyed by tag name
 	queryTags map[string]string
@@ -375,6 +382,11 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcClientID, nil
 	case OptionOIDCTokenFilepath:
 		return d.oidcTokenFilepath, nil
+	case OptionExternalBrowserTimeout:
+		if d.oauthU2MTimeout > 0 {
+			return d.oauthU2MTimeout.String(), nil
+		}
+		return "", nil
 	default:
 		if name, ok := queryTagName(key); ok {
 			if v, ok := d.queryTags[name]; ok {
@@ -571,6 +583,19 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 		d.oidcClientID = value
 	case OptionOIDCTokenFilepath:
 		d.oidcTokenFilepath = value
+	case OptionExternalBrowserTimeout:
+		if value == "" {
+			d.oauthU2MTimeout = 0
+			break
+		}
+		timeout, err := time.ParseDuration(value)
+		if err != nil || timeout <= 0 {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] invalid external browser timeout '%s': must be a positive duration such as '2m'", value),
+			}
+		}
+		d.oauthU2MTimeout = timeout
 	default:
 		if name, ok := queryTagName(key); ok {
 			return d.setQueryTag(name, value)
