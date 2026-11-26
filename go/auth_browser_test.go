@@ -358,3 +358,56 @@ func TestDefaultResolveConfigUsesTheClientAndScopes(t *testing.T) {
 	require.Contains(t, scope, "offline_access")
 	require.Contains(t, scope, "/user_impersonation")
 }
+
+func TestOAuthRedirectURLOption(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	for _, ok := range []string{"localhost:9000", "http://localhost:9000/callback", "127.0.0.1:8020", "http://[::1]:8020"} {
+		require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, ok), ok)
+		got, err := db.GetOption(ctx, OptionOAuthRedirectURL)
+		require.NoError(t, err)
+		require.Equal(t, ok, got)
+	}
+
+	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, "localhost:9000"))
+	for _, bad := range []string{"https://localhost:9000", "example.com:9000", "localhost", "localhost:0", "localhost:70000", "http://localhost:abc", "::1:8020", "http://localhost:9000/{", "http://localhost:9000/%7B", "http://localhost:9000/a%20b", "http://localhost:9000/a%09b", "http://localhost:9000/cb?state=x", "http://localhost:9000/cb?", "http://localhost:9000/cb#done", "http://localhost:9000/cb#", "http://localhost:9000/%7B$%7D", "http://localhost:9000/{name}", "http://localhost:9000/{$}", "http://user:pass@localhost:9000/cb", "http://localhost:9000/a%2Fb"} {
+		err := db.SetOption(ctx, OptionOAuthRedirectURL, bad)
+		var adbcErr adbc.Error
+		require.ErrorAs(t, err, &adbcErr, bad)
+		require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code, bad)
+		got, _ := db.GetOption(ctx, OptionOAuthRedirectURL)
+		require.Equal(t, "localhost:9000", got, "a bad value must not change the setting")
+	}
+
+	// An empty value restores the default.
+	require.NoError(t, db.SetOption(ctx, OptionOAuthRedirectURL, ""))
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "", a.cfg.redirectURL)
+}
+
+func TestRedirectURLReachesTheLoginConfig(t *testing.T) {
+	db := &databaseImpl{oauthRedirectURL: "localhost:9000"}
+	a := db.newBrowserAuthenticator().(*browserAuthenticator)
+	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
+}
+
+// A rejected redirect URL is not repeated in the error: it can carry credentials.
+func TestRedirectURLErrorDoesNotEchoTheValue(t *testing.T) {
+	err := validateBrowserRedirectURL("http://user:secret-password@localhost:9000/cb")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "secret-password")
+}
+
+// The redirect URL reaches the authorization request as it was given, as a bare
+// address or as a full URL with a path. An Azure host needs no network lookup.
+func TestRedirectURLReachesTheAuthorizationRequest(t *testing.T) {
+	for given, want := range map[string]string{
+		"localhost:9000":                 "http://localhost:9000",
+		"http://localhost:9000/callback": "http://localhost:9000/callback",
+		"":                               "http://localhost:8020",
+	} {
+		conf, err := defaultResolveConfig(context.Background(), browserLoginConfig{host: "adb-1.2.azuredatabricks.net", redirectURL: given})
+		require.NoError(t, err, given)
+		require.Equal(t, want, conf.RedirectURL, given)
+	}
+}

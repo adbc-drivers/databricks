@@ -125,7 +125,7 @@ Examples:
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020`. Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. The redirect port is fixed: logins in one process take turns, and a login in another process fails while the port is in use.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020` (or on `databricks.oauth.redirect_url` when set). Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes`, `databricks.oauth.redirect_url` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. Logins in one process take turns. A login in another process fails if it needs the same redirect port while that one is in use. The redirect port is fixed, so only one browser login can run at a time on a machine.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
@@ -135,6 +135,11 @@ Examples:
 : **Values:** space- or comma-separated scope names, such as `sql` or `sql offline_access`. **Default:** (empty, requests `all-apis`)
 
   The scopes `oauth-m2m` and `external-browser` request. For `oauth-m2m`, set it when the service principal is limited to specific scopes and cannot log in to `all-apis`. For `external-browser`, `offline_access` and the cloud's SQL scope are always added.
+
+`databricks.oauth.redirect_url`
+: **Values:** a loopback address with a port, such as `localhost:9000` or `http://localhost:9000/callback`. **Default:** `localhost:8020`
+
+  Where `external-browser` login listens for the redirect. Use it when port 8020 is taken or your OAuth app registers another redirect. The same URL must be registered on the OAuth app.
 
 `databricks.oauth.external_browser.timeout`
 : **Values:** a positive Go duration such as `90s` or `2m`. **Default:** `1m`
