@@ -19,6 +19,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -122,6 +124,10 @@ func TestBrowserLoginIsKeptWhileOptionsAreUnchanged(t *testing.T) {
 
 	// An option the login does not use leaves it alone.
 	require.NoError(t, db.SetOption(ctx, OptionCatalog, "main"))
+	require.Same(t, first, db.newBrowserAuthenticator())
+
+	// Setting the timeout to its default is no change.
+	require.NoError(t, db.SetOption(ctx, OptionExternalBrowserTimeout, DefaultBrowserLoginTimeout.String()))
 	require.Same(t, first, db.newBrowserAuthenticator())
 
 	// An option it does use starts a new login.
@@ -232,4 +238,91 @@ func TestBrowserLauncherThatNeverReturnsDoesNotBlockLogin(t *testing.T) {
 func TestLoginPromptDefaultsToStderr(t *testing.T) {
 	a := newBrowserAuthenticator(browserLoginConfig{host: "x.cloud.databricks.com"})
 	require.Same(t, os.Stderr, a.cfg.out)
+}
+
+// freeLoopbackAddr returns a loopback address that is free right now.
+func freeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, l.Close())
+	return addr
+}
+
+// A request waiting behind another request's sign-in stops waiting when its own
+// context ends.
+func TestWaitingBehindALoginStopsWhenTheRequestIsCancelled(t *testing.T) {
+	addr := freeLoopbackAddr(t)
+	signIn := make(chan struct{}) // never closed: nobody signs in
+	a := newBrowserAuthenticator(browserLoginConfig{
+		host:    "x.cloud.databricks.com",
+		timeout: time.Minute,
+		out:     io.Discard,
+		resolveConfig: func(context.Context, browserLoginConfig) (oauth2.Config, error) {
+			return oauth2.Config{ClientID: "c", RedirectURL: "http://" + addr, Endpoint: oauth2.Endpoint{AuthURL: "https://x.cloud.databricks.com/authorize", TokenURL: "https://x.cloud.databricks.com/token"}}, nil
+		},
+		openBrowser: func(string) error { <-signIn; return nil },
+	})
+
+	// The first request starts a sign-in that waits for the user.
+	firstCtx, stopFirst := context.WithCancel(context.Background())
+	first := make(chan error, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(firstCtx, http.MethodGet, "http://example.invalid", nil)
+		first <- a.Authenticate(req)
+	}()
+	require.Eventually(t, func() bool { return len(a.lock) == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	// The second request gives up after 100ms, not after the login timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+	start := time.Now()
+	err = a.Authenticate(req)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 5*time.Second)
+
+	stopFirst()
+	require.Error(t, <-first)
+}
+
+// A callback is handled while the browser launcher is still running. The
+// callback here carries an OAuth error, so no token endpoint is needed: the login
+// ends with that error.
+func TestCallbackIsHandledWhileTheLauncherIsHeldOpen(t *testing.T) {
+	addr := freeLoopbackAddr(t)
+	hold := make(chan struct{})
+	defer close(hold)
+	a := newBrowserAuthenticator(browserLoginConfig{
+		host:    "x.cloud.databricks.com",
+		timeout: time.Minute,
+		out:     io.Discard,
+		openBrowser: func(loginURL string) error {
+			u, err := url.Parse(loginURL)
+			if err != nil {
+				return err
+			}
+			// What the browser does after the user signs in: a request to the redirect.
+			go func() {
+				resp, err := http.Get("http://" + addr + "/?error=access_denied&error_description=no&state=" + url.QueryEscape(u.Query().Get("state")))
+				if err == nil {
+					_ = resp.Body.Close()
+				}
+			}()
+			<-hold // the launcher itself never returns
+			return nil
+		},
+	})
+	conf := oauth2.Config{ClientID: "c", RedirectURL: "http://" + addr, Endpoint: oauth2.Endpoint{AuthURL: "https://x.cloud.databricks.com/authorize", TokenURL: "https://x.cloud.databricks.com/token"}}
+
+	done := make(chan error, 1)
+	go func() { _, err := a.runBrowserFlow(context.Background(), conf); done <- err }()
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "access_denied")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the login did not see the callback while the launcher was running")
+	}
 }

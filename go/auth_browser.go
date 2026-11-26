@@ -110,7 +110,11 @@ func (d *databaseImpl) newBrowserAuthenticator() auth.Authenticator {
 	browserLoginMu.Lock()
 	defer browserLoginMu.Unlock()
 	// Reuse the login while the options it depends on are unchanged.
-	key := fmt.Sprintf("%q|%v|%q|%v", cfg.host, cfg.timeout, d.sslRootCert, d.sslInsecure)
+	timeout := cfg.timeout
+	if timeout <= 0 {
+		timeout = DefaultBrowserLoginTimeout
+	}
+	key := fmt.Sprintf("%q|%v|%q|%v", cfg.host, timeout, d.sslRootCert, d.sslInsecure)
 	if d.browserLogin == nil || d.browserLoginKey != key {
 		d.browserLogin = newBrowserAuthenticator(cfg)
 		d.browserLoginKey = key
@@ -168,7 +172,10 @@ func defaultResolveConfig(ctx context.Context, c browserLoginConfig) (oauth2.Con
 type browserAuthenticator struct {
 	cfg browserLoginConfig
 
-	mu          sync.Mutex
+	// lock lets one request at a time use the login. It is a channel, not a
+	// mutex, so a request waiting behind another's sign-in stops when its own
+	// context ends.
+	lock        chan struct{}
 	oauthConfig *oauth2.Config
 	tokenSource oauth2.TokenSource
 }
@@ -186,17 +193,21 @@ func newBrowserAuthenticator(cfg browserLoginConfig) *browserAuthenticator {
 	if cfg.out == nil {
 		cfg.out = os.Stderr // stdout may carry query results
 	}
-	return &browserAuthenticator{cfg: cfg}
+	return &browserAuthenticator{cfg: cfg, lock: make(chan struct{}, 1)}
 }
 
 // Authenticate adds a bearer token to the request. The first call runs the
 // browser login; later calls reuse the token and refresh it with the refresh
 // token when it expires. If the refresh is rejected, the login runs again.
 func (a *browserAuthenticator) Authenticate(r *http.Request) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	ctx := r.Context()
+	select {
+	case a.lock <- struct{}{}:
+		defer func() { <-a.lock }()
+	case <-ctx.Done():
+		return fmt.Errorf("interrupted while waiting for another login: %w", ctx.Err())
+	}
+
 	if a.tokenSource != nil {
 		token, err := a.tokenSource.Token()
 		if err == nil {
