@@ -125,7 +125,7 @@ Examples:
 
   - `pat`: personal access token. Requires `databricks.access_token`.
   - `oauth-m2m`: OAuth machine-to-machine. Requires `databricks.oauth.client_id` and `databricks.oauth.client_secret`.
-  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020` (or on `databricks.oauth.redirect_url` when set). Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes`, `databricks.oauth.redirect_url` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. Logins in one process take turns. A login in another process fails if it needs the same redirect port while that one is in use. The redirect port is fixed, so only one browser login can run at a time on a machine.
+  - `external-browser`: OAuth user-to-machine (U2M) login through the system browser. The driver prints the login URL to stderr and tries to open it, then waits for the redirect on `localhost:8020` (or on `databricks.oauth.redirect_url` when set). The token is kept in the operating system's keyring (see `databricks.oauth.token_cache`), so a later process reuses it and signs in again only when it is rejected. Optional: `databricks.oauth.client_id` (your own OAuth app; default: the built-in client of the cloud), `databricks.oauth.scopes`, `databricks.oauth.redirect_url`, `databricks.oauth.token_cache` and `databricks.oauth.external_browser.timeout`. It is never inferred: set `databricks.auth_type` explicitly. Logins in one process take turns. A login in another process fails if it needs the same redirect port while that one is in use.
   - `oidc`: OIDC token federation. The ID token is exchanged for a Databricks token. It is read from the file named by `databricks.oidc.token_filepath` if that is set, and otherwise from the `DATABRICKS_OIDC_TOKEN` environment variable (or the variable named by `DATABRICKS_OIDC_TOKEN_ENV`). Requires `databricks.oidc.client_id`.
   - `azure-client-secret`: Microsoft Entra ID service principal on Azure Databricks. Requires `databricks.azure.client_id`, `databricks.azure.client_secret` and `databricks.azure.tenant_id`.
 
@@ -140,6 +140,11 @@ Examples:
 : **Values:** a loopback address with a port, such as `localhost:9000` or `http://localhost:9000/callback`. **Default:** `localhost:8020`
 
   Where `external-browser` login listens for the redirect. Use it when port 8020 is taken or your OAuth app registers another redirect. The same URL must be registered on the OAuth app.
+
+`databricks.oauth.token_cache`
+: **Values:** `keyring` or `memory`. **Default:** `keyring`
+
+  Where `external-browser` login keeps its token. With `keyring` the token is also stored in the operating system's keyring, so a later process reuses it instead of opening the browser, until it is rejected. With `memory` it is kept only in the process. In both cases all databases in the process that use the same workspace, client and scopes share one token, so when one of them logs in the others reuse it.
 
 `databricks.oauth.external_browser.timeout`
 : **Values:** a positive Go duration such as `90s` or `2m`. **Default:** `1m`

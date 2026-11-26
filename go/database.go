@@ -104,6 +104,7 @@ type databaseImpl struct {
 	oidcClientID      string
 	oidcTokenFilepath string
 	oauthRedirectURL  string
+	tokenCache        string
 }
 
 func (d *databaseImpl) resolveConnectionOptions() ([]dbsql.ConnOption, error) {
@@ -385,6 +386,11 @@ func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error
 		return d.oidcTokenFilepath, nil
 	case OptionOAuthRedirectURL:
 		return d.oauthRedirectURL, nil
+	case OptionTokenCache:
+		if d.tokenCache == "" {
+			return tokenCacheKeyring, nil
+		}
+		return d.tokenCache, nil
 	case OptionExternalBrowserTimeout:
 		if d.oauthU2MTimeout > 0 {
 			return d.oauthU2MTimeout.String(), nil
@@ -591,6 +597,14 @@ func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 			return err
 		}
 		d.oauthRedirectURL = value
+	case OptionTokenCache:
+		if value != "" && value != tokenCacheKeyring && value != tokenCacheMemory {
+			return adbc.Error{
+				Code: adbc.StatusInvalidArgument,
+				Msg:  fmt.Sprintf("[db] invalid token cache '%s': must be '%s' or '%s'", value, tokenCacheKeyring, tokenCacheMemory),
+			}
+		}
+		d.tokenCache = value
 	case OptionExternalBrowserTimeout:
 		if value == "" {
 			d.oauthU2MTimeout = 0

@@ -142,6 +142,7 @@ func TestBrowserLoginIsKeptWhileOptionsAreUnchanged(t *testing.T) {
 
 // The client ID and scopes options reach the login configuration.
 func TestBrowserOptionsReachTheLoginConfig(t *testing.T) {
+	isolateHome(t)
 	db := &databaseImpl{oauthClientID: "my-app", oauthScopes: []string{"sql", "offline_access"}}
 	a := db.newBrowserAuthenticator().(*browserAuthenticator)
 	require.Equal(t, "my-app", a.cfg.clientID)
@@ -269,9 +270,10 @@ func TestWaitingBehindALoginStopsWhenTheRequestIsCancelled(t *testing.T) {
 	addr := freeLoopbackAddr(t)
 	signIn := make(chan struct{}) // never closed: nobody signs in
 	a := newBrowserAuthenticator(browserLoginConfig{
-		host:    "x.cloud.databricks.com",
-		timeout: time.Minute,
-		out:     io.Discard,
+		host:       "x.cloud.databricks.com",
+		timeout:    time.Minute,
+		out:        io.Discard,
+		tokenCache: tokenCacheMemory, // never the real keyring
 		resolveConfig: func(context.Context, browserLoginConfig) (oauth2.Config, error) {
 			return oauth2.Config{ClientID: "c", RedirectURL: "http://" + addr, Endpoint: oauth2.Endpoint{AuthURL: "https://x.cloud.databricks.com/authorize", TokenURL: "https://x.cloud.databricks.com/token"}}, nil
 		},
@@ -360,6 +362,7 @@ func TestDefaultResolveConfigUsesTheClientAndScopes(t *testing.T) {
 }
 
 func TestOAuthRedirectURLOption(t *testing.T) {
+	isolateHome(t)
 	ctx := context.Background()
 	db := &databaseImpl{}
 	for _, ok := range []string{"localhost:9000", "http://localhost:9000/callback", "127.0.0.1:8020", "http://[::1]:8020"} {
@@ -386,6 +389,7 @@ func TestOAuthRedirectURLOption(t *testing.T) {
 }
 
 func TestRedirectURLReachesTheLoginConfig(t *testing.T) {
+	isolateHome(t)
 	db := &databaseImpl{oauthRedirectURL: "localhost:9000"}
 	a := db.newBrowserAuthenticator().(*browserAuthenticator)
 	require.Equal(t, "localhost:9000", a.cfg.redirectURL)
@@ -410,4 +414,29 @@ func TestRedirectURLReachesTheAuthorizationRequest(t *testing.T) {
 		require.NoError(t, err, given)
 		require.Equal(t, want, conf.RedirectURL, given)
 	}
+}
+
+// The token goes to the keyring unless the option says "memory".
+func TestTokenCacheOption(t *testing.T) {
+	ctx := context.Background()
+	db := &databaseImpl{}
+	got, err := db.GetOption(ctx, OptionTokenCache)
+	require.NoError(t, err)
+	require.Equal(t, "keyring", got)
+
+	require.NoError(t, db.SetOption(ctx, OptionTokenCache, "memory"))
+	got, _ = db.GetOption(ctx, OptionTokenCache)
+	require.Equal(t, "memory", got)
+
+	err = db.SetOption(ctx, OptionTokenCache, "sometimes")
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	require.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code)
+	got, _ = db.GetOption(ctx, OptionTokenCache)
+	require.Equal(t, "memory", got, "a bad value must not change the setting")
+
+	// An empty value restores the default.
+	require.NoError(t, db.SetOption(ctx, OptionTokenCache, ""))
+	got, _ = db.GetOption(ctx, OptionTokenCache)
+	require.Equal(t, "keyring", got)
 }
